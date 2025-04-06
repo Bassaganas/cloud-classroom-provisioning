@@ -5,14 +5,12 @@ import uuid
 import secrets
 import string
 from azure.identity import ClientSecretCredential
-
 from msgraph import GraphServiceClient
 from msgraph.generated.models.user import User
 from msgraph.generated.models.password_profile import PasswordProfile
-from azure.mgmt.authorization import AuthorizationManagementClient
-from azure.mgmt.authorization.models import RoleAssignmentCreateParameters, RoleAssignmentProperties
 from msgraph.generated.models.reference_create import ReferenceCreate
-
+from datetime import datetime, timezone, timedelta
+from azure.keyvault.secrets import SecretClient
 
 # Initialize logging
 logging.basicConfig(level=logging.INFO)
@@ -22,31 +20,65 @@ class ClassroomManager:
     def __init__(self):
         logger.info("Initializing ClassroomManager")
         try:
-            tenant_id = os.environ.get("AZURE_TENANT_ID")
+            # Get required environment variables
+            self.tenant_id = os.environ.get("AZURE_TENANT_ID")
             client_id = os.environ.get("AZURE_CLIENT_ID")
             client_secret = os.environ.get("AZURE_CLIENT_SECRET")
-            subscription_id = os.environ.get("AZURE_SUBSCRIPTION_ID")
+            self.subscription_id = os.environ.get("AZURE_SUBSCRIPTION_ID")
             
-            if not all([tenant_id, client_id, client_secret, subscription_id]):
+            # Get Terraform service principal credentials
+            self.terraform_client_id = os.environ.get("TERRAFORM_CLIENT_ID")
+            self.terraform_client_secret = os.environ.get("TERRAFORM_CLIENT_SECRET")
+            
+            if not all([self.tenant_id, client_id, client_secret, self.subscription_id, 
+                       self.terraform_client_id, self.terraform_client_secret]):
                 raise ValueError("Missing required environment variables")
-            self.subscription_id = subscription_id
+            
+            # Initialize the credential
             self.credential = ClientSecretCredential(
-                tenant_id=tenant_id,
+                tenant_id=self.tenant_id,
                 client_id=client_id,
-                client_secret=client_secret,
-                subscription_id=subscription_id
+                client_secret=client_secret
             )
             
+            # Initialize Graph client
             self.graph_client = GraphServiceClient(
                 credentials=self.credential,
                 scopes=["https://graph.microsoft.com/.default"]
             )
-
-             # Initialize the authorization client
-            self.auth_client = AuthorizationManagementClient(
-                credential=self.credential,
-                subscription_id=self.subscription_id
+            
+            # Get Key Vault URL from environment
+            key_vault_url = os.environ.get("AZURE_KEY_VAULT_URL")
+            if not key_vault_url:
+                raise ValueError("AZURE_KEY_VAULT_URL environment variable not set")
+            
+            # Initialize Key Vault client
+            self.key_vault_client = SecretClient(
+                vault_url=key_vault_url,
+                credential=self.credential
             )
+            
+            # Get latest credentials from Key Vault
+            self.terraform_client_id = self.key_vault_client.get_secret("terraform-client-id").value
+            
+            # Try to get current secret first
+            try:
+                current_secret = self.key_vault_client.get_secret("terraform-client-secret-current")
+                self.terraform_client_secret = current_secret.value
+                self.terraform_secret_expiry = current_secret.properties.expires_on
+            except Exception as e:
+                logger.warning(f"Could not get current secret, trying next secret: {str(e)}")
+                # If current secret is expired/invalid, try the next one
+                next_secret = self.key_vault_client.get_secret("terraform-client-secret-next")
+                self.terraform_client_secret = next_secret.value
+                self.terraform_secret_expiry = next_secret.properties.expires_on
+            
+            # Check if secret is about to expire
+            if self.terraform_secret_expiry:
+                warning_threshold = timedelta(days=1)
+                time_to_expiry = self.terraform_secret_expiry - datetime.now(timezone.utc)
+                if time_to_expiry < warning_threshold:
+                    logger.warning(f"Terraform credentials will expire in {time_to_expiry}")
             
             logger.info("Successfully initialized Azure clients")
         except Exception as e:
@@ -59,60 +91,13 @@ class ClassroomManager:
         password = ''.join(secrets.choice(alphabet) for i in range(16))
         return password
     
-    def get_role_definition_id(self, role_name):
-            # Fetch role definition ID using role name from custom roles
-            definitions = self.auth_client.role_definitions.list(scope=f"/subscriptions/{self.subscription_id}")
-            for definition in definitions:
-                if definition.role_name == role_name:
-                    return definition.id
-            raise Exception(f"Role definition {role_name} not found")
-    
-    async def create_student_user(self):
-        """Create a student user account"""
-        try:
-            username = f"student_{uuid.uuid4().hex[:8]}"
-            password = self.generate_password()
-            domain = os.environ.get("AZURE_DOMAIN", "paulabassaganasgmail.onmicrosoft.com")
-            logger.info(f"Creating student user with username: {username}, password: {password}, domain: {domain}")
-
-            request_body = User(
-                account_enabled=True,
-                display_name=f"Student {username}",
-                mail_nickname=username,
-                user_principal_name=f"{username}@{domain}",
-                password_profile=PasswordProfile(
-                    force_change_password_next_sign_in=False,
-                    password=password
-                )
-            )
-
-            logger.info(f"Request body: {request_body}")
-            logger.info(f"Graph client: {self.graph_client}")
-            created_user = await self.graph_client.users.post(request_body)
-            logger.info(f"Created user: {created_user}")
-            await self.assign_student_roles(created_user.id)
-            logger.info(f"Assigned roles to user: {created_user.id}")
-            
-            # Add user to the students group
-
-            
-            return {
-                "username": created_user.user_principal_name,
-                "password": password
-            }
-        except Exception as e:
-            logger.error(f"Error creating student user: {str(e)}")
-            raise
     async def assign_student_roles(self, user_object_id):
-        """
-        Add the user to the students group
-        """
+        """Add the user to the students group"""
         try:
             group_id = os.environ.get("STUDENTS_GROUP_ID")
             if not group_id:
                 raise ValueError("STUDENTS_GROUP_ID environment variable not set")
             
-            # Create a proper reference object instead of a dict
             reference = ReferenceCreate(
                 odata_id=f"https://graph.microsoft.com/v1.0/users/{user_object_id}"
             )
@@ -125,12 +110,58 @@ class ClassroomManager:
             logger.error(f"Error adding user to students group: {str(e)}")
             raise
 
+    async def create_student_user(self):
+        """Create a student user account"""
+        try:
+            username = f"student_{uuid.uuid4().hex[:8]}"
+            password = self.generate_password()
+            domain = os.environ.get("AZURE_DOMAIN", "paulabassaganasgmail.onmicrosoft.com")
+            logger.info(f"Creating student user with username: {username}")
+
+            # Create user
+            request_body = User(
+                account_enabled=True,
+                display_name=f"Student {username}",
+                mail_nickname=username,
+                user_principal_name=f"{username}@{domain}",
+                password_profile=PasswordProfile(
+                    force_change_password_next_sign_in=False,
+                    password=password
+                )
+            )
+
+            created_user = await self.graph_client.users.post(request_body)
+            await self.assign_student_roles(created_user.id)
+            
+            # Format expiry date for display
+            expiry_date = None
+            if hasattr(self, 'terraform_secret_expiry'):
+                expiry_date = self.terraform_secret_expiry.strftime("%Y-%m-%d %H:%M UTC")
+            
+            return {
+                "username": created_user.user_principal_name,
+                "password": password,
+                "terraform": {
+                    "arm_client_id": self.terraform_client_id,
+                    "arm_client_secret": self.terraform_client_secret,
+                    "arm_tenant_id": self.tenant_id,
+                    "arm_subscription_id": self.subscription_id,
+                    "expiry_date": expiry_date
+                }
+            }
+        except Exception as e:
+            logger.error(f"Error creating student user: {str(e)}")
+            raise
+
 async def main(req: func.HttpRequest) -> func.HttpResponse:
     logging.info('Python HTTP trigger function processed a request.')
 
     try:
         manager = ClassroomManager()
         credentials = await manager.create_student_user()
+        
+        # Add any missing variables needed by the template
+        background = "#3f0383"  # or whatever value you need
         
         return func.HttpResponse(
             f"""
@@ -175,20 +206,13 @@ async def main(req: func.HttpRequest) -> func.HttpResponse:
                         right: 0;
                         z-index: 9999;
                         background: var(--pink);
-                        color: white;
+                        color: var(--dark-blue);
+                        font-weight: bold;
                         box-shadow: 0 2px 6px 0 rgba(0, 0, 0, .07);
-                        transition: all .3s cubic-bezier(1, 0.18, 1, 1);
                         height: 80px;
                         display: flex;
                         align-items: center;
                         justify-content: center;
-                    }}
-
-                    .top-bar .wrap {{
-                        padding: 8px 0;
-                        font-size: 2.4rem;
-                        font-weight: 700;
-                        text-align: center;
                     }}
 
                     .container {{
@@ -207,23 +231,11 @@ async def main(req: func.HttpRequest) -> func.HttpResponse:
                         text-align: center;
                     }}
 
-                    .section-title:after {{
-                        content: '';
-                        position: absolute;
-                        bottom: 0;
-                        left: 50%;
-                        transform: translateX(-50%);
-                        width: 120px;
-                        height: 4px;
-                        background: var(--pink);
-                    }}
-
                     .credentials-section {{
                         display: grid;
-                        grid-template-columns: minmax(auto, max-content) minmax(300px, 1fr);
+                        grid-template-columns: repeat(2, 1fr);
                         gap: 3rem;
                         margin: 4rem 0;
-                        justify-content: center;
                     }}
 
                     .card {{
@@ -233,16 +245,6 @@ async def main(req: func.HttpRequest) -> func.HttpResponse:
                         overflow: hidden;
                         box-shadow: 0 8px 24px rgba(0,0,0,0.2);
                         width: 100%;
-                    }}
-
-                    .card::before {{
-                        content: '';
-                        position: absolute;
-                        top: 0;
-                        left: 0;
-                        width: 100%;
-                        height: 8px;
-                        background: var(--pink);
                     }}
 
                     .individual-credentials {{
@@ -293,170 +295,59 @@ async def main(req: func.HttpRequest) -> func.HttpResponse:
                         justify-content: space-between;
                         align-items: center;
                         gap: 1rem;
-                        position: relative;
                     }}
 
                     .credential-text {{
                         flex: 1;
                         overflow-x: auto;
-                        padding-right: 1rem;
-                    }}
-
-                    /* Hide scrollbar for credential text while allowing scroll */
-                    .credential-text::-webkit-scrollbar {{
-                        display: none;
-                    }}
-                    
-                    .credential-text {{
-                        -ms-overflow-style: none;
-                        scrollbar-width: none;
                     }}
 
                     .copy-button {{
-                        background: var(--background-purple);
+                        background: none;
                         border: none;
-                        border-radius: 4px;
-                        padding: 0.8rem 1.2rem;
+                        padding: 0;
                         cursor: pointer;
-                        color: var(--white);
+                        color: var(--background-purple);
                         transition: all 0.3s ease;
-                        font-size: 1.4rem;
-                        font-weight: 600;
-                        display: flex;
-                        align-items: center;
-                        justify-content: center;
-                        min-width: 70px;
                     }}
 
                     .copy-button:hover {{
-                        background-color: var(--pink);
-                        transform: translateY(-1px);
+                        color: var(--pink);
                     }}
 
-                    .action-button {{
-                        display: inline-block;
-                        background-color: var(--yellow);
-                        color: var(--background-purple);
-                        padding: 1.5rem 3rem;
-                        text-decoration: none;
-                        border-radius: 50px;
-                        transition: all 0.3s ease;
-                        font-weight: 700;
-                        font-size: 1.8rem;
-                        text-transform: uppercase;
-                        letter-spacing: 1px;
-                        margin-top: 2rem;
-                        border: none;
-                        cursor: pointer;
+                    .copy-button i {{
+                        font-size: 2rem;
                     }}
 
-                    .action-button:hover {{
-                        background-color: var(--white);
-                        transform: translateY(-2px);
-                        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-                    }}
-
-                    .important-notice {{
-                        background-color: var(--background-purple);
-                        color: var(--white);
-                        padding: 1.5rem;
-                        border-radius: 8px;
-                        margin-top: 2rem;
-                        font-weight: 500;
-                        font-size: 1.6rem;
-                        border-left: 4px solid var(--pink);
-                    }}
-
-                    .footer {{
-                        text-align: center;
-                        margin-top: 4rem;
-                        padding: 3rem;
-                        background-color: var(--pink);
-                        color: var(--white);
-                        border-radius: 15px;
-                        position: relative;
-                    }}
-
-                    .footer::before {{
-                        content: '';
-                        position: absolute;
-                        top: 0;
-                        left: 50%;
-                        transform: translateX(-50%);
-                        width: 100px;
-                        height: 4px;
+                    .terraform-instructions {{
+                        margin-top: 3rem;
+                        padding: 2rem;
                         background: var(--yellow);
+                        border-radius: 8px;
+                        color: var(--dark-blue);
                     }}
 
-                    @media (max-width: 1200px) {{
-                        .credentials-section {{
-                            grid-template-columns: minmax(auto, 1fr) minmax(auto, 1fr);
-                        }}
-                        
-                        .container {{
-                            padding: 1.5rem;
-                        }}
+                    .terraform-instructions h3 {{
+                        color: var(--dark-blue);
+                        margin-top: 0;
                     }}
 
-                    @media (max-width: 900px) {{
-                        .credentials-section {{
-                            grid-template-columns: 1fr;
-                        }}
-
-                        .individual-credentials {{
-                            width: auto;
-                            max-width: 100%;
-                        }}
-
-                        .credential-value {{
-                            font-size: 1.6rem;
-                        }}
+                    .terraform-instructions ol {{
+                        padding-left: 2rem;
                     }}
 
-                    @media (max-width: 480px) {{
-                        .top-bar .wrap {{
-                            font-size: 1.8rem;
-                            padding: 8px 15px;
-                        }}
-
-                        .section-title {{
-                            font-size: 2.8rem;
-                        }}
-
-                        .card {{
-                            padding: 2rem;
-                        }}
-
-                        .card h2 {{
-                            font-size: 2.2rem;
-                        }}
-
-                        .credential-value {{
-                            font-size: 1.4rem;
-                        }}
-                    }}
-
-                    /* Add styles for horizontal scrolling indicator */
-                    .scroll-indicator {{
-                        position: absolute;
-                        right: 10px;
-                        bottom: 10px;
-                        background: rgba(0,0,0,0.1);
-                        padding: 4px 8px;
+                    .terraform-instructions pre {{
+                        background: var(--white);
+                        padding: 1rem;
                         border-radius: 4px;
-                        font-size: 1.2rem;
-                        opacity: 0;
-                        transition: opacity 0.3s;
+                        margin: 1rem 0;
+                        overflow-x: auto;
                     }}
 
-                    .credential-value:hover + .scroll-indicator {{
-                        opacity: 1;
-                    }}
-
-                    .credential-container {{
-                        display: flex;
-                        align-items: center;
-                        gap: 1rem;
+                    .note {{
+                        font-style: italic;
+                        margin-top: 2rem;
+                        font-size: 1.6rem;
                     }}
 
                     .download-button {{
@@ -478,28 +369,97 @@ async def main(req: func.HttpRequest) -> func.HttpResponse:
                         background-color: var(--pink);
                         transform: translateY(-2px);
                     }}
+
+                    @media (max-width: 1200px) {{
+                        .credentials-section {{
+                            grid-template-columns: 1fr;
+                        }}
+                    }}
+
+                    @media (max-width: 480px) {{
+                        html {{
+                            font-size: 55%;
+                        }}
+                    }}
+
+                    .expiry-warning {{
+                        background-color: rgba(255, 209, 1, 0.1);
+                        border-left: 4px solid var(--yellow);
+                        padding: 1rem;
+                        margin-top: 2rem;
+                    }}
+
+                    .terraform-credentials {{
+                        background: var(--pink);
+                        color: var(--white);
+                    }}
+
+                    .terraform-credentials h2 {{
+                        color: var(--white);
+                    }}
+
+                    .terraform-credentials .credential-item strong {{
+                        color: var(--white);
+                    }}
+
+                    .terraform-credentials .terraform-instructions h3 {{
+                        color: var(--white);
+                    }}
+
+                    .terraform-instructions-container {{
+                        grid-column: 1 / -1;
+                        margin-top: 3rem;
+                    }}
+
+                    .azure-portal-button {{
+                        display: block;
+                        width: 100%;
+                        background-color: var(--dark-blue);
+                        color: var(--white);
+                        border: none;
+                        border-radius: 8px;
+                        padding: 1.5rem;
+                        margin-top: 2rem;
+                        font-size: 1.6rem;
+                        cursor: pointer;
+                        transition: all 0.3s ease;
+                        font-weight: 600;
+                        text-decoration: none;
+                        text-align: center;
+                    }}
+
+                    .azure-portal-button:hover {{
+                        background-color: var(--pink);
+                        transform: translateY(-2px);
+                    }}
                 </style>
                 <script>
                     function copyToClipboard(text, elementId) {{
                         navigator.clipboard.writeText(text).then(function() {{
                             const element = document.getElementById(elementId);
-                            const originalText = element.innerHTML;
-                            element.innerHTML = 'Copied!';
+                            element.innerHTML = '<i class="fas fa-check"></i>';
                             setTimeout(function() {{
-                                element.innerHTML = 'Copy';
+                                element.innerHTML = '<i class="fas fa-copy"></i>';
                             }}, 2000);
                         }});
                     }}
 
-                    function downloadCSV() {{
-                        const username = document.querySelector('.credential-value').textContent;
-                        const password = document.querySelectorAll('.credential-value')[1].textContent;
-                        const csvContent = `Username,Password\n${{username}},${{password}}`;
-                        const blob = new Blob([csvContent], {{ type: 'text/csv' }});
+                    function downloadTerraformEnv() {{
+                        const clientId = document.getElementById('terraform-client-id').textContent.trim();
+                        const clientSecret = document.getElementById('terraform-client-secret').textContent.trim();
+                        const tenantId = document.getElementById('terraform-tenant-id').textContent.trim();
+                        const subId = document.getElementById('terraform-sub-id').textContent.trim();
+                        
+                        const envContent = `ARM_CLIENT_ID=${{clientId}}
+ARM_CLIENT_SECRET=${{clientSecret}}
+ARM_TENANT_ID=${{tenantId}}
+ARM_SUBSCRIPTION_ID=${{subId}}`;
+                        
+                        const blob = new Blob([envContent], {{ type: 'text/plain' }});
                         const url = window.URL.createObjectURL(blob);
                         const a = document.createElement('a');
                         a.setAttribute('href', url);
-                        a.setAttribute('download', 'cloud_classroom_credentials.csv');
+                        a.setAttribute('download', 'terraform.env');
                         document.body.appendChild(a);
                         a.click();
                         document.body.removeChild(a);
@@ -519,14 +479,14 @@ async def main(req: func.HttpRequest) -> func.HttpResponse:
                     
                     <div class="credentials-section">
                         <div class="card individual-credentials">
-                            <h2>Your Credentials</h2>
+                            <h2>Your Azure Credentials</h2>
                             <div class="credential-item">
                                 <strong>Username</strong>
                                 <div class="credential-value">
                                     <span class="credential-text">{credentials['username']}</span>
                                     <button class="copy-button" id="copyUsername" 
                                         onclick="copyToClipboard('{credentials['username']}', 'copyUsername')">
-                                        Copy
+                                        <i class="fas fa-copy"></i>
                                     </button>
                                 </div>
                             </div>
@@ -537,34 +497,96 @@ async def main(req: func.HttpRequest) -> func.HttpResponse:
                                     <span class="credential-text">{credentials['password']}</span>
                                     <button class="copy-button" id="copyPassword" 
                                         onclick="copyToClipboard('{credentials['password']}', 'copyPassword')">
-                                        Copy
+                                        <i class="fas fa-copy"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            <a href="https://portal.azure.com" target="_blank" class="azure-portal-button">
+                                <i class="fas fa-external-link-alt"></i> Go to Azure Portal
+                            </a>
+                        </div>
+
+                        <div class="card terraform-credentials">
+                            <h2>Terraform Credentials</h2>
+                            <div class="credential-item">
+                                <strong>Client ID</strong>
+                                <div class="credential-value">
+                                    <span class="credential-text" id="terraform-client-id">
+                                        {credentials['terraform']['arm_client_id']}
+                                    </span>
+                                    <button class="copy-button" id="copyClientId" 
+                                        onclick="copyToClipboard('{credentials['terraform']['arm_client_id']}', 'copyClientId')">
+                                        <i class="fas fa-copy"></i>
                                     </button>
                                 </div>
                             </div>
                             
-                            <div class="important-notice">
-                                <strong>Important:</strong> Save these credentials securely!
+                            <div class="credential-item">
+                                <strong>Client Secret</strong>
+                                <div class="credential-value">
+                                    <span class="credential-text" id="terraform-client-secret">
+                                        {credentials['terraform']['arm_client_secret']}
+                                    </span>
+                                    <button class="copy-button" id="copyClientSecret" 
+                                        onclick="copyToClipboard('{credentials['terraform']['arm_client_secret']}', 'copyClientSecret')">
+                                        <i class="fas fa-copy"></i>
+                                    </button>
+                                </div>
                             </div>
                             
-                            <button onclick="downloadCSV()" class="download-button">
-                                Download Credentials (CSV)
+                            <div class="credential-item">
+                                <strong>Tenant ID</strong>
+                                <div class="credential-value">
+                                    <span class="credential-text" id="terraform-tenant-id">
+                                        {credentials['terraform']['arm_tenant_id']}
+                                    </span>
+                                    <button class="copy-button" id="copyTenantId" 
+                                        onclick="copyToClipboard('{credentials['terraform']['arm_tenant_id']}', 'copyTenantId')">
+                                        <i class="fas fa-copy"></i>
+                                    </button>
+                                </div>
+                            </div>
+                            
+                            <div class="credential-item">
+                                <strong>Subscription ID</strong>
+                                <div class="credential-value">
+                                    <span class="credential-text" id="terraform-sub-id">
+                                        {credentials['terraform']['arm_subscription_id']}
+                                    </span>
+                                    <button class="copy-button" id="copySubId" 
+                                        onclick="copyToClipboard('{credentials['terraform']['arm_subscription_id']}', 'copySubId')">
+                                        <i class="fas fa-copy"></i>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="terraform-instructions-container">
+                            <div class="terraform-instructions">
+                                <h3>How to use these credentials</h3>
+                                <ol>
+                                    <li>Download the environment file</li>
+                                    <li>Load the environment variables:
+                                        <pre>source terraform.env</pre>
+                                    </li>
+                                    <li>Run Terraform commands:
+                                        <pre>terraform init
+terraform plan
+terraform apply</pre>
+                                    </li>
+                                </ol>
+                                <p class="note">Note: These Terraform credentials are shared with your classmates. All resources will be created under the same service principal.</p>
+
+                                <div class="expiry-warning">
+                                    <p>⚠️ These credentials will expire on: {credentials['terraform'].get('expiry_date', 'N/A')}</p>
+                                    <p>Please get new credentials before the expiration date.</p>
+                                </div>
+                            </div>
+                            
+                            <button onclick="downloadTerraformEnv()" class="download-button">
+                                Download Terraform Environment File
                             </button>
                         </div>
-                        
-                        <div class="card group-info">
-                            <h2>Next Steps</h2>
-                            <p>1. Save your credentials</p>
-                            <p>2. Access the Azure Portal</p>
-                            <p>3. Start exploring your cloud environment</p>
-                            <a href="https://portal.azure.com" target="_blank" class="action-button">
-                                Launch Azure Portal
-                            </a>
-                        </div>
-                    </div>
-
-                    <div class="footer">
-                        <p>Cloud Classroom Provisioning System</p>
-                        <small>Powered by Bassagan</small>
                     </div>
                 </div>
             </body>
@@ -595,35 +617,15 @@ async def main(req: func.HttpRequest) -> func.HttpResponse:
                     
                     html {{
                         font-size: 62.5%;
-                        -webkit-font-smoothing: antialiased;
-                        -moz-osx-font-smoothing: grayscale;
                     }}
                     
                     body {{
                         font-family: 'Open Sans', sans-serif;
                         font-size: 2.1rem;
-                        font-weight: 300;
-                        line-height: 1.2;
                         margin: 0;
                         padding-top: 80px;
-                        overflow-x: hidden;
                         background-color: var(--background-purple);
                         color: var(--white);
-                    }}
-
-                    .top-bar {{
-                        position: fixed;
-                        top: 0;
-                        left: 0;
-                        right: 0;
-                        z-index: 9999;
-                        background: var(--pink);
-                        color: white;
-                        box-shadow: 0 2px 6px 0 rgba(0, 0, 0, .07);
-                        height: 80px;
-                        display: flex;
-                        align-items: center;
-                        justify-content: center;
                     }}
 
                     .container {{
@@ -674,24 +676,16 @@ async def main(req: func.HttpRequest) -> func.HttpResponse:
                     .action-button:hover {{
                         background-color: var(--pink);
                         color: var(--white);
-                        transform: translateY(-2px);
-                        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
                     }}
                 </style>
             </head>
             <body>
-                <div class="top-bar">
-                    <div class="wrap">
-                        Cloud Classroom
-                    </div>
-                </div>
-                
                 <div class="container">
                     <div class="error-card">
                         <h1 class="error-title">Oops! Something went wrong</h1>
                         <p class="error-message">
                             An error occurred while creating your user account.<br>
-                            Please refresh the page or try again later.
+                            Please try again later.
                         </p>
                         <a href="javascript:window.location.reload()" class="action-button">
                             Try Again

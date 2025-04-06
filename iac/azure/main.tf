@@ -82,6 +82,7 @@ resource "azurerm_linux_function_app" "user_management" {
   service_plan_id            = azurerm_service_plan.function_plan.id
   storage_account_name       = azurerm_storage_account.function_storage.name
   storage_account_access_key = azurerm_storage_account.function_storage.primary_access_key
+
   site_config {
     application_stack {
       python_version = "3.9"
@@ -91,6 +92,7 @@ resource "azurerm_linux_function_app" "user_management" {
       support_credentials = false
     }
   }
+
   app_settings = {
     "FUNCTIONS_WORKER_RUNTIME"       = "python"
     "WEBSITE_RUN_FROM_PACKAGE"       = "1"
@@ -103,15 +105,13 @@ resource "azurerm_linux_function_app" "user_management" {
     "CLASSROOM_NAME"                 = var.classroom_name
     "SCM_DO_BUILD_DURING_DEPLOYMENT" = "true"
     "STUDENTS_GROUP_ID"              = azuread_group.students.object_id
+    "AZURE_KEY_VAULT_URL"            = azurerm_key_vault.classroom.vault_uri
   }
+
   identity {
     type = "SystemAssigned"
   }
-  tags = {
-    Environment = var.environment
-    Owner       = var.owner
-    Project     = "classroom-provisioning"
-  }
+
   depends_on = [
     azurerm_resource_group.function_rg,
     azurerm_storage_account.function_storage,
@@ -126,12 +126,13 @@ resource "azurerm_key_vault" "classroom" {
   resource_group_name = azurerm_resource_group.function_rg.name
   tenant_id           = data.azurerm_client_config.current.tenant_id
   sku_name            = "standard"
-  tags = {
-    Environment = var.environment
-    Owner       = var.owner
-    Project     = "classroom-provisioning"
-  }
-  depends_on = [azurerm_resource_group.function_rg]
+
+  # Enable RBAC for Key Vault
+  enable_rbac_authorization = true
+
+  # Enable Soft Delete and Purge Protection
+  soft_delete_retention_days = 7
+  purge_protection_enabled   = false
 }
 
 # Get current client configuration
@@ -150,8 +151,7 @@ resource "azurerm_role_assignment" "function_rbac_admin" {
 
 # Output the function URL
 output "function_url" {
-  value      = "https://${azurerm_linux_function_app.user_management.default_hostname}/api/create_user"
-  depends_on = [azurerm_linux_function_app.user_management]
+  value = "https://${azurerm_linux_function_app.user_management.default_hostname}/api/create_user"
 }
 
 # Add this if not already present
@@ -281,10 +281,62 @@ resource "azuread_service_principal" "terraform_sp" {
   owners    = [data.azurerm_client_config.current.object_id]
 }
 
-resource "azuread_application_password" "terraform_secret" {
+resource "azuread_application_password" "terraform_secret_current" {
   application_id = azuread_application.terraform_sp.id
-  display_name   = "terraform-secret"
-  end_date       = "2099-01-01T01:02:03Z"
+  display_name   = "terraform-secret-current"
+  end_date       = timeadd(timestamp(), "168h") # 7 days
+}
+
+resource "azuread_application_password" "terraform_secret_next" {
+  application_id = azuread_application.terraform_sp.id
+  display_name   = "terraform-secret-next"
+  # Start valid in 6 days, end in 13 days (overlap of 1 day)
+  start_date = timeadd(timestamp(), "144h") # 6 days
+  end_date   = timeadd(timestamp(), "312h") # 13 days
+}
+
+# Grant permissions to the current user (running Terraform)
+resource "azurerm_role_assignment" "keyvault_admin" {
+  scope                = azurerm_key_vault.classroom.id
+  role_definition_name = "Key Vault Administrator"
+  principal_id         = data.azurerm_client_config.current.object_id
+}
+
+# Wait for RBAC propagation
+resource "time_sleep" "wait_30_seconds" {
+  depends_on      = [azurerm_role_assignment.keyvault_admin]
+  create_duration = "30s"
+}
+
+# Make Key Vault secrets depend on the RBAC propagation
+resource "azurerm_key_vault_secret" "terraform_client_id" {
+  depends_on   = [time_sleep.wait_30_seconds]
+  name         = "terraform-client-id"
+  value        = azuread_application.terraform_sp.client_id
+  key_vault_id = azurerm_key_vault.classroom.id
+}
+
+resource "azurerm_key_vault_secret" "terraform_client_secret_current" {
+  depends_on      = [time_sleep.wait_30_seconds]
+  name            = "terraform-client-secret-current"
+  value           = azuread_application_password.terraform_secret_current.value
+  key_vault_id    = azurerm_key_vault.classroom.id
+  expiration_date = timeadd(timestamp(), "168h") # 7 days
+}
+
+resource "azurerm_key_vault_secret" "terraform_client_secret_next" {
+  depends_on      = [time_sleep.wait_30_seconds]
+  name            = "terraform-client-secret-next"
+  value           = azuread_application_password.terraform_secret_next.value
+  key_vault_id    = azurerm_key_vault.classroom.id
+  expiration_date = timeadd(timestamp(), "312h") # 13 days
+}
+
+# Give function app access to Key Vault
+resource "azurerm_role_assignment" "function_keyvault_reader" {
+  scope                = azurerm_key_vault.classroom.id
+  role_definition_name = "Key Vault Secrets User"
+  principal_id         = azurerm_linux_function_app.user_management.identity[0].principal_id
 }
 
 # Add service principal to the students_sp group
@@ -293,11 +345,33 @@ resource "azuread_group_member" "sp_group_member" {
   member_object_id = azuread_service_principal.terraform_sp.object_id
 }
 
-# Ensure students_sp group has TerraformDeployerRole
-resource "azurerm_role_assignment" "terraform_deployer_group" {
-  scope                = data.azurerm_subscription.current.id
-  role_definition_name = "TerraformDeployerRole"
-  principal_id         = azuread_group.students_sp.object_id
+
+# Add these outputs
+output "terraform_client_id" {
+  value       = azuread_application.terraform_sp.client_id
+  description = "The Client ID of the Terraform service principal"
+}
+
+output "terraform_client_secret" {
+  value       = azuread_application_password.terraform_secret_current.value
+  description = "The Client Secret of the Terraform service principal"
+  sensitive   = true
+}
+
+output "key_vault_name" {
+  value = azurerm_key_vault.classroom.name
+}
+
+# Add Key Vault Secrets User role for the classroom service principal
+resource "azurerm_role_assignment" "classroom_sp_keyvault_reader" {
+  scope                = azurerm_key_vault.classroom.id
+  role_definition_name = "Key Vault Secrets User"
+  principal_id         = azuread_service_principal.classroom_sp.object_id
+
+  depends_on = [
+    azurerm_key_vault.classroom,
+    azuread_service_principal.classroom_sp
+  ]
 }
 
 

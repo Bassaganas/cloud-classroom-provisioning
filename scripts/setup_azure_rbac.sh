@@ -269,6 +269,9 @@ create_rbac_roles() {
     echo "TerraformDeployerRole role already exists, skipping..."
   fi
 
+  # Function App Key Vault Reader Role
+  
+
   echo "RBAC roles setup completed!"
 }
 
@@ -277,7 +280,7 @@ destroy_rbac_roles() {
   echo "Destroying RBAC roles..."
   
   # Delete each role
-  for role in "FunctionAppUser" "StorageUser" "EventHubUser" "CosmosDBUser" "CICDUser" "ResourceGroupUser" "ServicePrincipalRole" "StudentConsoleUser" "StudentServicePrincipalRole" "FunctionAppManagement" "TerraformDeployerRole"; do
+  for role in "FunctionAppUser" "StorageUser" "EventHubUser" "CosmosDBUser" "CICDUser" "ResourceGroupUser" "ServicePrincipalRole" "StudentConsoleUser" "StudentServicePrincipalRole" "FunctionAppManagement" "TerraformDeployerRole" "FunctionKeyVaultReader"; do
     echo "Deleting role: $role"
     az role definition delete --name "$role" --yes
   done

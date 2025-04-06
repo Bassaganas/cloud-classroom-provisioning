@@ -1,5 +1,3 @@
 terraform {
-  backend "local" {
-    path = "state/terraform.tfstate"
-  }
+  backend "azurerm" {}
 }

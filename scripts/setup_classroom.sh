@@ -19,54 +19,6 @@ usage() {
   exit 1
 }
 
-# Function to handle Azure login
-azure_login() {
-  echo "Logging into Azure..."
-  az login
-  if [ $? -ne 0 ]; then
-    echo "Failed to login to Azure. Please try again."
-    exit 1
-  fi
-  
-  # Get subscription ID
-  SUBSCRIPTION_ID=$(az account show --query id -o tsv)
-  if [ -z "$SUBSCRIPTION_ID" ]; then
-    echo "No subscription found. Please set up a subscription first."
-    exit 1
-  fi
-  
-  # Get tenant ID
-  TENANT_ID=$(az account show --query tenantId -o tsv)
-  if [ -z "$TENANT_ID" ]; then
-    echo "No tenant ID found. Please check your Azure account."
-    exit 1
-  fi
-  
-  # Set the subscription
-  az account set --subscription "$SUBSCRIPTION_ID"
-  
-  # Export the values for Terraform
-  export ARM_SUBSCRIPTION_ID="$SUBSCRIPTION_ID"
-  export ARM_TENANT_ID="$TENANT_ID"
-}
-
-# Function to run terraform with parallelism
-run_terraform() {
-  local action=$1
-  local dir=$2
-  cd "$dir"
-  
-  if [ "$action" = "destroy" ]; then
-    echo "Destroying resources in $dir..."
-    terraform destroy -auto-approve -parallelism="$PARALLELISM"
-  else
-    echo "Creating resources in $dir..."
-    terraform init
-    terraform apply -auto-approve -parallelism="$PARALLELISM"
-  fi
-  cd - > /dev/null
-}
-
 # Default values
 CLASSROOM_NAME=""
 CLOUD_PROVIDER="aws"
@@ -133,58 +85,32 @@ if [ "$CLOUD_PROVIDER" != "aws" ] && [ "$CLOUD_PROVIDER" != "azure" ]; then
   usage
 fi
 
-# Package the function code first
-#echo "Packaging function code for $CLOUD_PROVIDER..."
-#if ! ./scripts/package_lambda.sh --cloud "$CLOUD_PROVIDER"; then
-#  echo "Error: Failed to package function code"
-#  exit 1
-#fi
-
-# Handle Azure login if needed
+# Handle cloud-specific setup
 if [ "$CLOUD_PROVIDER" = "azure" ]; then
-  azure_login
-  
-  # Setup RBAC roles first
-  echo "Setting up Azure RBAC roles..."
-  ./scripts/setup_azure_rbac.sh --create
-  
-  # Then continue with existing Terraform and function deployment
-  run_terraform "$ACTION" "iac/azure"
-  
-  if [ "$ACTION" != "destroy" ]; then
-    echo "Deploying Azure function..."
-    # Get the values directly from terraform outputs
-    cd "iac/azure"
-    FUNCTION_APP_NAME=$(terraform output -raw function_app_name)
-    RESOURCE_GROUP_NAME=$(terraform output -raw resource_group_name)
-    cd - > /dev/null
-
-    # Deploy the function using the dedicated script
-    if [ -n "$FUNCTION_APP_NAME" ] && [ -n "$RESOURCE_GROUP_NAME" ]; then
-        ./scripts/deploy_azure_function.sh \
-            --name "$FUNCTION_APP_NAME" \
-            --resource-group "$RESOURCE_GROUP_NAME"
-    else
-        echo "Error: Could not get function app name or resource group from Terraform outputs"
-        exit 1
-    fi
-  fi
+  # Call setup_azure.sh with all necessary parameters
+  ./scripts/setup_azure.sh \
+    --name "$CLASSROOM_NAME" \
+    --location "${LOCATION:-centralus}" \
+    --action "${ACTION:-create}" \
+    --parallelism "${PARALLELISM:-4}" \
+    ${FORCE_UNLOCK:+"--force-unlock"} \
+    ${SETUP_RBAC:+"--setup-rbac"}
 else
-  # AWS path remains unchanged
-  run_terraform "$ACTION" "iac/aws"
+  echo "AWS setup not implemented yet"
+  exit 1
 fi
 
+# Final success message
 if [ "$ACTION" = "create" ]; then
   echo "Classroom '$CLASSROOM_NAME' has been set up successfully!"
   if [ "$CLOUD_PROVIDER" = "aws" ]; then
     echo "AWS Region: $REGION"
     echo "Lambda Function URL will be available in the Terraform outputs"
-    echo "Use this URL to create student accounts on demand"
   else
     echo "Azure Location: $LOCATION"
     echo "Function URL will be available in the Terraform outputs"
-    echo "Use this URL to create student accounts on demand"
   fi
+  echo "Use this URL to create student accounts on demand"
 else
   echo "Classroom '$CLASSROOM_NAME' has been destroyed successfully!"
 fi 

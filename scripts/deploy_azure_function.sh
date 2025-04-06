@@ -89,30 +89,17 @@ APP_CLIENT_ID=$(az functionapp config appsettings list \
 # Get the app registration object ID
 APP_OBJECT_ID=$(az ad app show --id "$APP_CLIENT_ID" --query id -o tsv)
 
-echo "Assigning User.ReadWrite.All application permission to app registration..."
-az rest --method PATCH \
-    --uri "https://graph.microsoft.com/v1.0/applications/$APP_OBJECT_ID" \
-    --headers "Content-Type=application/json" \
-    --body "{
-        \"requiredResourceAccess\": [
-            {
-                \"resourceAppId\": \"00000003-0000-0000-c000-000000000000\",
-                \"resourceAccess\": [
-                    {
-                        \"id\": \"741f803b-c850-494e-b5df-cde7c675a1ca\",
-                        \"type\": \"Role\"
-                    }
-                ]
-            }
-        ]
-    }"
 
 # Grant admin consent for the application permission
 echo "Granting admin consent for application permissions..."
 az ad app permission admin-consent --id "$APP_CLIENT_ID"
 
-# Set required app settings
+# Before setting app settings, get the subscription ID
+SUBSCRIPTION_ID=$(az account show --query id -o tsv)
 echo "Setting up application settings..."
+echo "SUBSCRIPTION_ID: $SUBSCRIPTION_ID"
+
+# Set required app settings
 az functionapp config appsettings set \
     --name "$FUNCTION_APP_NAME" \
     --resource-group "$RESOURCE_GROUP" \
@@ -151,7 +138,7 @@ azure_login() {
   fi
   
   if [ $? -ne 0 ]; then
-    echo "Failed to login to Azure. Please try again."
+    echo "Failed to login to Azure. Please try again."Setting up application settings.
     exit 1
   fi
   
