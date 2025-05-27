@@ -42,17 +42,18 @@ if ! aws sts get-caller-identity >/dev/null 2>&1; then
 fi
 
 # Copy AWS configuration
-echo "Copying AWS configuration..."
-cp -r iac/aws/* "$CLASSROOM_DIR/"
-mkdir -p "$CLASSROOM_DIR/functions"
-cp -r functions/aws/* "$CLASSROOM_DIR/functions/"
+#echo "Copying AWS configuration..."
+#cp -r iac/aws/* "$CLASSROOM_DIR/"
+#mkdir -p "$CLASSROOM_DIR/functions"
+#cp -r functions/aws/* "$CLASSROOM_DIR/functions/"
 
 # Package Lambda function
 echo "Packaging Lambda function..."
-./scripts/package_lambda.sh
+./scripts/package_lambda.sh --cloud aws
 
 # Initialize and apply Terraform
-cd "$CLASSROOM_DIR"
+#cd "$CLASSROOM_DIR"
+cd iac/aws
 if [ "$ACTION" = "destroy" ]; then
   terraform init
   terraform destroy -auto-approve

@@ -63,7 +63,8 @@ resource "aws_iam_role_policy" "lambda_iam_policy" {
           "resource-groups:*",
           "logs:CreateLogGroup",
           "logs:CreateLogStream",
-          "logs:PutLogEvents"
+          "logs:PutLogEvents",
+          "ec2:*"
         ]
         Resource = "*"
       },
@@ -112,7 +113,7 @@ resource "aws_iam_policy" "student_policy" {
 
 # Lambda Function
 resource "aws_lambda_function" "user_management" {
-  filename         = "../../functions/user_management/lambda_function.zip"
+  filename         = "../../functions/packages/lambda_function.zip"
   function_name    = local.lambda_function_name
   role             = aws_iam_role.lambda_role.arn
   handler          = "lambda_function.lambda_handler"
@@ -120,7 +121,7 @@ resource "aws_lambda_function" "user_management" {
   timeout          = 60
   memory_size      = 256
   package_type     = "Zip"
-  source_code_hash = filebase64sha256("../../functions/user_management/lambda_function.zip")
+  source_code_hash = filebase64sha256("../../functions/packages/lambda_function.zip")
 
   environment {
     variables = {

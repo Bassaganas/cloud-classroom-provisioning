@@ -19,4 +19,5 @@ variable "region" {
 variable "classroom_name" {
   description = "The name of the classroom"
   type        = string
+  default     = "conference-classroom"
 }

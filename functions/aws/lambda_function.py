@@ -8,6 +8,8 @@ import csv
 import io
 import secrets
 import string
+import traceback
+import logging
 
 # Initialize AWS clients
 iam = boto3.client('iam')
@@ -18,6 +20,9 @@ ACCOUNT_ID = os.environ.get('AWS_ACCOUNT_ID', '087559609246')
 
 # Add this constant at the top of the file
 DESTROY_KEY = os.environ.get('DESTROY_KEY', 'default_destroy_key')
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
 
 def generate_html_response(user_info, resource_group_url):
     # Prepare CSV data
@@ -132,6 +137,36 @@ def generate_html_response(user_info, resource_group_url):
                 display: block;
                 font-size: 0.8em;
             }}
+            .loading {{
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: center;
+                height: 200px;
+            }}
+            .spinner {{
+                border: 8px solid #f3f3f3;
+                border-top: 8px solid #1E34B2;
+                border-radius: 50%;
+                width: 60px;
+                height: 60px;
+                animation: spin 1s linear infinite;
+                margin-bottom: 20px;
+            }}
+            .small-spinner {{
+                border: 4px solid #f3f3f3;
+                border-top: 4px solid #1E34B2;
+                border-radius: 50%;
+                width: 20px;
+                height: 20px;
+                animation: spin 1s linear infinite;
+                display: inline-block;
+                margin-left: 10px;
+            }}
+            @keyframes spin {{
+                0% {{ transform: rotate(0deg); }}
+                100% {{ transform: rotate(360deg); }}
+            }}
         </style>
         <script>
             function copyToClipboard(text) {{
@@ -141,57 +176,92 @@ def generate_html_response(user_info, resource_group_url):
                     console.error('Could not copy text: ', err);
                 }});
             }}
+            document.addEventListener('DOMContentLoaded', function() {{
+                var loading = document.getElementById('loading');
+                var content = document.getElementById('content');
+                if (loading && content) {{
+                    setTimeout(function() {{
+                        loading.style.display = 'none';
+                        content.style.display = 'block';
+                    }}, 3000); // Simulate 3s loading
+                }}
+            }});
         </script>
     </head>
     <body>
         <img src="https://automation.eurostarsoftwaretesting.com/wp-content/uploads/2024/07/AutomationSTAR-Vienna-Design-Colour.webp" alt="AutomationSTAR Vienna Logo" class="logo">
         <div class="container">
-            <h1>ETL Testing Framework</h1>
-            <h2>"Here's your AWS User details - may the tests be ever in your favor!"</h2>
-
-            <div class="info-box">
-                <div class="info-item">
-                    <strong>Account ID:</strong> {user_info['account_id']} <button class="copy-btn" onclick="copyToClipboard('{user_info['account_id']}')">Copy</button>
-                    <small>The unique identifier for your AWS account.</small>
+            <div id="user-info">
+                <h1>ETL Testing Framework</h1>
+                <h2>"Here's your AWS User details - may the tests be ever in your favor!"</h2>
+                <div class="info-box">
+                    <div class="info-item">
+                        <strong>Account ID:</strong> {user_info['account_id']} <button class="copy-btn" onclick="copyToClipboard('{user_info['account_id']}')">Copy</button>
+                        <small>The unique identifier for your AWS account.</small>
+                    </div>
+                    <div class="info-item">
+                        <strong>Username:</strong> {user_info['user_name']} <button class="copy-btn" onclick="copyToClipboard('{user_info['user_name']}')">Copy</button>
+                        <small>Use this to log in to the AWS Management Console.</small>
+                    </div>
+                    <div class="info-item">
+                        <strong>Password:</strong> {user_info['password']} <button class="copy-btn" onclick="copyToClipboard('{user_info['password']}')">Copy</button>
+                        <small>The password for your AWS Management Console login.</small>
+                    </div>
+                    <div class="info-item">
+                        <strong>Access Key ID:</strong> {user_info['access_key_id']} <button class="copy-btn" onclick="copyToClipboard('{user_info['access_key_id']}')">Copy</button>
+                        <small>Used for programmatic access to AWS services.</small>
+                    </div>
+                    <div class="info-item">
+                        <strong>Secret Access Key:</strong> {user_info['secret_access_key']} <button class="copy-btn" onclick="copyToClipboard('{user_info['secret_access_key']}')">Copy</button>
+                        <small>The "password" for your Access Key ID. Keep this secret!</small>
+                    </div>
+                    <div class="info-item">
+                        <a href="data:text/csv;charset=utf-8,{urllib.parse.quote(csv_string)}" download="user_info.csv" class="btn" style="color: white;">Download CSV</a>
+                    </div>
                 </div>
-                <div class="info-item">
-                    <strong>Username:</strong> {user_info['user_name']} <button class="copy-btn" onclick="copyToClipboard('{user_info['user_name']}')">Copy</button>
-                    <small>Use this to log in to the AWS Management Console.</small>
+                <div class="url-section">
+                    <div class="url-box">
+                        <p><strong>Login to AWS:</strong></p>
+                        <a href="{user_info['login_url']}" target="_blank">Click here to access the AWS Management Console</a>
+                    </div>
+                    <div class="url-box">
+                        <p><strong>Dify Platform:</strong></p>
+                        <span id="dify-link-container">
+                            <a id="dify-link" href="http://{user_info['ec2_ip']}" target="_blank" style="pointer-events: none; color: gray;">
+                                http://{user_info['ec2_ip']}
+                            </a>
+                            <span id="dify-spinner" class="small-spinner"></span>
+                        </span>
+                        <div style="margin-top: 8px; font-size: 0.95em; color: #333;">
+                            Access your personal Dify AI instance. Be patient, it may take a few minutes to start up.
+                        </div>
+                    </div>
                 </div>
-                <div class="info-item">
-                    <strong>Password:</strong> {user_info['password']} <button class="copy-btn" onclick="copyToClipboard('{user_info['password']}')">Copy</button>
-                    <small>The password for your AWS Management Console login.</small>
+                <div class="warning">
+                    <p><strong>Important:</strong> This AWS user and Dify instance will be deleted after the tutorial. Please save any important information before the session ends.</p>
                 </div>
-                <div class="info-item">
-                    <strong>Access Key ID:</strong> {user_info['access_key_id']} <button class="copy-btn" onclick="copyToClipboard('{user_info['access_key_id']}')">Copy</button>
-                    <small>Used for programmatic access to AWS services.</small>
-                </div>
-                <div class="info-item">
-                    <strong>Secret Access Key:</strong> {user_info['secret_access_key']} <button class="copy-btn" onclick="copyToClipboard('{user_info['secret_access_key']}')">Copy</button>
-                    <small>The "password" for your Access Key ID. Keep this secret!</small>
-                </div>
-                <div class="info-item">
-                    <a href="data:text/csv;charset=utf-8,{urllib.parse.quote(csv_string)}" download="user_info.csv" class="btn" style="color: white;">Download CSV</a>
-                </div>
-                
             </div>
-            
-            <div class="url-section">
-                <div class="url-box">
-                    <p><strong>Login to AWS:</strong></p>
-                    <a href="{user_info['login_url']}" target="_blank">Click here to access the AWS Management Console</a>
-                </div>
-                
-                <div class="url-box">
-                    <p><strong>AWS Resources:</strong></p>
-                    <a href="{resource_group_url}" target="_blank">Click here to see your AWS resources after you create them</a>
-                </div>
-            </div>
-            <div class="warning">
-                <p><strong>Important:</strong> This AWS user will be deleted after the tutorial. Please save any important information before the session ends.</p>
-            </div>
-            
         </div>
+        <script>
+        function checkDifyReady() {{
+            fetch('http://{user_info['ec2_ip']}/v1/')
+                .then(response => {{
+                    if (response.ok) {{
+                        document.getElementById('dify-link').style.pointerEvents = 'auto';
+                        document.getElementById('dify-link').style.color = '#0056b3';
+                        document.getElementById('dify-spinner').style.display = 'none';
+                    }} else {{
+                        setTimeout(checkDifyReady, 3000);
+                    }}
+                }})
+                .catch(() => setTimeout(checkDifyReady, 3000));
+        }}
+        setTimeout(function() {{
+            document.getElementById('dify-link').style.pointerEvents = 'auto';
+            document.getElementById('dify-link').style.color = '#0056b3';
+            document.getElementById('dify-spinner').style.display = 'none';
+        }}, 120000); // 2 minutes
+        </script>
     </body>
     </html>
     """
@@ -317,6 +387,11 @@ def create_user():
 
     user = create_console_user(console_user_name, account_id)
     user.update(create_service_user(service_user_name))
+
+    # Launch EC2 instance
+    public_ip = launch_ec2_instance(console_user_name)
+    user['ec2_ip'] = public_ip
+
     # Create a resource group for the console user
     resource_group_url = create_resource_group_for_user(console_user_name)
 
@@ -479,3 +554,106 @@ def destroy_users():
             resource_groups.delete_group(GroupName=group['Name'])
     
     return deleted_users 
+
+
+def launch_ec2_instance(user_name):
+    ec2 = boto3.client('ec2', region_name='eu-west-3')
+    logger.info(f"Launching EC2 instance for user: {user_name}")
+    try:
+        # 🔍 Find latest Amazon Linux 2023 AMI
+        logger.info("Looking up latest Amazon Linux 2023 AMI")
+        ami_response = ec2.describe_images(
+            Owners=['amazon'],
+            Filters=[
+                {'Name': 'name', 'Values': ['amzn2-ami-hvm-*-x86_64-gp2']},
+                {'Name': 'architecture', 'Values': ['x86_64']},
+                {'Name': 'state', 'Values': ['available']},
+                {'Name': 'root-device-type', 'Values': ['ebs']}
+            ]
+        )
+        ami_sorted = sorted(ami_response['Images'], key=lambda x: x['CreationDate'], reverse=True)
+        ami_id = ami_sorted[0]['ImageId']
+    except Exception as e:
+        logger.error("Error finding AMI: %s", e, exc_info=True)
+        raise Exception("Failed to find a suitable Amazon Linux 2023 AMI.")
+
+    try:
+        # 🔐 Get default security group from default VPC
+        vpcs = ec2.describe_vpcs(Filters=[{'Name': 'isDefault', 'Values': ['true']}])
+        vpc_id = vpcs['Vpcs'][0]['VpcId']
+        sgs = ec2.describe_security_groups(
+            Filters=[
+                {'Name': 'vpc-id', 'Values': [vpc_id]},
+                {'Name': 'group-name', 'Values': ['default']}
+            ]
+        )
+        default_sg_id = sgs['SecurityGroups'][0]['GroupId']
+    except Exception as e:
+        print(f"Error finding default VPC or security group: {e}\n{traceback.format_exc()}")
+        raise Exception("Failed to find default VPC or security group.")
+
+    try:
+        key_name = f"workshop-key-{user_name}-{int(time.time())}"
+        key_pair = ec2.create_key_pair(KeyName=key_name)
+    except Exception as e:
+        print(f"Error creating key pair: {e}\n{traceback.format_exc()}")
+        raise Exception("Failed to create EC2 key pair.")
+
+    try:
+        # 🚀 Launch EC2 instance with auto-terminate in 5h
+        existing = ec2.describe_instances(
+            Filters=[
+                {'Name': 'tag:Owner', 'Values': [user_name]},
+                {'Name': 'instance-state-name', 'Values': ['pending', 'running']}
+            ]
+        )
+        if any(r['Instances'] for r in existing['Reservations']):
+            logger.info(f"EC2 instance already exists for user {user_name}, skipping creation.")
+            public_ip = existing['Reservations'][0]['Instances'][0]['PublicIpAddress']
+            return public_ip
+
+        response = ec2.run_instances(
+            ImageId=ami_id,
+            InstanceType='t3.medium',
+            MinCount=1,
+            MaxCount=1,
+            #KeyName=key_name,
+            #SecurityGroupIds=[default_sg_id],
+            SecurityGroupIds=['sg-09827f49936d1d7e5'],
+            InstanceInitiatedShutdownBehavior='terminate',
+            BlockDeviceMappings=[
+                {
+                    'DeviceName': '/dev/xvda',
+                    'Ebs': {
+                        'VolumeSize': 30,
+                        'VolumeType': 'gp3',
+                        'DeleteOnTermination': True
+                    }
+                }
+            ],
+            MetadataOptions={
+                'HttpTokens': 'required',
+                'HttpEndpoint': 'enabled'
+            },
+            TagSpecifications=[
+                {
+                    'ResourceType': 'instance',
+                    'Tags': [
+                        {'Key': 'Owner', 'Value': user_name},
+                        {'Key': 'Classroom', 'Value': 'TestusPatronus'},
+                        {'Key': 'TTL', 'Value': '5h'}
+                    ]
+                }
+            ],
+            UserData=f'''#!/bin/bash\nyum update -y\nyum install -y docker git\nsystemctl start docker\nsystemctl enable docker\nusermod -aG docker ec2-user\n\nmkdir -p /home/ec2-user/.docker/cli-plugins/\ncurl -SL https://github.com/docker/compose/releases/download/v2.27.0/docker-compose-linux-x86_64 -o /home/ec2-user/.docker/cli-plugins/docker-compose\nchmod +x /home/ec2-user/.docker/cli-plugins/docker-compose\nchown -R ec2-user:ec2-user /home/ec2-user/.docker\n\nsu - ec2-user -c "git clone https://github.com/langgenius/dify.git ~/dify"\nsu - ec2-user -c "cp ~/dify/docker/.env.example ~/dify/docker/.env"\nsu - ec2-user -c "cd ~/dify/docker && docker compose up -d"\n\nshutdown -h +300\n'''
+        )
+        instance_id = response['Instances'][0]['InstanceId']
+        # ⏳ Wait for the instance to get its public IP
+        waiter = ec2.get_waiter('instance_running')
+        waiter.wait(InstanceIds=[instance_id])
+        desc = ec2.describe_instances(InstanceIds=[instance_id])
+        public_ip = desc['Reservations'][0]['Instances'][0]['PublicIpAddress']
+        return public_ip
+    except Exception as e:
+        print(f"Error launching EC2 instance: {e}\n{traceback.format_exc()}")
+        raise Exception("Failed to launch EC2 instance. Please try again later." + str(e))
