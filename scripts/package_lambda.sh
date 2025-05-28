@@ -46,27 +46,34 @@ python3 -m venv "$TEMP_DIR/venv"
 source "$TEMP_DIR/venv/bin/activate"
 
 if [ "$CLOUD_PROVIDER" == "aws" ]; then
-    # AWS Lambda packaging
-    echo "Packaging AWS Lambda function..."
-    PACKAGE_PATH="$PROJECT_ROOT/functions/packages/lambda_function.zip"
-    
-    # Install dependencies
+    # Package user management Lambda function
+    echo "Packaging AWS Lambda user management function..."
+    PACKAGE_PATH="$PROJECT_ROOT/functions/packages/testus_patronus_user_management.zip"
     pip install -r "$PROJECT_ROOT/functions/aws/requirements.txt"
-    
-    # Copy function code
-    cp "$PROJECT_ROOT/functions/aws/lambda_function.py" "$TEMP_DIR/"
-    
-    # Create deployment package
+    cp "$PROJECT_ROOT/functions/aws/testus_patronus_user_management.py" "$TEMP_DIR/"
     cd "$TEMP_DIR"
     zip -r9 "$PACKAGE_PATH" .
-    
-    # Verify package
-    if [ ! -f "$PACKAGE_PATH" ]; then
-        echo "Error: Failed to create AWS Lambda package at $PACKAGE_PATH"
-        exit 1
-    fi
-    
-    echo "AWS Lambda function packaged successfully at: $PACKAGE_PATH"
+    cd "$PROJECT_ROOT"
+
+    # Package status Lambda function
+    echo "Packaging AWS Lambda status function..."
+    TEMP_DIR2=$(mktemp -d)
+    cp "$PROJECT_ROOT/functions/aws/testus_patronus_status.py" "$TEMP_DIR2/"
+    pip install -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR2/"
+    cd "$TEMP_DIR2"
+    zip -r9 "$PROJECT_ROOT/functions/packages/testus_patronus_status.zip" .
+    cd "$PROJECT_ROOT"
+    rm -rf "$TEMP_DIR2"
+
+    # Package stop_old_instances Lambda function
+    echo "Packaging AWS Lambda stop_old_instances function..."
+    TEMP_DIR3=$(mktemp -d)
+    cp "$PROJECT_ROOT/functions/aws/testus_patronus_stop_old_instances.py" "$TEMP_DIR3/"
+    pip install -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR3/"
+    cd "$TEMP_DIR3"
+    zip -r9 "$PROJECT_ROOT/functions/packages/testus_patronus_stop_old_instances.zip" .
+    cd "$PROJECT_ROOT"
+    rm -rf "$TEMP_DIR3"
 else
     # Azure Function packaging
     echo "Packaging Azure Function..."
@@ -110,5 +117,5 @@ fi
 # Clean up
 echo "Cleaning up..."
 deactivate
-cd - > /dev/null
-rm -rf "$TEMP_DIR" 
+cd "$PROJECT_ROOT"
+rm -rf "$TEMP_DIR"

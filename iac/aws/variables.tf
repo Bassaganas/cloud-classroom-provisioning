@@ -13,11 +13,36 @@ variable "owner" {
 variable "region" {
   description = "The AWS region to deploy to"
   type        = string
-  default     = "eu-west-1"
+  default     = "eu-west-3"
 }
 
 variable "classroom_name" {
   description = "The name of the classroom"
   type        = string
-  default     = "conference-classroom"
+  default     = "testus-patronus"
+}
+
+# --- EC2 Pool for Classroom Assignment ---
+variable "ec2_pool_size" {
+  description = "Number of EC2 instances to pre-provision in the pool."
+  type        = number
+  default     = 5
+}
+
+variable "ec2_ami_id" {
+  description = "AMI ID for classroom EC2 instances."
+  type        = string
+  default     = "ami-0746ed6b6c0683e67"
+}
+
+variable "ec2_instance_type" {
+  description = "Instance type for classroom EC2 instances."
+  type        = string
+  default     = "m5.large"
+}
+
+variable "ec2_subnet_id" {
+  description = "Subnet ID for classroom EC2 instances."
+  type        = string
+  default     = "subnet-076c4fca18acc0b7e"
 }

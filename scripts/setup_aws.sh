@@ -18,7 +18,7 @@ configure_aws() {
   read -r -s aws_secret_access_key
   echo "Please enter your AWS region (default: eu-west-1):"
   read -r aws_region
-  aws_region=${aws_region:-eu-west-1}
+  aws_region=${aws_region:-eu-west-3}
   
   aws configure set aws_access_key_id "$aws_access_key_id"
   aws configure set aws_secret_access_key "$aws_secret_access_key"
@@ -60,4 +60,9 @@ if [ "$ACTION" = "destroy" ]; then
 else
   terraform init
   terraform apply -auto-approve
+  
+  # Print the status Lambda URL
+  echo -e "\nStatus Lambda URL:"
+  terraform output -raw status_lambda_url
+  echo -e "\n"
 fi 

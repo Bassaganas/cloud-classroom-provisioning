@@ -10,7 +10,7 @@ usage() {
   echo "Options:"
   echo "  --name         Name of the classroom (required)"
   echo "  --cloud        Cloud provider (aws or azure, default: aws)"
-  echo "  --region       AWS region (default: eu-west-1)"
+  echo "  --region       AWS region (default: eu-west-3)"
   echo "  --location     Azure location (default: centralus)"
   echo "  --destroy      Destroy the classroom resources instead of creating them"
   echo "  --parallelism  Number of parallel operations (default: 4)"
@@ -22,7 +22,7 @@ usage() {
 # Default values
 CLASSROOM_NAME=""
 CLOUD_PROVIDER="aws"
-REGION="eu-west-1"
+REGION="eu-west-3"
 LOCATION="centralus"
 ACTION="create"
 PARALLELISM=4
