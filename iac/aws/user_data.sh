@@ -18,12 +18,3 @@ chown -R ec2-user:ec2-user /home/ec2-user/.docker
 su - ec2-user -c "git clone https://github.com/langgenius/dify.git ~/dify"
 su - ec2-user -c "cp ~/dify/docker/.env.example ~/dify/docker/.env"
 su - ec2-user -c "cd ~/dify/docker && docker compose up -d"
-
-# Auto-shutdown after 5 minutes
-shutdown -h +5
-
-# Remove any existing shutdown jobs
-crontab -r
-
-# Add a new shutdown job for 3 hours after every boot
-(crontab -l 2>/dev/null; echo "@reboot shutdown -h +180") | crontab - 

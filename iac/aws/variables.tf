@@ -46,3 +46,15 @@ variable "ec2_subnet_id" {
   type        = string
   default     = "subnet-076c4fca18acc0b7e"
 }
+
+variable "instance_stop_timeout_minutes" {
+  description = "Number of minutes before an instance is considered idle and should be stopped"
+  type        = number
+  default     = 5
+}
+
+variable "instance_terminate_timeout_minutes" {
+  description = "Number of minutes before a stopped instance should be terminated"
+  type        = number
+  default     = 10
+}

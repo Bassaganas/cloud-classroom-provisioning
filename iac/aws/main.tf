@@ -35,7 +35,36 @@ resource "aws_iam_role" "lambda_role" {
   }
 }
 
-# IAM Policy for Lambda
+# DynamoDB table for instance assignments
+resource "aws_dynamodb_table" "instance_assignments" {
+  name           = "instance-assignments-${var.environment}"
+  billing_mode   = "PAY_PER_REQUEST"
+  hash_key       = "instance_id"
+
+  attribute {
+    name = "instance_id"
+    type = "S"
+  }
+
+  attribute {
+    name = "student_name"
+    type = "S"
+  }
+
+  global_secondary_index {
+    name            = "student_name-index"
+    hash_key        = "student_name"
+    projection_type = "ALL"
+  }
+
+  tags = {
+    Environment = var.environment
+    Owner       = var.owner
+    Project     = "classroom"
+  }
+}
+
+# Update Lambda IAM policy to include DynamoDB permissions
 resource "aws_iam_role_policy" "lambda_iam_policy" {
   name = "LambdaIAMManagementPolicy"
   role = aws_iam_role.lambda_role.id
@@ -73,7 +102,14 @@ resource "aws_iam_role_policy" "lambda_iam_policy" {
           "ec2:TerminateInstances",
           "ec2:CreateTags",
           "ec2:DescribeTags",
-          "secretsmanager:GetSecretValue"
+          "secretsmanager:GetSecretValue",
+          "ssm:*",
+          "dynamodb:GetItem",
+          "dynamodb:PutItem",
+          "dynamodb:UpdateItem",
+          "dynamodb:DeleteItem",
+          "dynamodb:Query",
+          "dynamodb:Scan"
         ]
         Resource = "*"
       },
@@ -91,8 +127,6 @@ resource "aws_iam_role_policy_attachment" "lambda_basic" {
   role       = aws_iam_role.lambda_role.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
-
-
 
 # Lambda Function
 resource "aws_lambda_function" "user_management" {
@@ -123,7 +157,8 @@ resource "aws_lambda_function" "user_management" {
     aws_iam_role_policy_attachment.lambda_basic,
     aws_iam_role_policy.lambda_iam_policy,
     aws_iam_role.lambda_role,
-    aws_lambda_function.status_lambda
+    aws_lambda_function.status_lambda,
+    aws_lambda_function_url.status_lambda_url
   ]
 }
 
@@ -141,7 +176,6 @@ resource "aws_lambda_function_url" "create_user_url" {
     max_age           = 86400
   }
 }
-
 
 # Data source for current AWS account
 data "aws_caller_identity" "current" {}
@@ -162,14 +196,50 @@ data "aws_ami" "amazon_linux_2" {
   }
 }
 
+# IAM Role for EC2 instances
+resource "aws_iam_role" "ec2_ssm_role" {
+  name = "ec2-ssm-role-${var.environment}"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Action = "sts:AssumeRole"
+        Effect = "Allow"
+        Principal = {
+          Service = "ec2.amazonaws.com"
+        }
+      }
+    ]
+  })
+
+  tags = {
+    Environment = var.environment
+    Owner       = var.owner
+    Project     = "classroom"
+  }
+}
+
+# Attach SSM policy to EC2 role
+resource "aws_iam_role_policy_attachment" "ssm_policy" {
+  role       = aws_iam_role.ec2_ssm_role.name
+  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+}
+
+# Create instance profile
+resource "aws_iam_instance_profile" "ec2_ssm_profile" {
+  name = "ec2-ssm-profile-${var.environment}"
+  role = aws_iam_role.ec2_ssm_role.name
+}
+
 # EC2 Pool Instances
 resource "aws_instance" "classroom_pool" {
   count                  = var.ec2_pool_size
-  #ami                    = var.ec2_ami_id
   ami                    = "ami-024f025478479ab03"
   instance_type          = var.ec2_instance_type
   vpc_security_group_ids = ["sg-09827f49936d1d7e5"]
   subnet_id              = var.ec2_subnet_id
+  iam_instance_profile   = aws_iam_instance_profile.ec2_ssm_profile.name
   
   root_block_device {
     volume_size = 40
@@ -182,6 +252,14 @@ resource "aws_instance" "classroom_pool" {
     http_endpoint = "enabled"
   }
 
+  user_data = <<-EOF
+              #!/bin/bash
+              # Install SSM agent
+              yum install -y amazon-ssm-agent
+              systemctl enable amazon-ssm-agent
+              systemctl start amazon-ssm-agent
+              EOF
+
   tags = {
     Name        = "classroom-pool-${count.index}"
     Status      = "available"
@@ -190,29 +268,12 @@ resource "aws_instance" "classroom_pool" {
     Owner       = var.owner
     Type        = "pool"
   }
-  #user_data = file("${path.module}/user_data.sh")
 
   lifecycle {
     create_before_destroy = true
   }
 }
 
-# Stop instances after creation
-resource "null_resource" "stop_instances" {
-  count = var.ec2_pool_size
-
-  triggers = {
-    instance_id = aws_instance.classroom_pool[count.index].id
-  }
-
-  provisioner "local-exec" {
-    command = <<-EOT
-      aws ec2 stop-instances --instance-ids ${aws_instance.classroom_pool[count.index].id} --region ${var.region}
-    EOT
-  }
-
-  depends_on = [aws_instance.classroom_pool]
-}
 
 # Output the instance IDs for reference
 output "pool_instance_ids" {
@@ -289,6 +350,8 @@ resource "aws_lambda_function" "stop_old_instances" {
   environment {
     variables = {
       ENVIRONMENT = var.environment
+      INSTANCE_STOP_TIMEOUT_MINUTES = var.instance_stop_timeout_minutes
+      INSTANCE_TERMINATE_TIMEOUT_MINUTES = var.instance_terminate_timeout_minutes
     }
   }
 
