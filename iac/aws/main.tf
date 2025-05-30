@@ -352,6 +352,7 @@ resource "aws_lambda_function" "stop_old_instances" {
       ENVIRONMENT = var.environment
       INSTANCE_STOP_TIMEOUT_MINUTES = var.instance_stop_timeout_minutes
       INSTANCE_TERMINATE_TIMEOUT_MINUTES = var.instance_terminate_timeout_minutes
+      INSTANCE_HARD_TERMINATE_TIMEOUT_MINUTES = var.hard_terminate_timeout_minutes
     }
   }
 

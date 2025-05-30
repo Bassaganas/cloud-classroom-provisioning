@@ -26,7 +26,7 @@ variable "classroom_name" {
 variable "ec2_pool_size" {
   description = "Number of EC2 instances to pre-provision in the pool."
   type        = number
-  default     = 5
+  default     = 30
 }
 
 variable "ec2_ami_id" {
@@ -50,11 +50,17 @@ variable "ec2_subnet_id" {
 variable "instance_stop_timeout_minutes" {
   description = "Number of minutes before an instance is considered idle and should be stopped"
   type        = number
-  default     = 5
+  default     = 4
 }
 
 variable "instance_terminate_timeout_minutes" {
   description = "Number of minutes before a stopped instance should be terminated"
   type        = number
-  default     = 10
+  default     = 20
+}
+
+variable "hard_terminate_timeout_minutes" {
+  description = "Number of minutes before a stopped instance should be hard terminated"
+  type        = number
+  default     = 45
 }
