@@ -7,6 +7,9 @@ import boto3
 from bs4 import BeautifulSoup  # pip install beautifulsoup4
 from botocore.exceptions import ClientError
 import webbrowser
+import subprocess
+import tempfile
+import os
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -94,8 +97,8 @@ def cleanup_test_environment():
 def simulate_user_get_request(user_id: str, use_browser=True) -> dict:
     url = LAMBDA_URL + "?r=" + str(random.randint(1000, 9999))
     if use_browser:
-        webbrowser.open(url)
-        return {"user_id": user_id, "status": "browser_opened", "url": url}
+        webbrowser.open(url)  # Opens a new tab in the default browser
+        return {"user_id": user_id, "status": "browser_tab_opened", "url": url}
     else:
         response = requests.get(url, timeout=30)
         logger.info(f"User {user_id} got status {response.status_code}")
@@ -147,7 +150,7 @@ if __name__ == "__main__":
         cleanup_test_environment()
         
         # Run the concurrency test
-        results = run_lambda_concurrency_test(num_users=4, max_workers=4)
+        results = run_lambda_concurrency_test(num_users=3, max_workers=3)
         print("\nDetailed Results:")
         for result in results:
             print(result)

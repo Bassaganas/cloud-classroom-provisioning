@@ -26,7 +26,7 @@ variable "classroom_name" {
 variable "ec2_pool_size" {
   description = "Number of EC2 instances to pre-provision in the pool."
   type        = number
-  default     = 30
+  default     = 5
 }
 
 variable "ec2_ami_id" {

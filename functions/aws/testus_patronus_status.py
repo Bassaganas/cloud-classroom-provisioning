@@ -95,6 +95,20 @@ def lambda_handler(event, context):
         # Always check instance state first
         if instance.state['Name'] != 'running':
             logger.info(f"Instance {instance_id} is not running")
+            if instance.state['Name'] == 'stopped':
+                try:
+                    # Start the instance if it's stopped
+                    logger.info(f"Starting stopped instance {instance_id}")
+                    ec2_client.start_instances(InstanceIds=[instance_id])
+                    # Update DynamoDB status
+                    table.update_item(
+                        Key={'instance_id': instance_id},
+                        UpdateExpression='SET #status = :status',
+                        ExpressionAttributeNames={'#status': 'status'},
+                        ExpressionAttributeValues={':status': 'starting'}
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to start instance {instance_id}: {str(e)}")
             return {
                 'statusCode': 200,
                 'headers': {'Content-Type': 'application/json'},

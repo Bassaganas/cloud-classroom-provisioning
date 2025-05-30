@@ -64,7 +64,44 @@ resource "aws_dynamodb_table" "instance_assignments" {
   }
 }
 
-# Update Lambda IAM policy to include DynamoDB permissions
+# Parameter Store parameters for instance timeouts
+resource "aws_ssm_parameter" "instance_stop_timeout" {
+  name        = "/classroom/${var.environment}/instance_stop_timeout_minutes"
+  description = "Timeout in minutes before stopping unassigned running instances"
+  type        = "String"
+  value       = "60" # 1 hours
+  tags = {
+    Environment = var.environment
+    Owner       = var.owner
+    Project     = "classroom"
+  }
+}
+
+resource "aws_ssm_parameter" "instance_terminate_timeout" {
+  name        = "/classroom/${var.environment}/instance_terminate_timeout_minutes"
+  description = "Timeout in minutes before terminating stopped instances"
+  type        = "String"
+  value       = "20"
+  tags = {
+    Environment = var.environment
+    Owner       = var.owner
+    Project     = "classroom"
+  }
+}
+
+resource "aws_ssm_parameter" "instance_hard_terminate_timeout" {
+  name        = "/classroom/${var.environment}/instance_hard_terminate_timeout_minutes"
+  description = "Timeout in minutes before hard terminating any instance"
+  type        = "String"
+  value       = "240"  # 4 hours
+  tags = {
+    Environment = var.environment
+    Owner       = var.owner
+    Project     = "classroom"
+  }
+}
+
+# Update Lambda IAM policy to allow SSM Parameter Store access
 resource "aws_iam_role_policy" "lambda_iam_policy" {
   name = "LambdaIAMManagementPolicy"
   role = aws_iam_role.lambda_role.id
@@ -93,23 +130,23 @@ resource "aws_iam_role_policy" "lambda_iam_policy" {
           "logs:CreateLogGroup",
           "logs:CreateLogStream",
           "logs:PutLogEvents",
-          "ec2:*",
-          "ec2:DescribeImages",
-          "ec2:DescribeInstances",
-          "ec2:RunInstances",
-          "ec2:StopInstances",
-          "ec2:StartInstances",
-          "ec2:TerminateInstances",
-          "ec2:CreateTags",
-          "ec2:DescribeTags",
-          "secretsmanager:GetSecretValue",
           "ssm:*",
-          "dynamodb:GetItem",
+          "ec2:StartInstances",
+          "ec2:StopInstances",
+          "ec2:TerminateInstances",
+          "ec2:DescribeInstances",
+          "ec2:CreateTags",
+          "ec2:DescribeInstanceStatus",
+          "ec2:DescribeTags",
+          "ec2:ModifyInstanceAttribute",
           "dynamodb:PutItem",
+          "dynamodb:GetItem",
           "dynamodb:UpdateItem",
           "dynamodb:DeleteItem",
           "dynamodb:Query",
-          "dynamodb:Scan"
+          "dynamodb:Scan",
+          "ssm:GetParameter",
+          "ssm:GetParameters"
         ]
         Resource = "*"
       },
@@ -342,17 +379,15 @@ resource "aws_lambda_function" "stop_old_instances" {
   role             = aws_iam_role.lambda_role.arn
   handler          = "testus_patronus_stop_old_instances.lambda_handler"
   runtime          = "python3.9"
-  timeout          = 60
-  memory_size      = 128
+  timeout          = 300
+  memory_size      = 256
   package_type     = "Zip"
   source_code_hash = filebase64sha256("../../functions/packages/testus_patronus_stop_old_instances.zip")
 
   environment {
     variables = {
       ENVIRONMENT = var.environment
-      INSTANCE_STOP_TIMEOUT_MINUTES = var.instance_stop_timeout_minutes
-      INSTANCE_TERMINATE_TIMEOUT_MINUTES = var.instance_terminate_timeout_minutes
-      INSTANCE_HARD_TERMINATE_TIMEOUT_MINUTES = var.hard_terminate_timeout_minutes
+      PARAMETER_PREFIX = "/classroom/${var.environment}"
     }
   }
 
@@ -460,4 +495,26 @@ output "apigateway_custom_domain_target" {
 output "apigateway_custom_domain_hosted_zone_id" {
   description = "API Gateway custom domain hosted zone ID (for Route 53 alias records)"
   value       = aws_apigatewayv2_domain_name.custom.domain_name_configuration[0].hosted_zone_id
+}
+
+resource "aws_iam_policy" "lambda_secretsmanager_policy" {
+  name        = "lambda-secretsmanager-policy"
+  description = "Allow Lambda to get Azure LLM configs from Secrets Manager"
+  policy      = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "secretsmanager:GetSecretValue"
+        ]
+        Resource = "arn:aws:secretsmanager:eu-west-3:087559609246:secret:azure/llm/configs*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_secretsmanager_attach" {
+  role       = aws_iam_role.lambda_role.name
+  policy_arn = aws_iam_policy.lambda_secretsmanager_policy.arn
 }

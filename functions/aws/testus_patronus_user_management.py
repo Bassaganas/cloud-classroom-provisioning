@@ -37,9 +37,13 @@ def get_secret():
     secret_name = "azure/llm/configs"
     try:
         response = secretsmanager.get_secret_value(SecretId=secret_name)
-        return json.loads(response['SecretString'])
+        secret = json.loads(response['SecretString'])
+        logger.info(f"[Azure Config] Successfully retrieved secret '{secret_name}': {len(secret)} configs found.")
+        if not secret:
+            logger.warning(f"[Azure Config] No LLM configs found in secret '{secret_name}'.")
+        return secret
     except ClientError as e:
-        logger.error(f"Error retrieving secret: {str(e)}")
+        logger.error(f"[Azure Config] Error retrieving secret '{secret_name}': {str(e)}")
         return []
 
 def get_next_available_api_key():
@@ -150,21 +154,19 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                 <h1>Error</h1>
                 <div class="subtitle">Something went wrong. Please try again.</div>
                 <div class="error-details">{error_message}</div>
-                <button class="retry-button" onclick="window.location.href='/'>Try Again</button>
+                <button class="retry-button" onclick="window.location.href='/'">Try Again</button>
             </div>
         </body>
         </html>
         """
-    
-    # Advanced HTML/CSS and card logic for LLM models and instance info
-    azure_configs_html = ""
-    if 'azure_configs' in user_info and user_info['azure_configs']:
-        azure_configs = user_info['azure_configs']
-        azure_configs_html = f"""
-        <div class=\"info-box\">
-            <h2>LLM Models</h2>
-            <div class=\"azure-cards\">
-        """
+    # Always ensure azure_configs is present
+    azure_configs = user_info.get('azure_configs', [])
+    azure_configs_html = """
+    <div class=\"info-box\">
+        <h2>LLM Models</h2>
+        <div class=\"azure-cards\">
+    """
+    if azure_configs:
         for i, config in enumerate(azure_configs, 1):
             azure_configs_html += f"""
             <div class=\"azure-card\">
@@ -175,7 +177,9 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                 <div class=\"config-row\"><span>Version:</span> <span class=\"mono\">{config['api_version']}</span></div>
             </div>
             """
-        azure_configs_html += "</div></div>"
+    else:
+        azure_configs_html += "<div>No LLM configs available for this user.</div>"
+    azure_configs_html += "</div></div>"
 
     # Create instance info HTML based on whether instance assignment was successful
     instance_info_html = ""
@@ -397,22 +401,51 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                 0% {{ transform: rotate(0deg); }}
                 100% {{ transform: rotate(360deg); }}
             }}
+            .get-new-user-btn {{
+                background: #e74c3c;
+                color: #fff;
+                border: none;
+                padding: 10px 22px;
+                border-radius: 6px;
+                font-size: 1em;
+                cursor: pointer;
+                margin-top: 18px;
+                margin-bottom: 8px;
+            }}
+            .get-new-user-btn:hover {{
+                background: #c0392b;
+            }}
         </style>
         <script>
-            function copyToClipboard(text) {{
-                navigator.clipboard.writeText(text).then(function() {{
-                    alert('Copied to clipboard!');
-                }});
+            // Helper to set a cookie
+            function setCookie(name, value, days) {{
+                var d = new Date();
+                d.setTime(d.getTime() + (days*24*60*60*1000));
+                var expires = "expires=" + d.toUTCString();
+                document.cookie = name + "=" + encodeURIComponent(value) + ";" + expires + ";path=/";
             }}
-
-            // Dify polling logic
+            // Helper to get a cookie
+            function getCookie(name) {{
+                var nameEQ = name + "=";
+                var ca = document.cookie.split(';');
+                for(var i=0;i < ca.length;i++) {{
+                    var c = ca[i];
+                    while (c.charAt(0)==' ') c = c.substring(1,c.length);
+                    if (c.indexOf(nameEQ) == 0) return decodeURIComponent(c.substring(nameEQ.length,c.length));
+                }}
+                return null;
+            }}
             document.addEventListener('DOMContentLoaded', function() {{
+                var userCookie = getCookie('testus_patronus_user');
+                var ipCookie = getCookie('testus_patronus_ip');
+                var instanceIdCookie = getCookie('testus_patronus_instance_id');
                 var difyLink = document.getElementById('dify-link');
                 var spinner = document.getElementById('dify-spinner');
                 var statusMsg = document.getElementById('dify-status-msg');
                 var userName = "{user_info['user_name']}";
                 var statusLambdaUrl = "{status_lambda_url}";
                 var pollCount = 0;
+
                 function pollStatus() {{
                     fetch(statusLambdaUrl + '?user_name=' + encodeURIComponent(userName))
                         .then(res => res.json())
@@ -425,6 +458,9 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                                 difyLink.style.pointerEvents = 'auto';
                                 spinner.style.display = 'none';
                                 statusMsg.textContent = 'Your Dify instance is ready!';
+                                // Update cookies with IP
+                                setCookie('testus_patronus_ip', data.ip, 7);
+                                console.log('[Testus Patronus] Updated cookies with IP:', data.ip);
                             }} else {{
                                 statusMsg.textContent = 'Starting your Dify instance...';
                                 if (pollCount < 60) setTimeout(pollStatus, 5000);
@@ -436,8 +472,34 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                             if (pollCount < 60) setTimeout(pollStatus, 5000);
                         }});
                 }}
-                pollStatus();
+
+                if (userCookie) {{
+                    // We have a user, always start polling
+                    console.log('[Testus Patronus] User found in cookies, starting status polling');
+                    // Start polling immediately
+                    pollStatus();
+                }} else {{
+                    // No user in cookies, let backend/user creation logic run as normal
+                    console.log('[Testus Patronus] No user in cookies, proceeding with normal logic.');
+                    // After assignment, store the user in cookies if not already present
+                    setCookie('testus_patronus_user', "{user_info['user_name']}", 7);
+                    setCookie('testus_patronus_instance_id', "{user_info.get('instance_id', '')}", 7);
+                    // Start polling for new assignments
+                    pollStatus();
+                }}
             }});
+            function getNewUser() {{
+                setCookie('testus_patronus_user', '', -1);
+                setCookie('testus_patronus_ip', '', -1);
+                setCookie('testus_patronus_instance_id', '', -1);
+                console.log('[Testus Patronus] Cleared user from cookies. Reloading for new user.');
+                window.location.href = '/';
+            }}
+            function copyToClipboard(text) {{
+                navigator.clipboard.writeText(text).then(function() {{
+                    alert('Copied to clipboard!');
+                }});
+            }}
         </script>
     </head>
     <body>
@@ -447,6 +509,7 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
             <div class="main-title">Testus Patronus</div>
             <div class="subtitle">No magic, just AI with your company context</div>
             <h2>Welcome! Here are your Azure LLM credentials and your Dify instance. This is your user: {user_info['user_name']}</h2>
+            <button class="get-new-user-btn" onclick="getNewUser()">Get a new user</button>
             {instance_info_html}
             {azure_configs_html}
             <div class="warning">
@@ -633,144 +696,84 @@ def lambda_handler(event, context):
                         }
                     }
             elif path == '/':
-                # Existing code for creating users
+                headers = event.get('headers', {}) or {}
+                cookies = headers.get('cookie', '')
+                user_name = None
+                # Parse cookies
+                for cookie in cookies.split(';'):
+                    if cookie.strip().startswith('testus_patronus_user='):
+                        user_name = cookie.strip().split('=', 1)[1]
+                        break
+                # Fallback to query param if needed
+                if not user_name:
+                    query_params = event.get('queryStringParameters', {}) or {}
+                    user_name = query_params.get('user_name')
+                if user_name:
+                    logger.info(f"[Azure Config] Reload path for user: {user_name}")
+                    # Try to look up the user in DynamoDB
+                    response = table.query(
+                        IndexName='student_name-index',
+                        KeyConditionExpression='student_name = :sn',
+                        ExpressionAttributeValues={':sn': user_name}
+                    )
+                    if response['Items']:
+                        user_info = response['Items'][0]
+                        user_info['user_name'] = user_info.get('student_name', user_name)
+                        user_info['instance_id'] = user_info.get('instance_id')
+                        # Check EC2 instance status
+                        if user_info['instance_id']:
+                            try:
+                                ec2 = boto3.client('ec2', region_name='eu-west-3')
+                                instance_response = ec2.describe_instances(
+                                    InstanceIds=[user_info['instance_id']]
+                                )
+                                instance = instance_response['Reservations'][0]['Instances'][0]
+                                state = instance['State']['Name']
+                                if state in ['running', 'pending']:
+                                    user_info['ec2_ip'] = instance.get('PublicIpAddress')
+                                elif state == 'stopped':
+                                    ec2.start_instances(InstanceIds=[user_info['instance_id']])
+                                    user_info['instance_error'] = 'Instance is starting...'
+                                else:
+                                    user_info['instance_error'] = f'Instance is {state}. Please try again.'
+                            except Exception as e:
+                                logger.error(f"Error checking instance status: {str(e)}")
+                                user_info['instance_error'] = 'Error checking instance status'
+                        # Always load Azure LLM configurations (even if instance is ready)
+                        try:
+                            azure_configs = get_secret()
+                            user_info['azure_configs'] = azure_configs
+                            logger.info(f"[Azure Config] For user {user_name}, loaded {len(azure_configs)} configs: {azure_configs}")
+                            if not azure_configs:
+                                logger.warning(f"[Azure Config] No LLM configs available for user {user_name} (reload path)")
+                        except Exception as e:
+                            logger.error(f"Error loading Azure configurations: {str(e)}")
+                            user_info['azure_configs'] = []
+                        html_content = generate_html_response(user_info=user_info, error_message=None, status_lambda_url=status_lambda_url)
+                        return {
+                            'statusCode': 200,
+                            'body': html_content,
+                            'headers': {'Content-Type': 'text/html'}
+                        }
+                # No user_name or not found: create a new user as before
+                logger.info(f"[Azure Config] New user path")
+                user_info = create_user()
+                # Always load Azure LLM configurations for new users as well
                 try:
-                    logger.info("Starting user creation process...")
-                    user_info = create_user()
-                    logger.info(f"User created: {user_info['user_name']}")
-                    html_content = generate_html_response(user_info=user_info, error_message=None, status_lambda_url=status_lambda_url)
-                    logger.info("HTML content generated for user response.")
-                    return {
-                        'statusCode': 200,
-                        'body': html_content,
-                        'headers': {
-                            'Content-Type': 'text/html'
-                        }
-                    }
+                    azure_configs = get_secret()
+                    user_info['azure_configs'] = azure_configs
+                    logger.info(f"[Azure Config] For new user {user_info.get('user_name')}, loaded {len(azure_configs)} configs: {azure_configs}")
+                    if not azure_configs:
+                        logger.warning(f"[Azure Config] No LLM configs available for user {user_info.get('user_name')} (new user path)")
                 except Exception as e:
-                    logger.error(f"Error during user creation: {str(e)}", exc_info=True)
-                    error_message = str(e)
-                    if "No available EC2 instances" in error_message:
-                        error_html = f"""
-                        <!DOCTYPE html>
-                        <html lang="en">
-                        <head>
-                            <meta charset="UTF-8">
-                            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                            <title>Testus Patronus - No Available Instances</title>
-                            <link rel="icon" href="https://www.eicc.co.uk/media/1bpegpql/eurostar2025-logo-500px-x-500px-002.jpg?rmode=max&width=720&height=720&quality=70&v=1db515dc4767eb0">
-                            <style>
-                                :root {{
-                                    --blue: #1B1464;
-                                    --pink: #f452cb;
-                                    --yellow: #ffd101;
-                                    --white: #fff;
-                                    --gray: #f4f7fa;
-                                    --shadow: 0 8px 32px rgba(30,52,178,0.12);
-                                }}
-                                body {{
-                                    background: var(--blue);
-                                    font-family: 'Open Sans', 'Segoe UI', Arial, sans-serif;
-                                    margin: 0;
-                                    padding: 0;
-                                    color: var(--blue);
-                                    display: flex;
-                                    justify-content: center;
-                                    align-items: center;
-                                    min-height: 100vh;
-                                }}
-                                .container {{
-                                    max-width: 600px;
-                                    margin: 40px;
-                                    background: var(--white);
-                                    border-radius: 18px;
-                                    box-shadow: var(--shadow);
-                                    padding: 32px;
-                                    text-align: center;
-                                }}
-                                .logo {{
-                                    max-width: 180px;
-                                    border-radius: 12px;
-                                    margin-bottom: 24px;
-                                }}
-                                .error-title {{
-                                    color: var(--blue);
-                                    font-size: 2rem;
-                                    margin-bottom: 16px;
-                                }}
-                                .error-message {{
-                                    color: var(--pink);
-                                    font-size: 1.2rem;
-                                    margin-bottom: 24px;
-                                    line-height: 1.5;
-                                }}
-                                .retry-button {{
-                                    background: var(--yellow);
-                                    color: var(--blue);
-                                    border: none;
-                                    padding: 12px 24px;
-                                    border-radius: 8px;
-                                    font-size: 1.1rem;
-                                    cursor: pointer;
-                                    transition: transform 0.2s;
-                                }}
-                                .retry-button:hover {{
-                                    transform: translateY(-2px);
-                                }}
-                            </style>
-                        </head>
-                        <body>
-                            <div class="container">
-                                <img src="https://www.eicc.co.uk/media/1bpegpql/eurostar2025-logo-500px-x-500px-002.jpg?rmode=max&width=720&height=720&quality=70&v=1db515dc4767eb0" alt="EuroSTAR 2025 Logo" class="logo">
-                                <h1 class="error-title">No Available Instances</h1>
-                                <p class="error-message">
-                                    We're currently at capacity and all instances are in use. Please try again in a few minutes.
-                                </p>
-                                <button class="retry-button" onclick="window.location.reload()">Try Again</button>
-                            </div>
-                        </body>
-                        </html>
-                        """
-                    else:
-                        error_html = f"""
-                        <!DOCTYPE html>
-                        <html>
-                            <head>
-                                <title>Testus Patronus - Error</title>
-                                <style>
-                                    body {{
-                                        font-family: Arial, sans-serif;
-                                        display: flex;
-                                        justify-content: center;
-                                        align-items: center;
-                                        height: 100vh;
-                                        margin: 0;
-                                        background-color: #f0f0f0;
-                                    }}
-                                    .error-container {{
-                                        background: white;
-                                        padding: 20px;
-                                        border-radius: 8px;
-                                        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-                                        text-align: center;
-                                    }}
-                                </style>
-                            </head>
-                            <body>
-                                <div class="error-container">
-                                    <h1>Error</h1>
-                                    <p>{error_message}</p>
-                                </div>
-                            </body>
-                        </html>
-                        """
-                    return {
-                        'statusCode': 200,
-                        'body': error_html,
-                        'headers': {
-                            'Content-Type': 'text/html'
-                        }
-                    }
+                    logger.error(f"Error loading Azure configurations: {str(e)}")
+                    user_info['azure_configs'] = []
+                html_content = generate_html_response(user_info=user_info, error_message=None, status_lambda_url=status_lambda_url)
+                return {
+                    'statusCode': 200,
+                    'body': html_content,
+                    'headers': {'Content-Type': 'text/html'}
+                }
             else:
                 logger.warning(f"Unknown path requested: {path}")
                 return {

@@ -12,10 +12,39 @@ import os
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-# Get timeouts from environment variables
-STOP_TIMEOUT_MINUTES = int(os.environ.get('INSTANCE_STOP_TIMEOUT_MINUTES', '10'))
-TERMINATE_TIMEOUT_MINUTES = int(os.environ.get('INSTANCE_TERMINATE_TIMEOUT_MINUTES', '60'))
-HARD_TERMINATE_TIMEOUT_MINUTES = int(os.environ.get('INSTANCE_HARD_TERMINATE_TIMEOUT_MINUTES', '240'))  # 4 hours default
+# Initialize SSM client
+ssm = boto3.client('ssm', region_name='eu-west-3')
+
+def get_timeout_parameters():
+    """Get timeout parameters from Parameter Store"""
+    try:
+        parameter_prefix = os.environ.get('PARAMETER_PREFIX', '/classroom/dev')
+        response = ssm.get_parameters(
+            Names=[
+                f"{parameter_prefix}/instance_stop_timeout_minutes",
+                f"{parameter_prefix}/instance_terminate_timeout_minutes",
+                f"{parameter_prefix}/instance_hard_terminate_timeout_minutes"
+            ]
+        )
+        
+        # Create a dictionary of parameters
+        parameters = {param['Name'].split('/')[-1]: int(param['Value']) for param in response['Parameters']}
+        
+        # Set default values if any parameter is missing
+        logger.info(f"Parameters: {parameters}")
+        return {
+            'stop_timeout': parameters.get('instance_stop_timeout_minutes', 10),
+            'terminate_timeout': parameters.get('instance_terminate_timeout_minutes', 60),
+            'hard_terminate_timeout': parameters.get('instance_hard_terminate_timeout_minutes', 240)
+        }
+    except Exception as e:
+        logger.error(f"Error getting timeout parameters: {str(e)}")
+        # Return default values if there's an error
+        return {
+            'stop_timeout': 10,
+            'terminate_timeout': 60,
+            'hard_terminate_timeout': 240
+        }
 
 def wait_for_command(ssm_client, command_id: str, instance_id: str, timeout: int = 60) -> Dict:
     """Wait for an SSM command to complete with timeout"""
@@ -46,6 +75,12 @@ def wait_for_command(ssm_client, command_id: str, instance_id: str, timeout: int
 def process_instance(instance_id, ec2_client, ssm_client, table):
     """Process a single instance based on its state and assignment status"""
     try:
+        # Get timeout parameters
+        timeouts = get_timeout_parameters()
+        STOP_TIMEOUT_MINUTES = timeouts['stop_timeout']
+        TERMINATE_TIMEOUT_MINUTES = timeouts['terminate_timeout']
+        HARD_TERMINATE_TIMEOUT_MINUTES = timeouts['hard_terminate_timeout']
+        
         # Get instance state and launch time
         instance = ec2_client.describe_instances(InstanceIds=[instance_id])['Reservations'][0]['Instances'][0]
         current_state = instance['State']['Name']
