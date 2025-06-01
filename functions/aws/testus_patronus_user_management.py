@@ -171,10 +171,25 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
             azure_configs_html += f"""
             <div class=\"azure-card\">
                 <div class=\"config-title\">{config['config_name']}</div>
-                <div class=\"config-row\"><span>Deployment Name:</span> <span class=\"mono\">{config['deployment_name']}</span> <button class=\"copy-btn\" onclick=\"copyToClipboard('{config['deployment_name']}')\"><i class=\"fas fa-copy\"></i></button></div>
-                <div class=\"config-row\"><span>API Key:</span> <span class=\"mono\">{config['api_key']}</span> <button class=\"copy-btn\" onclick=\"copyToClipboard('{config['api_key']}')\"><i class=\"fas fa-copy\"></i></button></div>
-                <div class=\"config-row\"><span>Endpoint:</span> <span class=\"mono\">{config['endpoint']}</span> <button class=\"copy-btn\" onclick=\"copyToClipboard('{config['endpoint']}')\"><i class=\"fas fa-copy\"></i></button></div>
-                <div class=\"config-row\"><span>Version:</span> <span class=\"mono\">{config['api_version']}</span></div>
+                <div class=\"config-row\">
+                    <span class=\"config-label\">Deployment Name</span>
+                    <span class=\"config-value\">{config['deployment_name']}</span>
+                    <button class=\"copy-btn\" onclick=\"copyToClipboard('{config['deployment_name']}')\" title=\"Copy\"><i class=\"fas fa-copy\"></i></button>
+                </div>
+                <div class=\"config-row\">
+                    <span class=\"config-label\">API Key</span>
+                    <span class=\"config-value\">{config['api_key']}</span>
+                    <button class=\"copy-btn\" onclick=\"copyToClipboard('{config['api_key']}')\" title=\"Copy\"><i class=\"fas fa-copy\"></i></button>
+                </div>
+                <div class=\"config-row\">
+                    <span class=\"config-label\">Endpoint</span>
+                    <span class=\"config-value\">{config['endpoint']}</span>
+                    <button class=\"copy-btn\" onclick=\"copyToClipboard('{config['endpoint']}')\" title=\"Copy\"><i class=\"fas fa-copy\"></i></button>
+                </div>
+                <div class=\"config-row\">
+                    <span class=\"config-label\">Version</span>
+                    <span class=\"config-value\">{config['api_version']}</span>
+                </div>
             </div>
             """
     else:
@@ -282,59 +297,66 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
             }}
             .azure-cards {{
                 display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-                gap: 18px;
+                grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+                gap: 28px;
             }}
             .azure-card {{
                 background: var(--white);
                 border: 2px solid var(--blue);
-                border-radius: 10px;
-                padding: 16px 18px;
+                border-radius: 12px;
+                padding: 22px 22px 18px 22px;
                 margin-bottom: 0;
                 box-shadow: 0 2px 8px rgba(30,52,178,0.06);
+                display: flex;
+                flex-direction: column;
+                gap: 18px;
             }}
             .config-title {{
-                font-weight: 700;
+                font-weight: 800;
                 color: var(--blue);
-                margin-bottom: 8px;
-                font-size: 1.1rem;
+                margin-bottom: 10px;
+                font-size: 1.2rem;
+                letter-spacing: 0.5px;
             }}
             .config-row {{
                 display: flex;
-                align-items: center;
-                gap: 8px;
-                margin-bottom: 6px;
+                flex-direction: column;
+                align-items: flex-start;
+                background: #f7f8fa;
+                border-radius: 6px;
+                padding: 10px 12px 8px 12px;
+                margin-bottom: 0;
                 font-size: 1.05rem;
+                position: relative;
+                gap: 4px;
             }}
-            .config-row span:first-child {{
-                min-width: 120px;
-                color: var(--blue);
-                font-weight: 500;
+            .config-label {{
+                color: #666;
+                font-size: 0.98em;
+                font-weight: 600;
+                margin-bottom: 2px;
             }}
-            .mono {{
+            .config-value {{
                 font-family: 'Fira Mono', 'Consolas', monospace;
                 background: #f0f0fa;
-                padding: 2px 6px;
+                padding: 4px 8px;
                 border-radius: 4px;
-                font-size: 0.98em;
+                font-size: 1.04em;
                 word-break: break-all;
-                white-space: pre-wrap;
                 overflow-wrap: anywhere;
-                display: inline-block;
-                max-width: 100%;
-            }}
-            .config-row span.mono {{
-                display: block;
-                max-width: 100%;
+                width: 100%;
+                margin-bottom: 0;
             }}
             .copy-btn {{
+                position: absolute;
+                top: 10px;
+                right: 10px;
                 background: var(--pink);
                 color: var(--blue);
                 border: none;
                 border-radius: 4px;
                 padding: 3px 8px;
                 font-size: 1em;
-                margin-left: 4px;
                 cursor: pointer;
                 transition: background 0.2s;
             }}

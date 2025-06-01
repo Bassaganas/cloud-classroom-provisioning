@@ -37,9 +37,9 @@ resource "aws_iam_role" "lambda_role" {
 
 # DynamoDB table for instance assignments
 resource "aws_dynamodb_table" "instance_assignments" {
-  name           = "instance-assignments-${var.environment}"
-  billing_mode   = "PAY_PER_REQUEST"
-  hash_key       = "instance_id"
+  name         = "instance-assignments-${var.environment}"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "instance_id"
 
   attribute {
     name = "instance_id"
@@ -93,7 +93,7 @@ resource "aws_ssm_parameter" "instance_hard_terminate_timeout" {
   name        = "/classroom/${var.environment}/instance_hard_terminate_timeout_minutes"
   description = "Timeout in minutes before hard terminating any instance"
   type        = "String"
-  value       = "240"  # 4 hours
+  value       = "240" # 4 hours
   tags = {
     Environment = var.environment
     Owner       = var.owner
@@ -179,8 +179,8 @@ resource "aws_lambda_function" "user_management" {
 
   environment {
     variables = {
-      ENVIRONMENT        = var.environment
-      STATUS_LAMBDA_URL  = aws_lambda_function_url.status_lambda_url.function_url
+      ENVIRONMENT       = var.environment
+      STATUS_LAMBDA_URL = aws_lambda_function_url.status_lambda_url.function_url
     }
   }
 
@@ -277,15 +277,15 @@ resource "aws_instance" "classroom_pool" {
   vpc_security_group_ids = ["sg-09827f49936d1d7e5"]
   subnet_id              = var.ec2_subnet_id
   iam_instance_profile   = aws_iam_instance_profile.ec2_ssm_profile.name
-  
+
   root_block_device {
-    volume_size = 40
-    volume_type = "gp3"
+    volume_size           = 40
+    volume_type           = "gp3"
     delete_on_termination = true
   }
 
   metadata_options {
-    http_tokens = "required"
+    http_tokens   = "required"
     http_endpoint = "enabled"
   }
 
@@ -386,7 +386,7 @@ resource "aws_lambda_function" "stop_old_instances" {
 
   environment {
     variables = {
-      ENVIRONMENT = var.environment
+      ENVIRONMENT      = var.environment
       PARAMETER_PREFIX = "/classroom/${var.environment}"
     }
   }
@@ -424,83 +424,10 @@ resource "aws_lambda_permission" "allow_eventbridge_stop_old_instances" {
   source_arn    = aws_cloudwatch_event_rule.stop_old_instances_schedule.arn
 }
 
-# 1. Create the API Gateway HTTP API
-resource "aws_apigatewayv2_api" "testus_patronus_api" {
-  name          = "testus-patronus-api"
-  protocol_type = "HTTP"
-}
-
-# 2. Lambda Integration
-resource "aws_apigatewayv2_integration" "lambda_integration" {
-  api_id                 = aws_apigatewayv2_api.testus_patronus_api.id
-  integration_type        = "AWS_PROXY"
-  integration_uri         = aws_lambda_function.user_management.invoke_arn
-  integration_method      = "POST"
-  payload_format_version  = "2.0"
-}
-
-# 3. Route for /testus-patronus/{proxy+}
-resource "aws_apigatewayv2_route" "testus_patronus_route" {
-  api_id    = aws_apigatewayv2_api.testus_patronus_api.id
-  route_key = "ANY /testus-patronus/{proxy+}"
-  target    = "integrations/${aws_apigatewayv2_integration.lambda_integration.id}"
-}
-
-# 4. Default Stage
-resource "aws_apigatewayv2_stage" "default" {
-  api_id      = aws_apigatewayv2_api.testus_patronus_api.id
-  name        = "$default"
-  auto_deploy = true
-}
-
-# 5. Lambda Permission for API Gateway
-resource "aws_lambda_permission" "apigw" {
-  statement_id  = "AllowAPIGatewayInvoke"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.user_management.function_name
-  principal     = "apigateway.amazonaws.com"
-  source_arn    = "${aws_apigatewayv2_api.testus_patronus_api.execution_arn}/*/*"
-}
-
-# 6. Custom Domain for API Gateway
-resource "aws_apigatewayv2_domain_name" "custom" {
-  domain_name = "infra.bassagan.com"
-  domain_name_configuration {
-    certificate_arn = aws_acm_certificate.infra_bassagan_com.arn
-    endpoint_type   = "REGIONAL"
-    security_policy = "TLS_1_2"
-  }
-}
-
-# 7. API Mapping for /testus-patronus
-resource "aws_apigatewayv2_api_mapping" "custom" {
-  api_id      = aws_apigatewayv2_api.testus_patronus_api.id
-  domain_name = aws_apigatewayv2_domain_name.custom.id
-  stage       = aws_apigatewayv2_stage.default.id
-  api_mapping_key = "testus-patronus"
-}
-
-# ACM certificate (must be validated in us-east-1 for API Gateway custom domains)
-resource "aws_acm_certificate" "infra_bassagan_com" {
-  domain_name       = "infra.bassagan.com"
-  validation_method = "DNS"
-  # ... validation records ...
-}
-
-output "apigateway_custom_domain_target" {
-  description = "API Gateway custom domain target domain name (use this as CNAME target in your DNS provider)"
-  value       = aws_apigatewayv2_domain_name.custom.domain_name_configuration[0].target_domain_name
-}
-
-output "apigateway_custom_domain_hosted_zone_id" {
-  description = "API Gateway custom domain hosted zone ID (for Route 53 alias records)"
-  value       = aws_apigatewayv2_domain_name.custom.domain_name_configuration[0].hosted_zone_id
-}
-
 resource "aws_iam_policy" "lambda_secretsmanager_policy" {
   name        = "lambda-secretsmanager-policy"
   description = "Allow Lambda to get Azure LLM configs from Secrets Manager"
-  policy      = jsonencode({
+  policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {

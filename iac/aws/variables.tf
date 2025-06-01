@@ -26,7 +26,7 @@ variable "classroom_name" {
 variable "ec2_pool_size" {
   description = "Number of EC2 instances to pre-provision in the pool."
   type        = number
-  default     = 5
+  default     = 40
 }
 
 variable "ec2_ami_id" {
@@ -38,7 +38,7 @@ variable "ec2_ami_id" {
 variable "ec2_instance_type" {
   description = "Instance type for classroom EC2 instances."
   type        = string
-  default     = "m5.large"
+  default     = "t3.medium"
 }
 
 variable "ec2_subnet_id" {
