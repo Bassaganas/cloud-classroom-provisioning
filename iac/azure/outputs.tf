@@ -16,4 +16,14 @@ output "storage_account_id" {
 output "key_vault_id" {
   description = "ID of the Key Vault"
   value       = azurerm_key_vault.classroom.id
-} 
+}
+
+output "function_app_name" {
+  description = "Name of the Function App"
+  value       = azurerm_linux_function_app.user_management.name
+}
+
+output "resource_group_name" {
+  description = "Name of the Resource Group"
+  value       = azurerm_resource_group.function_rg.name
+}

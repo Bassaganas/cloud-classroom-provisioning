@@ -1,0 +1,44 @@
+name: Codespaces Configuration
+
+on:
+  create:
+    types: [codespace]
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Configure AWS CLI
+        run: |
+          aws --version
+          aws configure list
+
+      - name: Configure Azure CLI
+        run: |
+          az --version
+          az account show
+
+      - name: Configure Terraform
+        run: |
+          terraform --version
+          terraform init
+
+      - name: Make scripts executable
+        run: |
+          chmod +x scripts/*.sh
+
+      - name: Verify environment
+        run: |
+          echo "Python version:"
+          python --version
+          echo "AWS CLI version:"
+          aws --version
+          echo "Azure CLI version:"
+          az --version
+          echo "Terraform version:"
+          terraform --version 

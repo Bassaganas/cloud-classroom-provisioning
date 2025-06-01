@@ -42,4 +42,4 @@ module "azure_infrastructure" {
   environment    = var.environment
   owner          = var.owner
   location       = var.azure_location
-} 
+}

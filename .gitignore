@@ -1,19 +1,11 @@
-# Terraform
-**/.terraform/*
-*.tfstate
-*.tfstate.*
-crash.log
-crash.*.log
-*.tfvars
-*.tfvars.json
-override.tf
-override.tf.json
-*_override.tf
-*_override.tf.json
-.terraformrc
-terraform.rc
+# Python virtual environment
+.venv/
+venv/
+env/
+.env
+.python-version
 
-# Python
+# Python packaging and compilation
 __pycache__/
 *.py[cod]
 *$py.class
@@ -34,24 +26,34 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-MANIFEST
-venv/
-.env
 
-# Lambda packages
-functions/user_management/lambda_function.zip
+# Azure Functions
+.python_packages/
+local.settings.json
+bin/
+obj/
+.funcignore
+.deployment
 
-# IDE
+# IDE files
 .idea/
 .vscode/
 *.swp
 *.swo
-
-# OS
 .DS_Store
-.DS_Store?
-._*
-.Spotlight-V100
-.Trashes
-ehthumbs.db
-Thumbs.db 
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+.terraformrc
+terraform.rc
+
+# Logs
+*.log
+logs/
+functions/azure/.venv-py39/pyvenv.cfg
+venv-py39/pyvenv.cfg
+iac/azure/state/*.hcl
+iac/azure/state/*.lock.hcl

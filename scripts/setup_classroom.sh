@@ -3,37 +3,31 @@
 # Exit on error
 set -e
 
-# Check if required tools are installed
-check_prerequisites() {
-  local cloud=$1
-  command -v terraform >/dev/null 2>&1 || { echo "Terraform is required but not installed. Aborting." >&2; exit 1; }
-  
-  if [ "$cloud" = "aws" ]; then
-    command -v aws >/dev/null 2>&1 || { echo "AWS CLI is required but not installed. Aborting." >&2; exit 1; }
-  elif [ "$cloud" = "azure" ]; then
-    command -v az >/dev/null 2>&1 || { echo "Azure CLI is required but not installed. Aborting." >&2; exit 1; }
-  fi
+# Function to display usage
+usage() {
+  echo "Usage: $0 --name <classroom-name> --cloud [aws|azure] [--region <aws-region>] [--location <azure-location>] [--destroy] [--parallelism <number>] [--force-unlock] [--setup-rbac]"
+  echo ""
+  echo "Options:"
+  echo "  --name         Name of the classroom (required)"
+  echo "  --cloud        Cloud provider (aws or azure, default: aws)"
+  echo "  --region       AWS region (default: eu-west-3)"
+  echo "  --location     Azure location (default: centralus)"
+  echo "  --destroy      Destroy the classroom resources instead of creating them"
+  echo "  --parallelism  Number of parallel operations (default: 4)"
+  echo "  --force-unlock Force unlock the state if it's locked"
+  echo "  --setup-rbac   Setup RBAC roles for Azure (only for Azure)"
+  exit 1
 }
 
 # Default values
 CLASSROOM_NAME=""
 CLOUD_PROVIDER="aws"
-REGION="eu-west-1"
-LOCATION="westeurope"
+REGION="eu-west-3"
+LOCATION="centralus"
 ACTION="create"
-
-# Function to display usage
-usage() {
-  echo "Usage: $0 --name <classroom-name> --cloud [aws|azure] [--region <aws-region>] [--location <azure-location>] [--destroy]"
-  echo ""
-  echo "Options:"
-  echo "  --name      Name of the classroom (required)"
-  echo "  --cloud     Cloud provider (aws or azure, default: aws)"
-  echo "  --region    AWS region (default: eu-west-1)"
-  echo "  --location  Azure location (default: westeurope)"
-  echo "  --destroy   Destroy the classroom resources instead of creating them"
-  exit 1
-}
+PARALLELISM=4
+FORCE_UNLOCK=false
+SETUP_RBAC=false
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -58,6 +52,18 @@ while [[ $# -gt 0 ]]; do
       ACTION="destroy"
       shift
       ;;
+    --parallelism)
+      PARALLELISM="$2"
+      shift 2
+      ;;
+    --force-unlock)
+      FORCE_UNLOCK=true
+      shift
+      ;;
+    --setup-rbac)
+      SETUP_RBAC=true
+      shift
+      ;;
     --help)
       usage
       ;;
@@ -79,85 +85,32 @@ if [ "$CLOUD_PROVIDER" != "aws" ] && [ "$CLOUD_PROVIDER" != "azure" ]; then
   usage
 fi
 
-# Check prerequisites
-check_prerequisites "$CLOUD_PROVIDER"
-
-# Verify cloud provider authentication
-if [ "$CLOUD_PROVIDER" = "aws" ]; then
-  # Test AWS credentials
-  aws sts get-caller-identity >/dev/null || { echo "Error: AWS authentication failed. Please run 'aws configure' first." >&2; exit 1; }
-elif [ "$CLOUD_PROVIDER" = "azure" ]; then
-  # Test Azure login
-  az account show >/dev/null || { echo "Error: Azure authentication failed. Please run 'az login' first." >&2; exit 1; }
+# Handle cloud-specific setup
+if [ "$CLOUD_PROVIDER" = "azure" ]; then
+  # Call setup_azure.sh with all necessary parameters
+  ./scripts/setup_azure.sh \
+    --name "$CLASSROOM_NAME" \
+    --location "${LOCATION:-centralus}" \
+    --action "${ACTION:-create}" \
+    --parallelism "${PARALLELISM:-4}" \
+    ${FORCE_UNLOCK:+"--force-unlock"} \
+    ${SETUP_RBAC:+"--setup-rbac"}
+else
+  echo "AWS setup not implemented yet"
+  exit 1
 fi
 
-# Set classroom directory
-CLASSROOM_DIR="classrooms/$CLASSROOM_NAME"
-
-if [ "$ACTION" = "destroy" ]; then
-  if [ ! -d "$CLASSROOM_DIR" ]; then
-    echo "Error: Classroom directory '$CLASSROOM_DIR' does not exist"
-    exit 1
+# Final success message
+if [ "$ACTION" = "create" ]; then
+  echo "Classroom '$CLASSROOM_NAME' has been set up successfully!"
+  if [ "$CLOUD_PROVIDER" = "aws" ]; then
+    echo "AWS Region: $REGION"
+    echo "Lambda Function URL will be available in the Terraform outputs"
+  else
+    echo "Azure Location: $LOCATION"
+    echo "Function URL will be available in the Terraform outputs"
   fi
-  
-  echo "Destroying classroom '$CLASSROOM_NAME'..."
-  cd "$CLASSROOM_DIR"
-  terraform init
-  terraform destroy -auto-approve
-  cd ../..
+  echo "Use this URL to create student accounts on demand"
+else
   echo "Classroom '$CLASSROOM_NAME' has been destroyed successfully!"
-  exit 0
-fi
-
-# Create classroom directory
-mkdir -p "$CLASSROOM_DIR"
-
-# Copy Terraform configuration
-if [ "$CLOUD_PROVIDER" = "aws" ]; then
-  cp -r iac/aws/* "$CLASSROOM_DIR/"
-  mkdir -p "$CLASSROOM_DIR/functions"
-  cp -r functions/aws/* "$CLASSROOM_DIR/functions/"
-else
-  cp -r iac/azure/* "$CLASSROOM_DIR/"
-  mkdir -p "$CLASSROOM_DIR/functions"
-  cp -r functions/azure/* "$CLASSROOM_DIR/functions/"
-fi
-
-# Create terraform.tfvars file
-if [ "$CLOUD_PROVIDER" = "aws" ]; then
-  cat > "$CLASSROOM_DIR/terraform.tfvars" << EOF
-aws_region = "$REGION"
-environment = "classroom"
-classroom_name = "$CLASSROOM_NAME"
-owner = "$USER"
-EOF
-else
-  cat > "$CLASSROOM_DIR/terraform.tfvars" << EOF
-azure_location = "$LOCATION"
-environment = "classroom"
-classroom_name = "$CLASSROOM_NAME"
-owner = "$USER"
-EOF
-fi
-
-# Package Lambda function if using AWS
-if [ "$CLOUD_PROVIDER" = "aws" ]; then
-  echo "Packaging Lambda function..."
-  ./scripts/package_lambda.sh
-fi
-
-# Initialize and apply Terraform
-cd "$CLASSROOM_DIR"
-terraform init
-terraform apply -auto-approve
-
-echo "Classroom '$CLASSROOM_NAME' has been set up successfully!"
-if [ "$CLOUD_PROVIDER" = "aws" ]; then
-  echo "AWS Region: $REGION"
-  echo "Lambda Function URL will be available in the Terraform outputs"
-  echo "Use this URL to create student accounts on demand"
-else
-  echo "Azure Location: $LOCATION"
-  echo "Function URL will be available in the Terraform outputs"
-  echo "Use this URL to create student accounts on demand"
-fi
+fi 

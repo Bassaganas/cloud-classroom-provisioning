@@ -25,7 +25,7 @@ The AWS backend uses:
 
 3. Edit `terraform.tfvars` with your desired values:
    ```hcl
-   aws_region         = "eu-west-1"
+   aws_region         = "eu-west-3"
    state_bucket_name  = "my-terraform-state-bucket"
    dynamodb_table_name = "my-terraform-locks"
    ```

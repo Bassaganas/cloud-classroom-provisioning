@@ -1,27 +1,51 @@
-variable "classroom_name" {
-  description = "Name of the classroom"
+variable "location" {
+  description = "Azure region where resources will be created"
   type        = string
+  default     = "centralus"
 }
 
 variable "environment" {
   description = "Environment name (e.g., dev, test, prod)"
   type        = string
-  default     = "dev"
+  default     = "test"
 }
 
 variable "owner" {
-  description = "Owner of the resources"
+  description = "Owner tag for resources"
+  type        = string
+  default     = "paula"
+}
+
+variable "function_app_name" {
+  description = "Name of the Azure Function App"
+  type        = string
+  default     = "classroom-provisioning"
+}
+
+variable "subscription_id" {
+  description = "Azure Subscription ID"
   type        = string
 }
 
-variable "location" {
-  description = "The Azure location to deploy to"
+variable "tenant_id" {
+  description = "Azure Tenant ID"
   type        = string
-  default     = "westeurope"
 }
 
-variable "student_count" {
-  description = "Number of students in the classroom"
-  type        = number
-  default     = 1
-} 
+variable "tenant_domain" {
+  description = "Azure AD tenant domain"
+  type        = string
+  default     = "paulabassaganasgmail.onmicrosoft.com"
+}
+
+variable "destroy_key" {
+  description = "Key required to destroy all users"
+  type        = string
+  default     = "your-secure-destroy-key-here"
+}
+
+variable "classroom_name" {
+  description = "Name of the classroom"
+  type        = string
+  default     = "default-classroom"
+}

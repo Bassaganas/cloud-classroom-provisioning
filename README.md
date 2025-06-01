@@ -1,142 +1,212 @@
 # Cloud Classroom Provisioning
 
-This project provides an automated way to create and manage cloud classrooms, where each student gets their own cloud provider account with restricted permissions. Currently supports AWS and Azure.
+This project provides infrastructure and automation for managing cloud classroom environments in both AWS and Azure. It includes user management, resource provisioning, and cleanup scripts.
 
-## Features
+## Development Environment Setup
 
-- Multi-cloud support (AWS and Azure)
-- User management infrastructure for cloud classroom environments
-- Automated provisioning of cloud resources
-- Classroom management tools and scripts
-- Secure access management for students
+### Option 1: Using GitHub Codespaces (Recommended)
 
-## Prerequisites
+GitHub Codespaces provides a pre-configured development environment in the cloud.
 
-- **AWS Setup**:
-  - AWS CLI installed and configured (`aws configure`)
-  - AWS account with appropriate permissions
-  - Terraform v1.0.0 or later
-  - Python 3.9 or later
-  - virtualenv (`pip install virtualenv`)
+1. Navigate to the repository on GitHub
+2. Click the green "Code" button
+3. Select "Create codespace on main"
+4. Wait for the environment to be created
 
-- **Azure Setup**:
-  - Azure CLI installed and configured (`az login`)
-  - Azure subscription
-  - Terraform v1.0.0 or later
+The Codespace includes:
+- Python 3.9+
+- AWS CLI
+- Azure CLI
+- Terraform
+- Virtual environment management
+- All required VS Code extensions
 
-## Quick Start
+### Option 2: Using Dev Containers (Alternative)
 
-### Creating a New Classroom
+This project includes a `.devcontainer` configuration that provides a consistent development environment.
 
-Use the `setup_classroom.sh` script to create a new classroom:
+1. Install prerequisites:
+   - [Docker Desktop](https://www.docker.com/products/docker-desktop)
+   - [Visual Studio Code](https://code.visualstudio.com/)
+   - [Remote - Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
 
+2. Open the project in VS Code:
+   ```bash
+   code .
+   ```
+
+3. When prompted, click "Reopen in Container" or use the command palette (F1) and select "Remote-Containers: Reopen in Container"
+
+The dev container includes:
+- Python 3.9+
+- AWS CLI
+- Azure CLI
+- Terraform
+- Virtual environment management
+
+### Option 3: Local Setup
+
+#### 1. Install Python and Virtual Environment
+
+**macOS (using Homebrew)**:
 ```bash
-# For AWS
-./scripts/setup_classroom.sh --name your-classroom-name --cloud aws --region eu-west-1
+# Install Homebrew if not installed
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
-# For Azure
-./scripts/setup_classroom.sh --name your-classroom-name --cloud azure --location westeurope
+# Install Python
+brew install python
+
+# Install virtualenv
+pip3 install virtualenv
 ```
 
-The script will:
-1. Create necessary directory structure
-2. Copy required configuration files
-3. Package the Lambda/Azure Function with dependencies
-4. Deploy all infrastructure using Terraform
-5. Output the function URL for creating student accounts
-
-### Destroying a Classroom
-
-To destroy all resources associated with a classroom:
-
+**Windows**:
 ```bash
-./scripts/setup_classroom.sh --name your-classroom-name --cloud aws --destroy
+# Install Python from https://www.python.org/downloads/
+# During installation, check "Add Python to PATH"
+
+# Install virtualenv
+pip install virtualenv
 ```
 
-### Script Options
+#### 2. Install AWS CLI
 
-```
-Usage: ./scripts/setup_classroom.sh --name <classroom-name> --cloud [aws|azure] [--region <aws-region>] [--location <azure-location>] [--destroy]
-
-Options:
-  --name      Name of the classroom (required)
-  --cloud     Cloud provider (aws or azure, default: aws)
-  --region    AWS region (default: eu-west-1)
-  --location  Azure location (default: westeurope)
-  --destroy   Destroy the classroom resources instead of creating them
-```
-
-## Creating Student Accounts
-
-Once the classroom is set up, you'll receive a function URL. Use this URL to create student accounts:
-
-1. **Via Browser**: 
-   - Open the function URL in your browser
-   - Fill out the form with the classroom name
-   - Submit to create a new student account
-
-2. **Via curl**:
+**macOS**:
 ```bash
-curl -X POST -H "Content-Type: application/json" \
-     -d '{"classroom_name": "your-classroom-name"}' \
-     <function-url>
+brew install awscli
 ```
+
+**Windows**:
+```bash
+# Download and run the MSI installer from:
+# https://awscli.amazonaws.com/AWSCLIV2.msi
+```
+
+#### 3. Install Azure CLI
+
+**macOS**:
+```bash
+brew install azure-cli
+```
+
+**Windows**:
+```bash
+# Download and run the MSI installer from:
+# https://aka.ms/installazurecliwindows
+```
+
+#### 4. Install Terraform
+
+**macOS**:
+```bash
+brew install terraform
+```
+
+**Windows**:
+```bash
+# Download from https://www.terraform.io/downloads.html
+# Extract and add to PATH
+```
+
+## Authentication Setup
+
+### AWS Authentication
+
+1. Configure AWS credentials:
+   ```bash
+   aws configure
+   ```
+   You'll need:
+   - AWS Access Key ID
+   - AWS Secret Access Key
+   - Default region (e.g., us-east-1)
+   - Default output format (json)
+
+2. Or use environment variables:
+   ```bash
+   export AWS_ACCESS_KEY_ID="your_access_key"
+   export AWS_SECRET_ACCESS_KEY="your_secret_key"
+   export AWS_DEFAULT_REGION="your_region"
+   ```
+
+### Azure Authentication
+
+1. Login to Azure:
+   ```bash
+   az login
+   ```
+   This will open a browser window for authentication.
+
+2. Set subscription:
+   ```bash
+   az account set --subscription "your-subscription-id"
+   ```
 
 ## Project Structure
 
 ```
 .
-├── classrooms/              # Generated classroom configurations
-├── functions/              
-│   ├── aws/                # AWS Lambda function code
-│   └── azure/              # Azure Function code
-├── iac/
-│   ├── aws/                # AWS Terraform configurations
-│   └── azure/              # Azure Terraform configurations
-└── scripts/
-    ├── package_lambda.sh   # Packages Lambda function with dependencies
-    └── setup_classroom.sh  # Main script for classroom management
+├── iac/                    # Infrastructure as Code
+│   ├── aws/               # AWS infrastructure
+│   │   └── iam/          # IAM policies and roles
+│   └── azure/            # Azure infrastructure
+├── functions/             # Cloud functions
+│   ├── aws/              # AWS Lambda functions
+│   └── azure/            # Azure Functions
+├── scripts/              # Utility scripts
+│   ├── cleanup_aws_users.sh
+│   └── cleanup_azure_users.sh
+└── README.md
 ```
 
-## Student Resources
+## User Management
 
-Each student account is created with:
-- Limited IAM/Azure role permissions
-- Resource tagging for ownership
-- Access to specific services based on classroom needs
-- Resource usage limits and quotas
+### AWS Users
 
-## Security Features
+The system creates two types of users:
+1. Conference Users (`conference-user-*`)
+   - Console access (username/password)
+   - Limited permissions for resource management
+   - Access to AWS Management Console
 
-- Resource access restricted by tags
-- Automatic cleanup of unused resources
-- Limited permissions based on classroom requirements
-- Secure credential delivery
+2. Service Users (`service-conference-user-*`)
+   - Programmatic access (access key/secret key)
+   - Permissions for ETL execution
+   - Used for automated deployments
 
-## Troubleshooting
+### Azure Users
 
-1. **Script Permissions**:
-   ```bash
-   chmod +x scripts/*.sh
-   ```
+The system creates:
+1. Conference Users (`conference-user-*`)
+   - Azure AD user with portal access
+   - Limited permissions for resource management
+   - Access to Azure Portal
 
-2. **AWS Authentication**:
-   ```bash
-   aws configure
-   aws sts get-caller-identity  # Verify credentials
-   ```
+2. Service Principals (`service-conference-user-*`)
+   - Azure AD application with service principal
+   - Permissions for ETL execution
+   - Used for automated deployments
 
-3. **Azure Authentication**:
-   ```bash
-   az login
-   az account show  # Verify login
-   ```
+## Resource Cleanup
 
-4. **Lambda Packaging**:
-   If you need to manually package the Lambda function:
-   ```bash
-   ./scripts/package_lambda.sh
-   ```
+The project includes cleanup scripts for both AWS and Azure environments. See the [scripts documentation](scripts/README.md) for detailed information.
+
+## Security Considerations
+
+1. **Access Control**:
+   - Use principle of least privilege
+   - Regular rotation of credentials
+   - Audit logging enabled
+
+2. **Resource Protection**:
+   - Resource tagging
+   - Resource locks where appropriate
+   - Backup strategies
+
+3. **Monitoring**:
+   - CloudWatch/Azure Monitor alerts
+   - Cost monitoring
+   - Usage tracking
 
 ## Contributing
 

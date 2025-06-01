@@ -1,0 +1,1193 @@
+import json
+import boto3
+import os
+from botocore.exceptions import ClientError
+import time
+import urllib.parse
+import csv
+import io
+import secrets
+import string
+import traceback
+import logging
+import threading
+from datetime import datetime, timedelta
+import random
+
+# Initialize AWS clients
+iam = boto3.client('iam')
+secretsmanager = boto3.client('secretsmanager', region_name='eu-west-3')
+dynamodb = boto3.resource('dynamodb')
+table = dynamodb.Table(f"instance-assignments-{os.environ.get('ENVIRONMENT', 'dev')}")
+
+# Get account ID from environment variable
+ACCOUNT_ID = os.environ.get('AWS_ACCOUNT_ID', '087559609246')
+
+# Add this constant at the top of the file
+DESTROY_KEY = os.environ.get('DESTROY_KEY', 'default_destroy_key')
+
+#Status Lambda URL
+status_lambda_url = os.environ.get('STATUS_LAMBDA_URL')
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+def get_secret():
+    """Retrieve Azure OpenAI configuration from AWS Secrets Manager"""
+    secret_name = "azure/llm/configs"
+    try:
+        response = secretsmanager.get_secret_value(SecretId=secret_name)
+        secret = json.loads(response['SecretString'])
+        logger.info(f"[Azure Config] Successfully retrieved secret '{secret_name}': {len(secret)} configs found.")
+        if not secret:
+            logger.warning(f"[Azure Config] No LLM configs found in secret '{secret_name}'.")
+        return secret
+    except ClientError as e:
+        logger.error(f"[Azure Config] Error retrieving secret '{secret_name}': {str(e)}")
+        return []
+
+def get_next_available_api_key():
+    """Get the next available API key from the secret"""
+    configs = get_secret()
+    if not configs:
+        return None
+    
+    # Get all users to check which API keys are in use
+    users = iam.list_users()['Users']
+    used_keys = set()
+    
+    for user in users:
+        try:
+            tags = iam.list_user_tags(UserName=user['UserName'])['Tags']
+            api_key_tag = next((tag for tag in tags if tag['Key'] == 'AzureApiKey'), None)
+            if api_key_tag:
+                used_keys.add(api_key_tag['Value'])
+        except:
+            continue
+    
+    # Find the first unused API key
+    for config in configs:
+        if config['api_key'] not in used_keys:
+            return config
+    
+    return None
+
+def generate_html_response(user_info, error_message=None, status_lambda_url=None):
+    if error_message:
+        return f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Error - Testus Patronus</title>
+            <style>
+                body {{
+                    font-family: Arial, sans-serif;
+                    background: #f5f5f5;
+                    margin: 0;
+                    padding: 0;
+                    min-height: 100vh;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                }}
+                .error-container {{
+                    background: #fff;
+                    padding: 40px 32px 32px 32px;
+                    border-radius: 12px;
+                    box-shadow: 0 4px 24px rgba(0,0,0,0.08);
+                    text-align: center;
+                    max-width: 420px;
+                }}
+                .logo {{
+                    width: 120px;
+                    margin-bottom: 16px;
+                }}
+                .error-icon {{
+                    font-size: 48px;
+                    color: #e74c3c;
+                    margin-bottom: 12px;
+                }}
+                h1 {{
+                    color: #e74c3c;
+                    margin-bottom: 8px;
+                }}
+                .subtitle {{
+                    color: #555;
+                    margin-bottom: 18px;
+                    font-size: 1.1em;
+                }}
+                .error-details {{
+                    background: #f8f8f8;
+                    color: #b30000;
+                    font-size: 0.95em;
+                    padding: 10px 12px;
+                    border-radius: 6px;
+                    margin-bottom: 18px;
+                    word-break: break-all;
+                }}
+                .retry-button {{
+                    background: #3498db;
+                    color: #fff;
+                    border: none;
+                    padding: 12px 28px;
+                    border-radius: 6px;
+                    font-size: 1em;
+                    cursor: pointer;
+                    margin-bottom: 8px;
+                }}
+                .retry-button:hover {{
+                    background: #217dbb;
+                }}
+                .support-link {{
+                    display: block;
+                    margin-top: 10px;
+                    color: #888;
+                    font-size: 0.95em;
+                    text-decoration: underline;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="error-container">
+                <img src="https://testus-patronus.s3.amazonaws.com/logo.png" alt="Testus Patronus Logo" class="logo">
+                <div class="error-icon">⚠️</div>
+                <h1>Error</h1>
+                <div class="subtitle">Something went wrong. Please try again.</div>
+                <div class="error-details">{error_message}</div>
+                <button class="retry-button" onclick="window.location.href='/'">Try Again</button>
+            </div>
+        </body>
+        </html>
+        """
+    # Always ensure azure_configs is present
+    azure_configs = user_info.get('azure_configs', [])
+    azure_configs_html = """
+    <div class=\"info-box\">
+        <h2>LLM Models</h2>
+        <div class=\"azure-cards\">
+    """
+    if azure_configs:
+        for i, config in enumerate(azure_configs, 1):
+            azure_configs_html += f"""
+            <div class=\"azure-card\">
+                <div class=\"config-title\">{config['config_name']}</div>
+                <div class=\"config-row\">
+                    <span class=\"config-label\">Deployment Name</span>
+                    <span class=\"config-value\">{config['deployment_name']}</span>
+                    <button class=\"copy-btn\" onclick=\"copyToClipboard('{config['deployment_name']}')\" title=\"Copy\"><i class=\"fas fa-copy\"></i></button>
+                </div>
+                <div class=\"config-row\">
+                    <span class=\"config-label\">API Key</span>
+                    <span class=\"config-value\">{config['api_key']}</span>
+                    <button class=\"copy-btn\" onclick=\"copyToClipboard('{config['api_key']}')\" title=\"Copy\"><i class=\"fas fa-copy\"></i></button>
+                </div>
+                <div class=\"config-row\">
+                    <span class=\"config-label\">Endpoint</span>
+                    <span class=\"config-value\">{config['endpoint']}</span>
+                    <button class=\"copy-btn\" onclick=\"copyToClipboard('{config['endpoint']}')\" title=\"Copy\"><i class=\"fas fa-copy\"></i></button>
+                </div>
+                <div class=\"config-row\">
+                    <span class=\"config-label\">Version</span>
+                    <span class=\"config-value\">{config['api_version']}</span>
+                </div>
+            </div>
+            """
+    else:
+        azure_configs_html += "<div>No LLM configs available for this user.</div>"
+    azure_configs_html += "</div></div>"
+
+    # Create instance info HTML based on whether instance assignment was successful
+    instance_info_html = ""
+    if 'instance_id' in user_info and user_info['instance_id']:
+        instance_info_html = f"""
+        <div class=\"url-box\">
+            <div class=\"dify-link-container\">
+                <a id=\"dify-link\" class=\"dify-link\" href=\"#\" target=\"_blank\" tabindex=\"-1\">Loading...</a>
+                <span id=\"dify-spinner\" class=\"spinner\"></span>
+            </div>
+            <div id=\"dify-status-msg\" style=\"margin-top:8px;font-size:0.98em;color:var(--blue);\"></div>
+        </div>
+        """
+    elif 'instance_error' in user_info:
+        instance_info_html = f"""
+        <div class=\"warning\">
+            <strong>Note:</strong> Unable to assign an EC2 instance at this time. Error: {user_info['instance_error']}
+        </div>
+        """
+
+    html_content = f"""
+    <!DOCTYPE html>
+    <html lang=\"en\">
+    <head>
+        <meta charset=\"UTF-8\">
+        <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
+        <title>Testus Patronus</title>
+        <subtitle>No magic, just AI with your company context</subtitle>
+        <link rel=\"icon\" href=\"https://www.eicc.co.uk/media/1bpegpql/eurostar2025-logo-500px-x-500px-002.jpg?rmode=max&width=720&height=720&quality=70&v=1db515dc4767eb0\">
+        <link rel=\"stylesheet\" href=\"https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css\">
+        <style>
+            :root {{
+                --blue: #1B1464;
+                --pink: #f452cb;
+                --yellow: #ffd101;
+                --white: #fff;
+                --gray: #f4f7fa;
+                --shadow: 0 8px 32px rgba(30,52,178,0.12);
+            }}
+            body {{
+                background: var(--blue);
+                font-family: 'Open Sans', 'Segoe UI', Arial, sans-serif;
+                margin: 0;
+                padding: 0;
+                color: var(--blue);
+            }}
+            .top-bar {{
+                background: var(--pink);
+                height: 8px;
+                width: 100vw;
+            }}
+            .container {{
+                max-width: 1100px;
+                margin: 40px auto;
+                background: var(--white);
+                border-radius: 18px;
+                box-shadow: var(--shadow);
+                padding: 32px 28px 28px 28px;
+                position: relative;
+                transition: max-width 0.3s;
+            }}
+            .logo {{
+                display: block;
+                margin: 0 auto 24px auto;
+                max-width: 180px;
+                border-radius: 12px;
+                background: var(--white);
+                box-shadow: 0 2px 8px rgba(30,52,178,0.08);
+            }}
+            .main-title {{
+                color: var(--blue);
+                text-align: center;
+                margin-bottom: 0px;
+                font-size: 3.2rem;
+                font-weight: 900;
+                letter-spacing: 1px;
+                margin-top: 0.5em;
+            }}
+            .subtitle {{
+                color: var(--pink);
+                text-align: center;
+                font-size: 1.5rem;
+                font-weight: 700;
+                margin-bottom: 18px;
+                margin-top: 0.5em;
+            }}
+            h2 {{
+                color: var(--blue);
+                text-align: center;
+                font-weight: 600;
+                margin-bottom: 24px;
+                font-size: 1.3rem;
+            }}
+            .info-box {{
+                background: var(--gray);
+                border-radius: 10px;
+                padding: 18px 20px;
+                margin-bottom: 24px;
+                box-shadow: 0 2px 8px rgba(30,52,178,0.04);
+            }}
+            .azure-cards {{
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
+                gap: 28px;
+            }}
+            .azure-card {{
+                background: var(--white);
+                border: 2px solid var(--blue);
+                border-radius: 12px;
+                padding: 22px 22px 18px 22px;
+                margin-bottom: 0;
+                box-shadow: 0 2px 8px rgba(30,52,178,0.06);
+                display: flex;
+                flex-direction: column;
+                gap: 18px;
+            }}
+            .config-title {{
+                font-weight: 800;
+                color: var(--blue);
+                margin-bottom: 10px;
+                font-size: 1.2rem;
+                letter-spacing: 0.5px;
+            }}
+            .config-row {{
+                display: flex;
+                flex-direction: column;
+                align-items: flex-start;
+                background: #f7f8fa;
+                border-radius: 6px;
+                padding: 10px 12px 8px 12px;
+                margin-bottom: 0;
+                font-size: 1.05rem;
+                position: relative;
+                gap: 4px;
+            }}
+            .config-label {{
+                color: #666;
+                font-size: 0.98em;
+                font-weight: 600;
+                margin-bottom: 2px;
+            }}
+            .config-value {{
+                font-family: 'Fira Mono', 'Consolas', monospace;
+                background: #f0f0fa;
+                padding: 4px 8px;
+                border-radius: 4px;
+                font-size: 1.04em;
+                word-break: break-all;
+                overflow-wrap: anywhere;
+                width: 100%;
+                margin-bottom: 0;
+            }}
+            .copy-btn {{
+                position: absolute;
+                top: 10px;
+                right: 10px;
+                background: var(--pink);
+                color: var(--blue);
+                border: none;
+                border-radius: 4px;
+                padding: 3px 8px;
+                font-size: 1em;
+                cursor: pointer;
+                transition: background 0.2s;
+            }}
+            .copy-btn:hover {{
+                background: var(--yellow);
+                color: var(--blue);
+            }}
+            .url-box {{
+                background: var(--yellow);
+                border-radius: 6px;
+                padding: 10px 14px;
+                margin-bottom: 12px;
+                font-size: 1.1rem;
+                color: var(--blue);
+                font-weight: 600;
+                text-align: center;
+                box-shadow: 0 2px 8px rgba(30,52,178,0.04);
+            }}
+            .warning {{
+                background: var(--pink);
+                color: var(--white);
+                border-radius: 6px;
+                padding: 12px 16px;
+                margin-top: 24px;
+                font-size: 1rem;
+                text-align: center;
+            }}
+            .dify-link-container {{
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 10px;
+                margin-top: 10px;
+            }}
+            .dify-link {{
+                color: var(--blue);
+                text-decoration: underline;
+                pointer-events: none;
+                opacity: 0.6;
+                transition: opacity 0.2s;
+            }}
+            .dify-link.ready {{
+                pointer-events: auto;
+                opacity: 1;
+                font-weight: bold;
+            }}
+            .spinner {{
+                border: 4px solid #f3f3f3;
+                border-top: 4px solid var(--pink);
+                border-radius: 50%;
+                width: 22px;
+                height: 22px;
+                animation: spin 1s linear infinite;
+            }}
+            .subtitle {{
+                color: var(--pink);
+                text-align: center;
+                font-size: 1.5rem;
+                font-weight: 700;
+                margin-bottom: 18px;
+                margin-top: 0.5em;
+            }}
+            @keyframes spin {{
+                0% {{ transform: rotate(0deg); }}
+                100% {{ transform: rotate(360deg); }}
+            }}
+            .get-new-user-btn {{
+                background: #e74c3c;
+                color: #fff;
+                border: none;
+                padding: 10px 22px;
+                border-radius: 6px;
+                font-size: 1em;
+                cursor: pointer;
+                margin-top: 18px;
+                margin-bottom: 8px;
+            }}
+            .get-new-user-btn:hover {{
+                background: #c0392b;
+            }}
+        </style>
+        <script>
+            // Helper to set a cookie
+            function setCookie(name, value, days) {{
+                var d = new Date();
+                d.setTime(d.getTime() + (days*24*60*60*1000));
+                var expires = "expires=" + d.toUTCString();
+                document.cookie = name + "=" + encodeURIComponent(value) + ";" + expires + ";path=/";
+            }}
+            // Helper to get a cookie
+            function getCookie(name) {{
+                var nameEQ = name + "=";
+                var ca = document.cookie.split(';');
+                for(var i=0;i < ca.length;i++) {{
+                    var c = ca[i];
+                    while (c.charAt(0)==' ') c = c.substring(1,c.length);
+                    if (c.indexOf(nameEQ) == 0) return decodeURIComponent(c.substring(nameEQ.length,c.length));
+                }}
+                return null;
+            }}
+            document.addEventListener('DOMContentLoaded', function() {{
+                var userCookie = getCookie('testus_patronus_user');
+                var ipCookie = getCookie('testus_patronus_ip');
+                var instanceIdCookie = getCookie('testus_patronus_instance_id');
+                var difyLink = document.getElementById('dify-link');
+                var spinner = document.getElementById('dify-spinner');
+                var statusMsg = document.getElementById('dify-status-msg');
+                var userName = "{user_info['user_name']}";
+                var statusLambdaUrl = "{status_lambda_url}";
+                var pollCount = 0;
+
+                function pollStatus() {{
+                    fetch(statusLambdaUrl + '?user_name=' + encodeURIComponent(userName))
+                        .then(res => res.json())
+                        .then(data => {{
+                            pollCount++;
+                            if (data.ready && data.ip) {{
+                                difyLink.href = 'http://' + data.ip;
+                                difyLink.textContent = 'http://' + data.ip;
+                                difyLink.classList.add('ready');
+                                difyLink.style.pointerEvents = 'auto';
+                                spinner.style.display = 'none';
+                                statusMsg.textContent = 'Your Dify instance is ready!';
+                                // Update cookies with IP
+                                setCookie('testus_patronus_ip', data.ip, 7);
+                                console.log('[Testus Patronus] Updated cookies with IP:', data.ip);
+                            }} else {{
+                                statusMsg.textContent = 'Starting your Dify instance...';
+                                if (pollCount < 60) setTimeout(pollStatus, 5000);
+                                else statusMsg.textContent = 'Still waiting for your instance. Please refresh if this takes too long.';
+                            }}
+                        }})
+                        .catch(err => {{
+                            statusMsg.textContent = 'Checking instance status...';
+                            if (pollCount < 60) setTimeout(pollStatus, 5000);
+                        }});
+                }}
+
+                if (userCookie) {{
+                    // We have a user, always start polling
+                    console.log('[Testus Patronus] User found in cookies, starting status polling');
+                    // Start polling immediately
+                    pollStatus();
+                }} else {{
+                    // No user in cookies, let backend/user creation logic run as normal
+                    console.log('[Testus Patronus] No user in cookies, proceeding with normal logic.');
+                    // After assignment, store the user in cookies if not already present
+                    setCookie('testus_patronus_user', "{user_info['user_name']}", 7);
+                    setCookie('testus_patronus_instance_id', "{user_info.get('instance_id', '')}", 7);
+                    // Start polling for new assignments
+                    pollStatus();
+                }}
+            }});
+            function getNewUser() {{
+                setCookie('testus_patronus_user', '', -1);
+                setCookie('testus_patronus_ip', '', -1);
+                setCookie('testus_patronus_instance_id', '', -1);
+                console.log('[Testus Patronus] Cleared user from cookies. Reloading for new user.');
+                window.location.href = '/';
+            }}
+            function copyToClipboard(text) {{
+                navigator.clipboard.writeText(text).then(function() {{
+                    alert('Copied to clipboard!');
+                }});
+            }}
+        </script>
+    </head>
+    <body>
+        <div class="top-bar"></div>
+        <div class="container">
+            <img src="https://www.eicc.co.uk/media/1bpegpql/eurostar2025-logo-500px-x-500px-002.jpg?rmode=max&width=720&height=720&quality=70&v=1db515dc4767eb0" alt="EuroSTAR 2025 Logo" class="logo">
+            <div class="main-title">Testus Patronus</div>
+            <div class="subtitle">No magic, just AI with your company context</div>
+            <h2>Welcome! Here are your Azure LLM credentials and your Dify instance. This is your user: {user_info['user_name']}</h2>
+            <button class="get-new-user-btn" onclick="getNewUser()">Get a new user</button>
+            {instance_info_html}
+            {azure_configs_html}
+            <div class="warning">
+                <strong>Note:</strong> This Dify instance will be deleted after the tutorial. Please save any important information before the session ends.
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    return html_content
+
+def get_next_student_number(iam, classroom_name):
+    """Get the next available student number for the classroom"""
+    try:
+        # List all users with the classroom tag
+        paginator = iam.get_paginator('list_users')
+        max_number = 0
+        
+        for page in paginator.paginate():
+            for user in page['Users']:
+                try:
+                    tags = iam.list_user_tags(UserName=user['UserName'])['Tags']
+                    classroom_tag = next((tag for tag in tags if tag['Key'] == 'Classroom' and tag['Value'] == classroom_name), None)
+                    number_tag = next((tag for tag in tags if tag['Key'] == 'StudentNumber'), None)
+                    
+                    if classroom_tag and number_tag:
+                        student_num = int(number_tag['Value'])
+                        max_number = max(max_number, student_num)
+                except:
+                    continue
+        
+        return max_number + 1
+    except:
+        return 1
+
+def destroy_users():
+    """Destroy all console users and their associated resources."""
+    try:
+        # Initialize AWS clients
+        ec2 = boto3.client('ec2', region_name='eu-west-3')
+        
+        # 1. Get all users
+        users = iam.list_users()['Users']
+        logger.info(f"Found {len(users)} total users")
+        
+        for user in users:
+            user_name = user['UserName']
+            logger.info(f"Checking user: {user_name}")
+            
+            if user_name.startswith('conference-user-'):
+                logger.info(f"Processing user for deletion: {user_name}")
+                try:
+                    # 2. Delete access keys
+                    access_keys = iam.list_access_keys(UserName=user_name)['AccessKeyMetadata']
+                    for key in access_keys:
+                        logger.info(f"Deleting access key for user {user_name}")
+                        iam.delete_access_key(UserName=user_name, AccessKeyId=key['AccessKeyId'])
+                    
+                    # 3. Delete login profile if it exists
+                    try:
+                        logger.info(f"Deleting login profile for user {user_name}")
+                        iam.delete_login_profile(UserName=user_name)
+                    except iam.exceptions.NoSuchEntityException:
+                        logger.info(f"No login profile found for user {user_name}")
+                        pass
+                    
+                    # 4. Detach all managed policies
+                    attached_policies = iam.list_attached_user_policies(UserName=user_name)['AttachedPolicies']
+                    for policy in attached_policies:
+                        logger.info(f"Detaching policy {policy['PolicyArn']} from user {user_name}")
+                        iam.detach_user_policy(UserName=user_name, PolicyArn=policy['PolicyArn'])
+                    
+                    # 5. Delete all inline policies
+                    inline_policies = iam.list_user_policies(UserName=user_name)['PolicyNames']
+                    for policy_name in inline_policies:
+                        logger.info(f"Deleting inline policy {policy_name} from user {user_name}")
+                        iam.delete_user_policy(UserName=user_name, PolicyName=policy_name)
+                    
+                    # 6. Delete the user
+                    logger.info(f"Deleting user {user_name}")
+                    iam.delete_user(UserName=user_name)
+                    
+                    # 7. Find and stop/terminate associated EC2 instances
+                    filters = [
+                        {'Name': 'tag:Student', 'Values': [user_name]},
+                        {'Name': 'instance-state-name', 'Values': ['pending', 'running', 'stopped']}
+                    ]
+                    response = ec2.describe_instances(Filters=filters)
+                    for reservation in response.get('Reservations', []):
+                        for instance in reservation.get('Instances', []):
+                            instance_id = instance['InstanceId']
+                            logger.info(f"Stopping instance {instance_id} for user {user_name}")
+                            # Stop the instance first
+                            ec2.stop_instances(InstanceIds=[instance_id])
+                            # Wait for the instance to stop
+                            waiter = ec2.get_waiter('instance_stopped')
+                            waiter.wait(InstanceIds=[instance_id])
+                            # Terminate the instance
+                            logger.info(f"Terminating instance {instance_id} for user {user_name}")
+                            ec2.terminate_instances(InstanceIds=[instance_id])
+                            # Update instance tags to mark as available
+                            ec2.create_tags(
+                                Resources=[instance_id],
+                                Tags=[
+                                    {'Key': 'Status', 'Value': 'available'},
+                                    {'Key': 'Student', 'Value': ''}
+                                ]
+                            )
+                    
+                except Exception as e:
+                    logger.error(f"Error deleting user {user_name}: {str(e)}")
+                    continue
+        logger.info(f"Destroy process completed. Deleted {len(users)} users")
+        
+    except Exception as e:
+        logger.error(f"Error in destroy_users: {str(e)}")
+
+def lambda_handler(event, context):
+    try:
+        # Get environment variables
+        environment = os.environ.get('ENVIRONMENT', 'dev')
+        status_lambda_url = os.environ.get('STATUS_LAMBDA_URL')
+        
+        # Log environment variables for debugging
+        print(f"Environment: {environment}")
+        print(f"Status Lambda URL: {status_lambda_url}")
+        
+        if not status_lambda_url:
+            print("Warning: STATUS_LAMBDA_URL environment variable is not set")
+            return {
+                'statusCode': 200,
+                'headers': {
+                    'Content-Type': 'text/html'
+                },
+                'body': generate_html_response(
+                    error_message="The status service is not properly configured. Please try again in a few minutes.",
+                    status_lambda_url=None
+                )
+            }
+        
+        logger.info(f"Lambda handler invoked. Event: {json.dumps(event)}")
+        # Check if it's a GET request
+        if event['requestContext']['http']['method'] == 'GET':
+            path = event['requestContext']['http']['path']
+            logger.info(f"Received request for path: {path}")
+            
+            if path == '/destroy':
+                # Check for the destroy key
+                query_params = event.get('queryStringParameters', {})
+                logger.info(f"Destroy key from request: {query_params.get('key') if query_params else 'None'}")
+                logger.info(f"Expected destroy key: {DESTROY_KEY}")
+                
+                if query_params and query_params.get('key') == DESTROY_KEY:
+                    try:
+                        logger.info("Starting destroy process synchronously...")
+                        result = destroy_users()
+                        logger.info("Destroy process completed synchronously")
+                        return {
+                            'statusCode': 200,
+                            'body': json.dumps(result),
+                            'headers': {
+                                'Content-Type': 'application/json'
+                            }
+                        }
+                    except Exception as e:
+                        logger.error(f"Error in destroy process: {str(e)}", exc_info=True)
+                        return {
+                            'statusCode': 500,
+                            'body': json.dumps({
+                                'error': str(e),
+                                'traceback': traceback.format_exc()
+                            }),
+                            'headers': {
+                                'Content-Type': 'application/json'
+                            }
+                        }
+                else:
+                    logger.warning("Invalid or missing destroy key")
+                    return {
+                        'statusCode': 403,
+                        'body': json.dumps({'error': 'Invalid or missing destroy key'}),
+                        'headers': {
+                            'Content-Type': 'application/json'
+                        }
+                    }
+            elif path == '/':
+                headers = event.get('headers', {}) or {}
+                cookies = headers.get('cookie', '')
+                user_name = None
+                # Parse cookies
+                for cookie in cookies.split(';'):
+                    if cookie.strip().startswith('testus_patronus_user='):
+                        user_name = cookie.strip().split('=', 1)[1]
+                        break
+                # Fallback to query param if needed
+                if not user_name:
+                    query_params = event.get('queryStringParameters', {}) or {}
+                    user_name = query_params.get('user_name')
+                if user_name:
+                    logger.info(f"[Azure Config] Reload path for user: {user_name}")
+                    # Try to look up the user in DynamoDB
+                    response = table.query(
+                        IndexName='student_name-index',
+                        KeyConditionExpression='student_name = :sn',
+                        ExpressionAttributeValues={':sn': user_name}
+                    )
+                    if response['Items']:
+                        user_info = response['Items'][0]
+                        user_info['user_name'] = user_info.get('student_name', user_name)
+                        user_info['instance_id'] = user_info.get('instance_id')
+                        # Check EC2 instance status
+                        if user_info['instance_id']:
+                            try:
+                                ec2 = boto3.client('ec2', region_name='eu-west-3')
+                                instance_response = ec2.describe_instances(
+                                    InstanceIds=[user_info['instance_id']]
+                                )
+                                instance = instance_response['Reservations'][0]['Instances'][0]
+                                state = instance['State']['Name']
+                                if state in ['running', 'pending']:
+                                    user_info['ec2_ip'] = instance.get('PublicIpAddress')
+                                elif state == 'stopped':
+                                    ec2.start_instances(InstanceIds=[user_info['instance_id']])
+                                    user_info['instance_error'] = 'Instance is starting...'
+                                else:
+                                    user_info['instance_error'] = f'Instance is {state}. Please try again.'
+                            except Exception as e:
+                                logger.error(f"Error checking instance status: {str(e)}")
+                                user_info['instance_error'] = 'Error checking instance status'
+                        # Always load Azure LLM configurations (even if instance is ready)
+                        try:
+                            azure_configs = get_secret()
+                            user_info['azure_configs'] = azure_configs
+                            logger.info(f"[Azure Config] For user {user_name}, loaded {len(azure_configs)} configs: {azure_configs}")
+                            if not azure_configs:
+                                logger.warning(f"[Azure Config] No LLM configs available for user {user_name} (reload path)")
+                        except Exception as e:
+                            logger.error(f"Error loading Azure configurations: {str(e)}")
+                            user_info['azure_configs'] = []
+                        html_content = generate_html_response(user_info=user_info, error_message=None, status_lambda_url=status_lambda_url)
+                        return {
+                            'statusCode': 200,
+                            'body': html_content,
+                            'headers': {'Content-Type': 'text/html'}
+                        }
+                # No user_name or not found: create a new user as before
+                logger.info(f"[Azure Config] New user path")
+                user_info = create_user()
+                # Always load Azure LLM configurations for new users as well
+                try:
+                    azure_configs = get_secret()
+                    user_info['azure_configs'] = azure_configs
+                    logger.info(f"[Azure Config] For new user {user_info.get('user_name')}, loaded {len(azure_configs)} configs: {azure_configs}")
+                    if not azure_configs:
+                        logger.warning(f"[Azure Config] No LLM configs available for user {user_info.get('user_name')} (new user path)")
+                except Exception as e:
+                    logger.error(f"Error loading Azure configurations: {str(e)}")
+                    user_info['azure_configs'] = []
+                html_content = generate_html_response(user_info=user_info, error_message=None, status_lambda_url=status_lambda_url)
+                return {
+                    'statusCode': 200,
+                    'body': html_content,
+                    'headers': {'Content-Type': 'text/html'}
+                }
+            else:
+                logger.warning(f"Unknown path requested: {path}")
+                return {
+                    'statusCode': 404,
+                    'body': json.dumps({'error': 'Not found'}),
+                    'headers': {
+                        'Content-Type': 'application/json'
+                    }
+                }
+        else:
+            logger.warning("Method not allowed. Only GET is supported.")
+            method_not_allowed_html = """
+            <html>
+                <head>
+                    <title>ETL Testing Framework - Method Not Allowed</title>
+                </head>
+                <body>
+                    <h1>Method Not Allowed</h1>
+                    <p>This endpoint only supports GET requests.</p>
+                </body>
+            </html>
+            """
+            return {
+                'statusCode': 405,
+                'body': method_not_allowed_html,
+                'headers': {
+                    'Content-Type': 'text/html'
+                }
+            }
+    except Exception as e:
+        logger.error(f"Error in lambda_handler: {str(e)}")
+        return {
+            'statusCode': 500,
+            'body': json.dumps({
+                'error': str(e),
+                'traceback': traceback.format_exc()
+            }),
+            'headers': {
+                'Content-Type': 'application/json'
+            }
+        }
+
+def create_user():
+    account_id = ACCOUNT_ID
+    logger.info("Starting create_user()...")
+    suffix = os.urandom(4).hex()
+    console_user_name = f"conference-user-{suffix}"
+    logger.info(f"Generated user name: {console_user_name}")
+    if user_exists(console_user_name):
+        logger.warning("User already exists. Try again.")
+        raise Exception("User already exists. Try again.")
+
+    user = create_console_user(console_user_name, account_id)
+
+    # Get all Azure OpenAI configurations
+    azure_configs = get_secret()
+    logger.info(f"Fetched Azure LLM configs from Secrets Manager: {azure_configs}")
+    user['azure_configs'] = azure_configs
+
+    # Assign EC2 instance from pool instead of launching a new one
+    try:
+        assignment_result = assign_ec2_instance_to_student(console_user_name)
+        logger.info(f"Assignment result: {assignment_result}")
+        user['instance_id'] = assignment_result['instance_id']
+        user['ec2_ip'] = assignment_result.get('public_ip')
+        if assignment_result['status'] == 'already_assigned':
+            logger.info(f"EC2 instance already assigned: {assignment_result['instance_id']}")
+        else:
+            logger.info(f"Assigned EC2 instance: {assignment_result['instance_id']}")
+    except Exception as e:
+        logger.error(f"No available EC2 instances: {str(e)}")
+        user['ec2_ip'] = None
+        user['instance_error'] = str(e)
+
+    logger.info(f"User info passed to HTML: {user}")
+    return user
+
+def user_exists(user_name):
+    """Checks if a user already exists."""
+    try:
+        iam.get_user(UserName=user_name)
+        return True
+    except iam.exceptions.NoSuchEntityException:
+        return False
+
+def create_console_user(user_name, account_id):
+    """Creates a console user with login profile."""
+    iam.create_user(UserName=user_name)
+
+    # Generate a random password for the console user
+    password = generate_random_password()
+
+    iam.create_login_profile(
+        UserName=user_name,
+        Password=password,
+        PasswordResetRequired=False
+    )
+
+    # Attach the existing service role policy
+    policy_arn = "arn:aws:iam::087559609246:policy/ServiceUserRestrictedPolicy"
+    iam.attach_user_policy(
+        UserName=user_name,
+        PolicyArn=policy_arn
+    )
+
+    # Store the account and user information
+    login_url = f"https://{account_id}.signin.aws.amazon.com/console"
+    account_info = {
+        'account_id': account_id,
+        'user_name': user_name,
+        'password': password,
+        'login_url': login_url
+    }
+    return account_info
+
+def generate_random_password(length=12):
+    """Generates a random password with a mix of letters, digits, and allowed symbols."""
+    alphabet = string.ascii_letters + string.digits + "*!?_-"
+    while True:
+        password = ''.join(secrets.choice(alphabet) for _ in range(length))
+        if (any(c.islower() for c in password)
+                and any(c.isupper() for c in password)
+                and any(c.isdigit() for c in password)
+                and any(c in "*!?_-" for c in password)):
+            break
+    return password
+
+def cleanup_expired_assignments():
+    """Clean up expired 'assigning' records and reset their instances"""
+    client = boto3.client('ec2', region_name='eu-west-3')
+    current_time = int(time.time())
+    
+    try:
+        # Scan for expired 'assigning' records
+        response = table.scan(
+            FilterExpression='#status = :status AND expires_at < :now',
+            ExpressionAttributeNames={'#status': 'status'},
+            ExpressionAttributeValues={
+                ':status': 'assigning',
+                ':now': current_time
+            }
+        )
+        
+        for item in response.get('Items', []):
+            instance_id = item['instance_id']
+            logger.info(f"Cleaning up expired assignment for instance {instance_id}")
+            
+            try:
+                # Reset instance tags
+                client.create_tags(
+                    Resources=[instance_id],
+                    Tags=[
+                        {'Key': 'Status', 'Value': 'available'},
+                        {'Key': 'Student', 'Value': ''}
+                    ]
+                )
+                
+                # Delete DynamoDB record
+                table.delete_item(
+                    Key={
+                        'instance_id': instance_id,
+                        'student_name': item['student_name']
+                    }
+                )
+                
+                logger.info(f"Successfully cleaned up instance {instance_id}")
+                
+            except Exception as e:
+                logger.error(f"Error cleaning up instance {instance_id}: {str(e)}")
+                continue
+                
+    except Exception as e:
+        logger.error(f"Error in cleanup_expired_assignments: {str(e)}")
+        raise
+
+def assign_ec2_instance_to_student(student_name):
+    client = boto3.client('ec2', region_name='eu-west-3')
+    max_retries = 3
+    base_delay = 2  # Base delay in seconds
+    assignment_ttl = 600  # 10 minutes in seconds
+
+    # First, clean up any expired assignments
+    cleanup_expired_assignments()
+
+    # Check if student already has an assigned instance
+    try:
+        response = table.query(
+            IndexName='student_name-index',
+            KeyConditionExpression='student_name = :sn',
+            ExpressionAttributeValues={':sn': student_name}
+        )
+        if response['Items']:
+            instance_id = response['Items'][0]['instance_id']
+            # Verify instance still exists and is assigned to this student
+            filters = [
+                {'Name': 'instance-id', 'Values': [instance_id]},
+                {'Name': 'tag:Student', 'Values': [student_name]},
+                {'Name': 'tag:Status', 'Values': ['assigned']}
+            ]
+            response = client.describe_instances(Filters=filters)
+            if response['Reservations']:
+                return {
+                    'instance_id': instance_id,
+                    'status': 'already_assigned',
+                    'public_ip': response['Reservations'][0]['Instances'][0].get('PublicIpAddress')
+                }
+    except ClientError as e:
+        logger.error(f"Error checking existing assignment: {str(e)}")
+        raise
+
+    # Find available instances with retry logic
+    for attempt in range(max_retries):
+        try:
+            # 1. Find available instances in the pool (both stopped and running)
+            filters = [
+                {'Name': 'tag:Type', 'Values': ['pool']},
+                {'Name': 'instance-state-name', 'Values': ['stopped', 'running']}
+            ]
+            response = client.describe_instances(Filters=filters)
+            instances = [i for r in response['Reservations'] for i in r['Instances']]
+
+            if not instances:
+                raise Exception("No available EC2 instances in the pool.")
+
+            # Filter out instances that are already assigned in DynamoDB
+            available_instances = []
+            for instance in instances:
+                try:
+                    # Check if instance is assigned in DynamoDB
+                    response = table.get_item(Key={'instance_id': instance['InstanceId']})
+                    if 'Item' not in response:
+                        # No record exists, instance is available
+                        available_instances.append(instance)
+                    elif response['Item'].get('status') == 'stopped':
+                        # Instance is stopped but not assigned to a student
+                        # We can reuse it, but need to preserve the last_stopped_at time
+                        available_instances.append(instance)
+                    # Skip instances with other statuses (assigning, starting, assigned)
+                except Exception as e:
+                    logger.error(f"Error checking DynamoDB for instance {instance['InstanceId']}: {str(e)}")
+                    continue
+
+            if not available_instances:
+                raise Exception("No available EC2 instances in the pool (all are assigned).")
+
+            # Randomize instance selection to reduce collision probability
+            random.shuffle(available_instances)
+            
+            # Try to assign each instance until successful
+            for instance in available_instances:
+                instance_id = instance['InstanceId']
+                try:
+                    # Get existing record if any
+                    existing_record = table.get_item(Key={'instance_id': instance_id})
+                    last_stopped_at = existing_record.get('Item', {}).get('last_stopped_at')
+                    
+                    # Try to create or update the assignment in DynamoDB with TTL
+                    item = {
+                        'instance_id': instance_id,
+                        'student_name': student_name,
+                        'assigned_at': datetime.utcnow().isoformat(),
+                        'status': 'assigning',
+                        'expires_at': int(time.time()) + assignment_ttl
+                    }
+                    
+                    # Preserve last_stopped_at if it exists
+                    if last_stopped_at:
+                        item['last_stopped_at'] = last_stopped_at
+                    
+                    table.put_item(
+                        Item=item,
+                        ConditionExpression='attribute_not_exists(instance_id) OR #status = :stopped',
+                        ExpressionAttributeNames={'#status': 'status'},
+                        ExpressionAttributeValues={':stopped': 'stopped'}
+                    )
+                except ClientError as e:
+                    if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+                        # Instance was already assigned or status changed, try the next one
+                        logger.warning(f"Concurrent update detected for instance {instance_id}, trying next instance")
+                        continue
+                    else:
+                        # Other error, raise it
+                        raise
+                # If we reach here, DynamoDB write succeeded
+                try:
+                    # Mark instance as starting before any operations
+                    client.create_tags(
+                        Resources=[instance_id],
+                        Tags=[
+                            {'Key': 'Status', 'Value': 'starting'},
+                            {'Key': 'Student', 'Value': student_name}
+                        ]
+                    )
+                    
+                    # If instance is stopped, start it
+                    if instance['State']['Name'] == 'stopped':
+                        client.start_instances(InstanceIds=[instance_id])
+                    
+                    # Update tags to assigned after successful start
+                    client.create_tags(
+                        Resources=[instance_id],
+                        Tags=[
+                            {'Key': 'Status', 'Value': 'assigned'},
+                            {'Key': 'Student', 'Value': student_name}
+                        ]
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to update EC2 tags for instance {instance_id}: {str(e)}")
+                    # Do not roll back the DynamoDB assignment
+                # Update DynamoDB status and remove TTL
+                try:
+                    table.update_item(
+                        Key={
+                            'instance_id': instance_id
+                        },
+                        UpdateExpression='SET #status = :status REMOVE expires_at',
+                        ConditionExpression='attribute_exists(instance_id) AND #status = :expected',
+                        ExpressionAttributeNames={
+                            '#status': 'status'
+                        },
+                        ExpressionAttributeValues={
+                            ':status': 'starting',
+                            ':expected': 'assigning'
+                        }
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to update DynamoDB status for instance {instance_id}: {str(e)}")
+                return {
+                    'instance_id': instance_id,
+                    'status': 'starting'
+                }
+            # If we get here, all instances were already assigned
+            raise Exception("No available EC2 instances in the pool.")
+        except Exception as e:
+            if attempt < max_retries - 1:
+                # Exponential backoff with jitter
+                retry_delay = (base_delay ** attempt) + random.uniform(0, 1)
+                logger.info(f"Retry attempt {attempt + 1} after {retry_delay:.2f} seconds")
+                time.sleep(retry_delay)
+                continue
+            raise
+    raise Exception("Failed to assign an instance after multiple attempts.")
+
+def verify_instance_health(instance_id, student_name):
+    """Verify that an instance is healthy and ready to use"""
+    client = boto3.client('ec2', region_name='eu-west-3')
+    ssm = boto3.client('ssm', region_name='eu-west-3')
+    
+    try:
+        # Check instance state
+        response = client.describe_instances(InstanceIds=[instance_id])
+        instance = response['Reservations'][0]['Instances'][0]
+        
+        if instance['State']['Name'] != 'running':
+            return False
+            
+        # Check if instance is reachable via SSM
+        try:
+            ssm.describe_instance_information(
+                Filters=[{'Key': 'InstanceIds', 'Values': [instance_id]}]
+            )
+            return True
+        except ClientError:
+            return False
+            
+    except Exception as e:
+        logger.error(f"Error verifying instance health: {str(e)}")
+        return False
+
+def cleanup_failed_assignment(instance_id, student_name):
+    """Clean up a failed instance assignment"""
+    client = boto3.client('ec2', region_name='eu-west-3')
+    
+    try:
+        # Remove DynamoDB entry
+        table.delete_item(
+            Key={
+                'instance_id': instance_id
+            }
+        )
+        
+        # Reset EC2 tags to available
+        client.create_tags(
+            Resources=[instance_id],
+            Tags=[
+                {'Key': 'Status', 'Value': 'available'},
+                {'Key': 'Student', 'Value': ''}
+            ]
+        )
+        
+        logger.info(f"Cleaned up failed assignment for instance {instance_id}")
+        
+    except Exception as e:
+        logger.error(f"Error cleaning up failed assignment: {str(e)}")
+        raise
