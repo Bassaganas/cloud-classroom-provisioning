@@ -13,7 +13,7 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
 # Initialize SSM client
-ssm = boto3.client('ssm', region_name='eu-west-3')
+ssm = boto3.client('ssm', region_name='eu-west-1')
 
 def get_timeout_parameters():
     """Get timeout parameters from Parameter Store"""
@@ -324,9 +324,9 @@ def process_instance(instance_id, ec2_client, ssm_client, table):
         return {'instance_id': instance_id, 'status': 'error', 'error': str(e)}
 
 def lambda_handler(event, context):
-    ec2_client = boto3.client('ec2', region_name='eu-west-3')
-    ssm_client = boto3.client('ssm', region_name='eu-west-3')
-    dynamodb = boto3.resource('dynamodb', region_name='eu-west-3')
+    ec2_client = boto3.client('ec2', region_name='eu-west-1')
+    ssm_client = boto3.client('ssm', region_name='eu-west-1')
+    dynamodb = boto3.resource('dynamodb', region_name='eu-west-1')
     table = dynamodb.Table('instance-assignments-dev')
     try:
         # Get all instances in the pool

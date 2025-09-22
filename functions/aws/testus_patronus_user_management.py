@@ -571,7 +571,7 @@ def destroy_users():
     """Destroy all console users and their associated resources."""
     try:
         # Initialize AWS clients
-        ec2 = boto3.client('ec2', region_name='eu-west-3')
+        ec2 = boto3.client('ec2', region_name='eu-west-1')
         
         # 1. Get all users
         users = iam.list_users()['Users']
@@ -745,7 +745,7 @@ def lambda_handler(event, context):
                         # Check EC2 instance status
                         if user_info['instance_id']:
                             try:
-                                ec2 = boto3.client('ec2', region_name='eu-west-3')
+                                ec2 = boto3.client('ec2', region_name='eu-west-1')
                                 instance_response = ec2.describe_instances(
                                     InstanceIds=[user_info['instance_id']]
                                 )
@@ -925,7 +925,7 @@ def generate_random_password(length=12):
 
 def cleanup_expired_assignments():
     """Clean up expired 'assigning' records and reset their instances"""
-    client = boto3.client('ec2', region_name='eu-west-3')
+    client = boto3.client('ec2', region_name='eu-west-1')
     current_time = int(time.time())
     
     try:
@@ -972,7 +972,7 @@ def cleanup_expired_assignments():
         raise
 
 def assign_ec2_instance_to_student(student_name):
-    client = boto3.client('ec2', region_name='eu-west-3')
+    client = boto3.client('ec2', region_name='eu-west-1')
     max_retries = 3
     base_delay = 2  # Base delay in seconds
     assignment_ttl = 600  # 10 minutes in seconds
@@ -1141,8 +1141,8 @@ def assign_ec2_instance_to_student(student_name):
 
 def verify_instance_health(instance_id, student_name):
     """Verify that an instance is healthy and ready to use"""
-    client = boto3.client('ec2', region_name='eu-west-3')
-    ssm = boto3.client('ssm', region_name='eu-west-3')
+    client = boto3.client('ec2', region_name='eu-west-1')
+    ssm = boto3.client('ssm', region_name='eu-west-1')
     
     try:
         # Check instance state
@@ -1167,7 +1167,7 @@ def verify_instance_health(instance_id, student_name):
 
 def cleanup_failed_assignment(instance_id, student_name):
     """Clean up a failed instance assignment"""
-    client = boto3.client('ec2', region_name='eu-west-3')
+    client = boto3.client('ec2', region_name='eu-west-1')
     
     try:
         # Remove DynamoDB entry

@@ -10,9 +10,9 @@ from boto3.dynamodb.conditions import Key
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-ec2 = boto3.resource('ec2', region_name='eu-west-3')
-ec2_client = boto3.client('ec2', region_name='eu-west-3')
-dynamodb = boto3.resource('dynamodb', region_name='eu-west-3')
+ec2 = boto3.resource('ec2', region_name='eu-west-1')
+ec2_client = boto3.client('ec2', region_name='eu-west-1')
+dynamodb = boto3.resource('dynamodb', region_name='eu-west-1')
 table = dynamodb.Table('instance-assignments-dev')
 
 def check_instance_status(instance_id):
