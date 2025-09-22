@@ -272,9 +272,9 @@ resource "aws_iam_instance_profile" "ec2_ssm_profile" {
 # EC2 Pool Instances
 resource "aws_instance" "classroom_pool" {
   count                  = var.ec2_pool_size
-  ami                    = "ami-024f025478479ab03"
+  ami                    = "ami-0a86bf7ff73fa8750"
   instance_type          = var.ec2_instance_type
-  vpc_security_group_ids = ["sg-09827f49936d1d7e5"]
+  vpc_security_group_ids = ["sg-0d9981eeac1cca40a"]
   subnet_id              = var.ec2_subnet_id
   iam_instance_profile   = aws_iam_instance_profile.ec2_ssm_profile.name
 

@@ -13,7 +13,7 @@ variable "owner" {
 variable "region" {
   description = "The AWS region to deploy to"
   type        = string
-  default     = "eu-west-3"
+  default     = "eu-west-1"
 }
 
 variable "classroom_name" {
@@ -26,7 +26,7 @@ variable "classroom_name" {
 variable "ec2_pool_size" {
   description = "Number of EC2 instances to pre-provision in the pool."
   type        = number
-  default     = 40
+  default     = 4
 }
 
 variable "ec2_ami_id" {
@@ -44,7 +44,7 @@ variable "ec2_instance_type" {
 variable "ec2_subnet_id" {
   description = "Subnet ID for classroom EC2 instances."
   type        = string
-  default     = "subnet-076c4fca18acc0b7e"
+  default     = "subnet-08ecd608aae4c9a36"
 }
 
 variable "instance_stop_timeout_minutes" {

@@ -15,15 +15,15 @@ import os
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-LAMBDA_URL = "https://tgilw5l4loeq2dkrtbsta27csm0entsv.lambda-url.eu-west-3.on.aws/"
+LAMBDA_URL = "https://nfs4cbmes6gpw4ipeyastdlzdu0exwpz.lambda-url.eu-west-1.on.aws//"
 
 def cleanup_test_environment():
     """Clean up the test environment by stopping instances and cleaning DynamoDB"""
     logger.info("Starting cleanup of test environment...")
     
     # Initialize AWS clients
-    ec2_client = boto3.client('ec2', region_name='eu-west-3')
-    dynamodb = boto3.resource('dynamodb', region_name='eu-west-3')
+    ec2_client = boto3.client('ec2', region_name='eu-west-1')
+    dynamodb = boto3.resource('dynamodb', region_name='eu-west-1')
     table = dynamodb.Table('instance-assignments-dev')
     
     try:
@@ -150,7 +150,7 @@ if __name__ == "__main__":
         cleanup_test_environment()
         
         # Run the concurrency test
-        results = run_lambda_concurrency_test(num_users=3, max_workers=3)
+        results = run_lambda_concurrency_test(num_users=20, max_workers=20)
         print("\nDetailed Results:")
         for result in results:
             print(result)
