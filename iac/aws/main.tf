@@ -269,14 +269,18 @@ resource "aws_iam_instance_profile" "ec2_ssm_profile" {
   role = aws_iam_role.ec2_ssm_role.name
 }
 
-# EC2 Pool Instances
+# EC2 Pool Instances - Minimal Cost Configuration
 resource "aws_instance" "classroom_pool" {
   count                  = var.ec2_pool_size
-  ami                    = "ami-0a86bf7ff73fa8750"
+  ami                    = data.aws_ami.amazon_linux_2.id
   instance_type          = var.ec2_instance_type
-  vpc_security_group_ids = ["sg-0d9981eeac1cca40a"]
-  subnet_id              = var.ec2_subnet_id
+  vpc_security_group_ids = [aws_security_group.classroom_sg.id]
+  subnet_id              = data.aws_subnet.default.id
   iam_instance_profile   = aws_iam_instance_profile.ec2_ssm_profile.name
+
+  # Force replacement when user_data changes
+  user_data_replace_on_change = true
+  user_data = file("${path.module}/user_data.sh")
 
   root_block_device {
     volume_size           = 40
@@ -289,13 +293,8 @@ resource "aws_instance" "classroom_pool" {
     http_endpoint = "enabled"
   }
 
-  user_data = <<-EOF
-              #!/bin/bash
-              # Install SSM agent
-              yum install -y amazon-ssm-agent
-              systemctl enable amazon-ssm-agent
-              systemctl start amazon-ssm-agent
-              EOF
+  # Use the external user_data.sh file instead of inline script
+  # user_data = file("${path.module}/user_data.sh") # This line is now redundant due to user_data_replace_on_change
 
   tags = {
     Name        = "classroom-pool-${count.index}"
@@ -444,4 +443,86 @@ resource "aws_iam_policy" "lambda_secretsmanager_policy" {
 resource "aws_iam_role_policy_attachment" "lambda_secretsmanager_attach" {
   role       = aws_iam_role.lambda_role.name
   policy_arn = aws_iam_policy.lambda_secretsmanager_policy.arn
+}
+
+# Data source for default VPC (FREE - uses existing AWS infrastructure)
+data "aws_vpc" "default" {
+  default = true
+}
+
+# Data source for default subnet (FREE)
+data "aws_subnet" "default" {
+  vpc_id            = data.aws_vpc.default.id
+  availability_zone = data.aws_availability_zones.available.names[0]
+}
+
+# Data source for available AZs
+data "aws_availability_zones" "available" {
+  state = "available"
+}
+
+# Minimal Security Group (FREE)
+resource "aws_security_group" "classroom_sg" {
+  name_prefix = "classroom-sg-${var.environment}-"
+  vpc_id      = data.aws_vpc.default.id
+  description = "Minimal security group for classroom EC2 instances"
+
+  # SSH access (optional - remove if you only want SSM access)
+  ingress {
+    description = "SSH"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # HTTP access (for web applications)
+  ingress {
+    description = "HTTP"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # HTTPS access (for secure web applications)
+  ingress {
+    description = "HTTPS"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # All outbound traffic (needed for package downloads, SSM, etc.)
+  egress {
+    description = "All outbound traffic"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name        = "classroom-sg-${var.environment}"
+    Environment = var.environment
+    Owner       = var.owner
+    Project     = "classroom"
+  }
+}
+
+# Minimal network outputs
+output "vpc_id" {
+  description = "ID of the default VPC being used"
+  value       = data.aws_vpc.default.id
+}
+
+output "subnet_id" {
+  description = "ID of the default subnet being used"
+  value       = data.aws_subnet.default.id
+}
+
+output "security_group_id" {
+  description = "ID of the classroom security group"
+  value       = aws_security_group.classroom_sg.id
 }

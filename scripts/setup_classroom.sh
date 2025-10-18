@@ -16,6 +16,8 @@ usage() {
   echo "  --parallelism  Number of parallel operations (default: 4)"
   echo "  --force-unlock Force unlock the state if it's locked"
   echo "  --setup-rbac   Setup RBAC roles for Azure (only for Azure)"
+  echo "  --with-pool    Include EC2 instances pool for classroom (AWS only)"
+  echo "  --pool-size    Number of EC2 instances in the pool (default: 40, AWS only)"
   exit 1
 }
 
@@ -28,6 +30,8 @@ ACTION="create"
 PARALLELISM=4
 FORCE_UNLOCK=false
 SETUP_RBAC=false
+WITH_POOL=false
+POOL_SIZE=40
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -64,6 +68,14 @@ while [[ $# -gt 0 ]]; do
       SETUP_RBAC=true
       shift
       ;;
+    --with-pool)
+      WITH_POOL=true
+      shift
+      ;;
+    --pool-size)
+      POOL_SIZE="$2"
+      shift 2
+      ;;
     --help)
       usage
       ;;
@@ -96,8 +108,12 @@ if [ "$CLOUD_PROVIDER" = "azure" ]; then
     ${FORCE_UNLOCK:+"--force-unlock"} \
     ${SETUP_RBAC:+"--setup-rbac"}
 else
-  echo "AWS setup not implemented yet"
-  exit 1
+  # Call setup_aws.sh with all necessary parameters
+  AWS_ARGS=("$CLASSROOM_NAME" "$REGION" "$ACTION")
+  if [ "$WITH_POOL" = true ]; then
+    AWS_ARGS+=("--with-pool" "--pool-size" "$POOL_SIZE")
+  fi
+  ./scripts/setup_aws.sh "${AWS_ARGS[@]}"
 fi
 
 # Final success message

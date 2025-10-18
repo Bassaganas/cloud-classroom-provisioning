@@ -14,10 +14,13 @@ import threading
 from datetime import datetime, timedelta
 import random
 
+# Get region from environment variable
+REGION = os.environ.get('AWS_DEFAULT_REGION', os.environ.get('AWS_REGION', 'eu-west-3'))
+
 # Initialize AWS clients
 iam = boto3.client('iam')
-secretsmanager = boto3.client('secretsmanager', region_name='eu-west-3')
-dynamodb = boto3.resource('dynamodb')
+secretsmanager = boto3.client('secretsmanager', region_name=REGION)
+dynamodb = boto3.resource('dynamodb', region_name=REGION)
 table = dynamodb.Table(f"instance-assignments-{os.environ.get('ENVIRONMENT', 'dev')}")
 
 # Get account ID from environment variable
@@ -531,6 +534,19 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
             <div class="main-title">Testus Patronus</div>
             <div class="subtitle">No magic, just AI with your company context</div>
             <h2>Welcome! Here are your Azure LLM credentials and your Dify instance. This is your user: {user_info['user_name']}</h2>
+            <div class="info-box">
+                <h3>🔐 Dify Admin Credentials</h3>
+                <div class="config-row">
+                    <span class="config-label">Username</span>
+                    <span class="config-value">admin@dify.local</span>
+                    <button class="copy-btn" onclick="copyToClipboard('admin@dify.local')" title="Copy"><i class="fas fa-copy"></i></button>
+                </div>
+                <div class="config-row">
+                    <span class="config-label">Password</span>
+                    <span class="config-value">AutomationSTAR2025</span>
+                    <button class="copy-btn" onclick="copyToClipboard('AutomationSTAR2025')" title="Copy"><i class="fas fa-copy"></i></button>
+                </div>
+            </div>
             <button class="get-new-user-btn" onclick="getNewUser()">Get a new user</button>
             {instance_info_html}
             {azure_configs_html}
@@ -571,7 +587,7 @@ def destroy_users():
     """Destroy all console users and their associated resources."""
     try:
         # Initialize AWS clients
-        ec2 = boto3.client('ec2', region_name='eu-west-1')
+        ec2 = boto3.client('ec2', region_name=REGION)
         
         # 1. Get all users
         users = iam.list_users()['Users']
@@ -745,7 +761,7 @@ def lambda_handler(event, context):
                         # Check EC2 instance status
                         if user_info['instance_id']:
                             try:
-                                ec2 = boto3.client('ec2', region_name='eu-west-1')
+                                ec2 = boto3.client('ec2', region_name=REGION)
                                 instance_response = ec2.describe_instances(
                                     InstanceIds=[user_info['instance_id']]
                                 )
@@ -925,7 +941,7 @@ def generate_random_password(length=12):
 
 def cleanup_expired_assignments():
     """Clean up expired 'assigning' records and reset their instances"""
-    client = boto3.client('ec2', region_name='eu-west-1')
+    client = boto3.client('ec2', region_name=REGION)
     current_time = int(time.time())
     
     try:
@@ -972,7 +988,7 @@ def cleanup_expired_assignments():
         raise
 
 def assign_ec2_instance_to_student(student_name):
-    client = boto3.client('ec2', region_name='eu-west-1')
+    client = boto3.client('ec2', region_name=REGION)
     max_retries = 3
     base_delay = 2  # Base delay in seconds
     assignment_ttl = 600  # 10 minutes in seconds
@@ -1141,8 +1157,8 @@ def assign_ec2_instance_to_student(student_name):
 
 def verify_instance_health(instance_id, student_name):
     """Verify that an instance is healthy and ready to use"""
-    client = boto3.client('ec2', region_name='eu-west-1')
-    ssm = boto3.client('ssm', region_name='eu-west-1')
+    client = boto3.client('ec2', region_name=REGION)
+    ssm = boto3.client('ssm', region_name=REGION)
     
     try:
         # Check instance state
@@ -1167,7 +1183,7 @@ def verify_instance_health(instance_id, student_name):
 
 def cleanup_failed_assignment(instance_id, student_name):
     """Clean up a failed instance assignment"""
-    client = boto3.client('ec2', region_name='eu-west-1')
+    client = boto3.client('ec2', region_name=REGION)
     
     try:
         # Remove DynamoDB entry

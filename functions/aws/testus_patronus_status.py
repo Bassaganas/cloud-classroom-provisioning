@@ -10,9 +10,13 @@ from boto3.dynamodb.conditions import Key
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-ec2 = boto3.resource('ec2', region_name='eu-west-1')
-ec2_client = boto3.client('ec2', region_name='eu-west-1')
-dynamodb = boto3.resource('dynamodb', region_name='eu-west-1')
+# Get region from environment variable with multiple fallbacks
+REGION = os.environ.get('CLASSROOM_REGION') or os.environ.get('AWS_REGION') or 'eu-west-3'
+
+# Initialize AWS clients with environment-based region
+ec2 = boto3.resource('ec2', region_name=REGION)
+ec2_client = boto3.client('ec2', region_name=REGION)
+dynamodb = boto3.resource('dynamodb', region_name=REGION)
 table = dynamodb.Table('instance-assignments-dev')
 
 def check_instance_status(instance_id):
@@ -41,7 +45,9 @@ def check_dify_service(ip_address, max_retries=2, delay=1):
     for endpoint in endpoints:
         for attempt in range(max_retries):
             try:
+                logger.info(f"Checking Dify service at http://{ip_address}{endpoint}")
                 resp = requests.get(f'http://{ip_address}{endpoint}', timeout=1)
+                logger.info(f"Response: {resp.status_code}")
                 if resp.status_code == 200:
                     return endpoint  # Return the endpoint that is ready
             except Exception:
