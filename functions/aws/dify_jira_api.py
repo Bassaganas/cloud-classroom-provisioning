@@ -26,10 +26,8 @@ class StudentDifyConfig(BaseModel):
     dataset_id: Optional[str] = None  # Optional, will be created if not provided
 
 class IngestJiraRequest(BaseModel):
-    """Model for Jira ingestion requests."""
-    project: Optional[str] = None
-    jql: Optional[str] = None
-    max_results: Optional[int] = 100
+    """Model for JSON file ingestion requests."""
+    project: str  # Required: the project name (e.g., "TOC_JiraEcosystem_issues")
 
 class IngestJsonRequest(BaseModel):
     """Model for JSON file ingestion requests."""
@@ -49,7 +47,8 @@ class DifyIntegration:
         
         self.headers = {
             'Authorization': f'Bearer {self.dataset_api_key}',
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'Accept': 'application/json'
         }
         
         try:
@@ -158,29 +157,64 @@ class DifyIntegration:
                 text_parts.append(example_queries_line)
             text_parts.append(f"Summary: {summary}\n\nJira Issue: {key}\nProject: {project}\nType: {issue_type}\nStatus: {status}\nAssignee: {assignee}\nCreated: {created}\nUpdated: {updated}\n\nDescription:\n{description}\n")
             text = "".join(text_parts)
-            # Set your desired chunking config
-            max_tokens, chunk_overlap = 2000, 400
-            process_rule = {
-                "mode": "custom",
-                "rules": {
-                    "pre_processing_rules": [
-                        {"id": "remove_extra_spaces", "enabled": True},
-                        {"id": "remove_urls_emails", "enabled": False}
-                    ],
-                    "segmentation": {
-                        "separator": "###CHUNK###",
-                        "max_tokens": max_tokens,
-                        "chunk_overlap": chunk_overlap
-                    }
-                }
-            }
-            logger.info(f"[DIFY] Document '{key}': process_rule sent to Dify: {json.dumps(process_rule)}")
+            
+            # Create the document according to Dify 1.9.1 API specification
+            # Based on the working test, the required format is:
             doc = {
                 "name": f"Jira Issue {key}",
                 "text": text,
                 "indexing_technique": "high_quality",
-                "process_rule": process_rule
+                "doc_form": "text_model",
+                "doc_language": "English",
+                "process_rule": {
+                    "mode": "automatic",
+                    "rules": {
+                        "pre_processing_rules": [
+                            {
+                                "id": "remove_extra_spaces",
+                                "enabled": True
+                            }
+                        ],
+                        "segmentation": {
+                            "separator": "\n\n",
+                            "max_tokens": 2000
+                        },
+                        "parent_mode": "full-doc",
+                        "subchunk_segmentation": {
+                            "separator": "\n\n",
+                            "max_tokens": 2000,
+                            "chunk_overlap": 400
+                        }
+                    }
+                },
+                "retrieval_model": {
+                    "search_method": "hybrid_search",
+                    "reranking_enable": False,
+                    "top_k": 8,
+                    "score_threshold_enabled": True,
+                    "score_threshold": 0.5
+                }
             }
+            
+            # Override process_rule for advanced_ingestion if needed
+            if advanced_ingestion:
+                # Use custom process rule for advanced ingestion
+                doc["process_rule"] = {
+                    "mode": "custom",
+                    "rules": {
+                        "pre_processing_rules": [
+                            {"id": "remove_extra_spaces", "enabled": True},
+                            {"id": "remove_urls_emails", "enabled": False}
+                        ],
+                        "segmentation": {
+                            "separator": "###CHUNK###",
+                            "max_tokens": 2000,
+                            "chunk_overlap": 400
+                        }
+                    }
+                }
+                logger.info(f"[DIFY] Document '{key}': using custom process_rule for advanced ingestion")
+            
             logger.info(f"[DIFY] Full request body: {json.dumps(doc)}")
             return doc
         except Exception as e:
@@ -206,6 +240,8 @@ class DifyIntegration:
             rand_num = random.randint(100000, 999999)
             name = f"Jira_API_{mode}_{rand_num}"
         url = f"{self.base_url}/datasets"
+        
+        # Create dataset with proper process rules to avoid the NoneType error
         data = {
             "name": name,
             "permission": permission,
@@ -217,6 +253,20 @@ class DifyIntegration:
                 "top_k": 8,
                 "score_threshold_enabled": True,
                 "score_threshold": 0.5
+            },
+            "process_rule": {
+                "mode": "automatic",
+                "rules": {
+                    "pre_processing_rules": [
+                        {"id": "remove_extra_spaces", "enabled": True},
+                        {"id": "remove_urls_emails", "enabled": False}
+                    ],
+                    "segmentation": {
+                        "separator": "\n\n",
+                        "max_tokens": 2000,
+                        "chunk_overlap": 400
+                    }
+                }
             }
         }
         try:
@@ -269,27 +319,90 @@ class DifyIntegration:
         """Ingest Jira issues into Dify Knowledge Base (Dataset) as documents"""
         responses = []
         try:
-            logger.info(f"[DIFY] Starting ingestion of {len(issues)} issues")
+            logger.info(f"[DIFY] ===== STARTING DIFY INGESTION =====")
+            logger.info(f"[DIFY] Total issues to process: {len(issues)}")
+            logger.info(f"[DIFY] Advanced ingestion: {advanced_ingestion}")
+            logger.info(f"[DIFY] Dataset ID: {self.dataset_id}")
+            logger.info(f"[DIFY] Base URL: {self.base_url}")
+            logger.info(f"[DIFY] Headers: {json.dumps(self.headers, indent=2)}")
+            logger.info(f"[DIFY] ===== INGESTION CONFIG =====")
             
             for idx, issue in enumerate(issues, 1):
                 try:
-                    logger.info(f"[DIFY] Processing issue {idx}/{len(issues)}: {issue.get('key', 'unknown')}")
+                    issue_key = issue.get('key', f'issue-{idx}')
+                    logger.info(f"[DIFY] Processing issue {idx}/{len(issues)}: {issue_key}")
+                    
+                    # Debug: Log the raw issue structure
+                    logger.info(f"[DIFY] Raw issue structure: {json.dumps(issue, indent=2)[:1000]}...")
+                    
                     url = f"{self.base_url}/datasets/{self.dataset_id}/document/create-by-text"
+                    logger.info(f"[DIFY] Dify URL: {url}")
+                    logger.info(f"[DIFY] Dataset ID: {self.dataset_id}")
+                    logger.info(f"[DIFY] Headers: {self.headers}")
+                    
                     data = self._format_issue_for_text(issue, advanced_ingestion=advanced_ingestion)
+                    logger.info(f"[DIFY] Formatted document name: {data.get('name', 'Unknown')}")
+                    logger.info(f"[DIFY] Formatted document text length: {len(data.get('text', ''))}")
+                    logger.info(f"[DIFY] Formatted document keys: {list(data.keys())}")
                     logger.debug(f"[DIFY] Formatted issue data: {json.dumps(data, indent=2)}")
+                    
+                    # Log the exact call being made to Dify
+                    logger.info(f"[DIFY] ===== EXACT DIFY API CALL =====")
+                    logger.info(f"[DIFY] Method: POST")
+                    logger.info(f"[DIFY] URL: {url}")
+                    logger.info(f"[DIFY] Headers: {json.dumps(self.headers, indent=2)}")
+                    logger.info(f"[DIFY] Request Body: {json.dumps(data, indent=2)}")
+                    logger.info(f"[DIFY] ===== END DIFY API CALL =====")
                     
                     logger.info(f"[DIFY] Creating document: POST {url}")
                     response = requests.post(url, headers=self.headers, json=data)
-                    logger.debug(f"[DIFY] Create document response: {response.text}")
+                    
+                    # Log the complete response details
+                    logger.info(f"[DIFY] ===== DIFY API RESPONSE =====")
+                    logger.info(f"[DIFY] Status Code: {response.status_code}")
+                    logger.info(f"[DIFY] Response Headers: {json.dumps(dict(response.headers), indent=2)}")
+                    logger.info(f"[DIFY] Response Text: {response.text}")
+                    logger.info(f"[DIFY] ===== END DIFY API RESPONSE =====")
+                    
+                    if response.status_code != 200:
+                        logger.error(f"[DIFY] Non-200 response: {response.status_code} - {response.text}")
+                        
+                        # Handle specific error cases
+                        if response.status_code == 500:
+                            logger.error(f"[DIFY] Internal Server Error from Dify - this indicates a problem with the Dify instance itself")
+                            logger.error(f"[DIFY] Possible causes: Dataset corrupted, Dify overloaded, or API key permissions issue")
+                        elif response.status_code == 404:
+                            logger.error(f"[DIFY] Dataset not found - check if dataset ID exists")
+                        elif response.status_code == 401:
+                            logger.error(f"[DIFY] Unauthorized - check API key")
+                        elif response.status_code == 403:
+                            logger.error(f"[DIFY] Forbidden - API key lacks permissions")
+                        
+                        # Don't raise here, just log and continue
+                        continue
+                    
                     response.raise_for_status()
-                    responses.append(response.json())
+                    response_data = response.json()
+                    responses.append(response_data)
+                    logger.info(f"[DIFY] Successfully created document for issue {idx}")
+                    
+                except requests.exceptions.RequestException as e:
+                    error_msg = f"[DIFY] Request error processing issue {idx}: {str(e)}"
+                    logger.error(f"{error_msg}")
+                    if hasattr(e, 'response') and e.response is not None:
+                        logger.error(f"[DIFY] Response content: {e.response.text}")
+                    continue
                     
                 except Exception as e:
                     error_msg = f"[DIFY] Error processing issue {idx}: {str(e)}"
                     logger.error(f"{error_msg}\n{traceback.format_exc()}")
                     continue
                     
-            logger.info(f"[DIFY] Completed ingestion. Successfully processed {len(responses)} issues")
+            logger.info(f"[DIFY] ===== INGESTION COMPLETE =====")
+            logger.info(f"[DIFY] Total issues processed: {len(issues)}")
+            logger.info(f"[DIFY] Successfully created documents: {len(responses)}")
+            logger.info(f"[DIFY] Failed documents: {len(issues) - len(responses)}")
+            logger.info(f"[DIFY] ===== END INGESTION =====")
             return responses
         except Exception as e:
             error_msg = f"[DIFY] Error in ingest_issues: {str(e)}"
@@ -319,7 +432,7 @@ def get_health():
 
 @app.get("/projects")
 def get_projects():
-    """GET /projects - Retrieve all available JSON project files for ingestion"""
+    """GET /projects - Retrieve all available project names for ingestion"""
     try:
         dataset_dir = Path("data")
         if not dataset_dir.exists():
@@ -328,28 +441,25 @@ def get_projects():
         # Get all JSON files in the dataset directory
         json_files = list(dataset_dir.glob("*.json"))
         
-        # Categorize files
-        issue_files = []
-        summary_files = []
+        # Extract project names from filenames
+        project_names = []
         
         for file_path in json_files:
-            file_info = {
-                "filename": file_path.name,
-                "size": file_path.stat().st_size,
-                "modified": file_path.stat().st_mtime
-            }
+            filename = file_path.name
             
-            if file_path.name.endswith('_SUMMARY.json'):
-                summary_files.append(file_info)
-            else:
-                issue_files.append(file_info)
+            # Skip summary files
+            if filename.endswith('_SUMMARY.json'):
+                continue
+                
+            # Extract project name from filename
+            # e.g., "TOC_JiraEcosystem_issues.json" -> "TOC_JiraEcosystem_issues"
+            if filename.endswith('.json'):
+                project_name = filename[:-5]  # Remove .json extension
+                project_names.append(project_name)
         
         return {
-            "projects": {
-                "issue_files": issue_files,
-                "summary_files": summary_files,
-                "total_files": len(json_files)
-            },
+            "projects": project_names,
+            "total_projects": len(project_names),
             "dataset_directory": str(dataset_dir)
         }
     except Exception as e:
@@ -362,9 +472,11 @@ def create_jira_ingestion(
     dify_config: StudentDifyConfig,
     advanced_ingestion: bool = Query(False, description="Enable advanced ingestion (aliases and queries)?")
 ):
-    """POST /jira/ingest - Ingest issues from Jira into student's Dify instance"""
+    """POST /jira/ingest - Ingest issues from JSON file into student's Dify instance"""
     try:
-        logger.info(f"Processing Jira ingestion for Dify instance: {dify_config.dify_base_url}")
+        logger.info(f"Processing JSON file ingestion for Dify instance: {dify_config.dify_base_url}")
+        
+        # Project name is now required in the model, no need to check
         
         # Use student's specific Dify configuration
         dify = DifyIntegration(
@@ -374,15 +486,32 @@ def create_jira_ingestion(
             advanced_ingestion=advanced_ingestion
         )
         
-        # For now, return a mock response since we don't have Jira client integration
+        # Construct the JSON file path
+        dataset_dir = Path("data")
+        json_file_path = dataset_dir / f"{request.project}.json"
+        
+        if not json_file_path.exists():
+            raise HTTPException(status_code=404, detail=f"Project file not found: {request.project}.json")
+        
+        logger.info(f"Starting JSON ingestion for file: {json_file_path}")
+        
+        # Ingest the JSON file
+        result = dify.ingest_json_file(str(json_file_path), advanced_ingestion=advanced_ingestion)
+        
+        # Count the number of issues ingested
+        issues_ingested = len(result) if result else 0
+        
         return {
             "success": True, 
             "dify_instance": dify_config.dify_base_url,
-            "issues_ingested": 0,
-            "message": "Jira ingestion endpoint ready (Jira client integration pending)"
+            "issues_ingested": issues_ingested,
+            "project": request.project,
+            "message": f"Successfully ingested {issues_ingested} issues from {request.project}.json"
         }
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error ingesting from Jira: {str(e)}")
+        logger.error(f"Error ingesting from JSON file: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/json/ingest")
@@ -473,13 +602,17 @@ def get_connections(dify_config: StudentDifyConfig):
     return results
 
 @app.get("/dify/status")
-def get_dify_status(dify_config: StudentDifyConfig):
+def get_dify_status(
+    dify_base_url: str = Query(..., description="Dify base URL"),
+    dify_api_key: str = Query(..., description="Dify API key"),
+    dataset_id: str = Query(None, description="Optional dataset ID to check")
+):
     """GET /dify/status - Get the status of the student's Dify instance"""
     try:
         dify = DifyIntegration(
-            api_key=dify_config.dify_api_key,
-            base_url=dify_config.dify_base_url,
-            dataset_id=dify_config.dataset_id
+            api_key=dify_api_key,
+            base_url=dify_base_url,
+            dataset_id=dataset_id
         )
         
         # Test connection to student's Dify instance
@@ -487,15 +620,87 @@ def get_dify_status(dify_config: StudentDifyConfig):
         r = requests.get(url, headers=dify.headers)
         r.raise_for_status()
         
+        # Get list of datasets to verify the dataset ID exists
+        datasets = r.json()
+        logger.info(f"[DIFY] Available datasets: {json.dumps(datasets, indent=2)}")
+        
+        # Check if the specified dataset ID exists (if provided)
+        dataset_exists = None
+        if dataset_id and 'data' in datasets:
+            for dataset in datasets['data']:
+                if dataset.get('id') == dataset_id:
+                    dataset_exists = True
+                    logger.info(f"[DIFY] Found dataset: {dataset}")
+                    break
+            if dataset_exists is None:
+                dataset_exists = False
+        
         return {
             "status": "connected",
-            "dify_base_url": dify_config.dify_base_url,
-            "dataset_id": dify_config.dataset_id
+            "dify_base_url": dify_base_url,
+            "dataset_id": dataset_id,
+            "dataset_exists": dataset_exists,
+            "available_datasets": datasets.get('data', []) if 'data' in datasets else []
         }
     except Exception as e:
+        logger.error(f"[DIFY] Error checking Dify status: {str(e)}")
         return {
             "status": "error",
-            "dify_base_url": dify_config.dify_base_url,
+            "dify_base_url": dify_base_url,
+            "error": str(e)
+        }
+
+@app.get("/dify/datasets")
+def get_dify_datasets(
+    dify_base_url: str = Query(..., description="Dify base URL"),
+    dify_api_key: str = Query(..., description="Dify API key")
+):
+    """GET /dify/datasets - Get all available datasets in the student's Dify instance"""
+    try:
+        dify = DifyIntegration(
+            api_key=dify_api_key,
+            base_url=dify_base_url,
+            dataset_id=None  # Not needed for listing datasets
+        )
+        
+        # Get list of datasets
+        url = f"{dify.base_url}/datasets"
+        r = requests.get(url, headers=dify.headers)
+        r.raise_for_status()
+        
+        datasets = r.json()
+        logger.info(f"[DIFY] Retrieved {len(datasets.get('data', []))} datasets")
+        
+        # Format the response with useful information
+        formatted_datasets = []
+        if 'data' in datasets:
+            for dataset in datasets['data']:
+                formatted_dataset = {
+                    "id": dataset.get('id'),
+                    "name": dataset.get('name'),
+                    "description": dataset.get('description'),
+                    "permission": dataset.get('permission'),
+                    "indexing_technique": dataset.get('indexing_technique'),
+                    "document_count": dataset.get('document_count', 0),
+                    "word_count": dataset.get('word_count', 0),
+                    "created_at": dataset.get('created_at'),
+                    "embedding_model": dataset.get('embedding_model'),
+                    "embedding_model_provider": dataset.get('embedding_model_provider')
+                }
+                formatted_datasets.append(formatted_dataset)
+        
+        return {
+            "status": "success",
+            "dify_base_url": dify_base_url,
+            "total_datasets": len(formatted_datasets),
+            "datasets": formatted_datasets,
+            "raw_response": datasets
+        }
+    except Exception as e:
+        logger.error(f"[DIFY] Error getting datasets: {str(e)}")
+        return {
+            "status": "error",
+            "dify_base_url": dify_base_url,
             "error": str(e)
         }
 
