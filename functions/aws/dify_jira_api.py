@@ -8,6 +8,7 @@ from dotenv import load_dotenv
 from pathlib import Path
 import requests
 import traceback
+from requests.exceptions import HTTPError
 import time
 #import tiktoken
 import re
@@ -29,10 +30,6 @@ class IngestJiraRequest(BaseModel):
     """Model for JSON file ingestion requests."""
     project: str  # Required: the project name (e.g., "TOC_JiraEcosystem_issues")
 
-class IngestJsonRequest(BaseModel):
-    """Model for JSON file ingestion requests."""
-    file_names: List[str]  # List of file names
-    dataset_dir: Optional[str] = "data"
 
 # ===== DIFY INTEGRATION CLASS =====
 class DifyIntegration:
@@ -241,41 +238,27 @@ class DifyIntegration:
             name = f"Jira_API_{mode}_{rand_num}"
         url = f"{self.base_url}/datasets"
         
-        # Create dataset with proper process rules to avoid the NoneType error
+        # Simplified dataset creation payload - let Dify use default embedding model
         data = {
             "name": name,
             "permission": permission,
-            "indexing_technique": "high_quality",
-            "embedding_model": "text-embedding-ada-002",
-            "retrieval_model": {
-                "search_method": search_method,
-                "reranking_enable": False,
-                "top_k": 8,
-                "score_threshold_enabled": True,
-                "score_threshold": 0.5
-            },
-            "process_rule": {
-                "mode": "automatic",
-                "rules": {
-                    "pre_processing_rules": [
-                        {"id": "remove_extra_spaces", "enabled": True},
-                        {"id": "remove_urls_emails", "enabled": False}
-                    ],
-                    "segmentation": {
-                        "separator": "\n\n",
-                        "max_tokens": 2000,
-                        "chunk_overlap": 400
-                    }
-                }
-            }
+            "indexing_technique": "high_quality"
         }
+        
         try:
-            logger.info(f"[DIFY] Creating dataset: POST {url} {data}")
+            logger.info(f"[DIFY] Creating dataset: POST {url}")
+            logger.info(f"[DIFY] Request payload: {json.dumps(data, indent=2)}")
             response = requests.post(url, headers=self.headers, json=data)
             logger.info(f"[DIFY] Response {response.status_code}: {response.text}")
-            response.raise_for_status()
+            
+            if response.status_code != 200:
+                logger.error(f"[DIFY] Dataset creation failed with status {response.status_code}")
+                logger.error(f"[DIFY] Response headers: {dict(response.headers)}")
+                logger.error(f"[DIFY] Response body: {response.text}")
+                raise HTTPError(f"Dataset creation failed: {response.status_code} - {response.text}")
+            
             dataset_info = response.json()
-            logger.info(f"[DIFY] Dataset created: id={dataset_info['id']}, name={dataset_info['name']}")
+            logger.info(f"[DIFY] Dataset created successfully: id={dataset_info.get('id')}, name={dataset_info.get('name')}")
             return dataset_info["id"] 
         except Exception as e:
             logger.error(f"[DIFY] Error creating dataset: {e}\n{traceback.format_exc()}")
@@ -412,8 +395,26 @@ class DifyIntegration:
 # ===== FASTAPI APP =====
 app = FastAPI(
     title="Classroom Jira-Dify Integration API",
-    description="RESTful API for students to ingest Jira issues into their individual Dify instances",
-    version="2.0.0"
+    description="RESTful API for students to ingest Jira issues into their individual Dify instances. Supports project-based ingestion from JSON files.",
+    version="2.1.0",
+    tags_metadata=[
+        {
+            "name": "System",
+            "description": "System health and connection testing endpoints"
+        },
+        {
+            "name": "Projects", 
+            "description": "Project management and listing endpoints"
+        },
+        {
+            "name": "Ingestion",
+            "description": "Jira issues ingestion into Dify datasets"
+        },
+        {
+            "name": "Dify Management",
+            "description": "Dify instance status and dataset management"
+        }
+    ]
 )
 
 @app.on_event("startup")
@@ -421,16 +422,24 @@ def startup_event():
     load_dotenv()
     logger.info("Environment variables loaded.")
 
-@app.get("/health")
+@app.get("/health", tags=["System"])
 def get_health():
     """GET /health - Health check endpoint"""
     return {
         "status": "healthy",
         "service": "classroom-jira-dify-api",
-        "version": "2.0.0"
+        "version": "2.1.0",
+        "endpoints": [
+            "GET /health",
+            "GET /projects", 
+            "POST /jira/ingest",
+            "GET /connections",
+            "GET /dify/status",
+            "GET /dify/datasets"
+        ]
     }
 
-@app.get("/projects")
+@app.get("/projects", tags=["Projects"])
 def get_projects():
     """GET /projects - Retrieve all available project names for ingestion"""
     try:
@@ -466,7 +475,7 @@ def get_projects():
         logger.error(f"Error getting projects: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/jira/ingest")
+@app.post("/jira/ingest", tags=["Ingestion"])
 def create_jira_ingestion(
     request: IngestJiraRequest, 
     dify_config: StudentDifyConfig,
@@ -514,69 +523,8 @@ def create_jira_ingestion(
         logger.error(f"Error ingesting from JSON file: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
-@app.post("/json/ingest")
-def create_json_ingestion(
-    request: IngestJsonRequest, 
-    dify_config: StudentDifyConfig,
-    advanced_ingestion: bool = Query(False, description="Enable advanced ingestion (aliases and queries)?")
-):
-    """POST /json/ingest - Ingest issues from JSON files into student's Dify instance"""
-    results = []
-    errors = []
-    try:
-        logger.info(f"Processing JSON ingestion for Dify instance: {dify_config.dify_base_url}")
-        
-        # Use student's specific Dify configuration
-        dify = DifyIntegration(
-            api_key=dify_config.dify_api_key,
-            base_url=dify_config.dify_base_url,
-            dataset_id=dify_config.dataset_id,
-            advanced_ingestion=advanced_ingestion
-        )
-        
-        dataset_dir = Path(request.dataset_dir)
-        for file_name in request.file_names:
-            try:
-                logger.info(f"Starting JSON ingestion for file: {file_name}")
-                file_path = dataset_dir / file_name
 
-                if not file_path.exists():
-                    error_msg = f"File not found: {file_path}"
-                    logger.error(error_msg)
-                    errors.append({"file": file_name, "error": error_msg})
-                    continue
-
-                logger.info(f"File found. Attempting to ingest JSON file: {file_path}")
-                try:
-                    result = dify.ingest_json_file(str(file_path), advanced_ingestion=advanced_ingestion)
-                    logger.info(f"Successfully ingested JSON file. Result: {result}")
-                    results.append({"file": file_name, "result": result})
-                except json.JSONDecodeError as e:
-                    error_msg = f"Invalid JSON format in file {file_path}: {str(e)}"
-                    logger.error(error_msg)
-                    errors.append({"file": file_name, "error": error_msg})
-                except Exception as e:
-                    error_msg = f"Error during Dify ingestion: {str(e)}"
-                    logger.error(f"{error_msg}\n{traceback.format_exc()}")
-                    errors.append({"file": file_name, "error": error_msg})
-            except Exception as e:
-                error_msg = f"Unexpected error during JSON ingestion for file {file_name}: {str(e)}"
-                logger.error(f"{error_msg}\n{traceback.format_exc()}")
-                errors.append({"file": file_name, "error": error_msg})
-        
-        return {
-            "success": len(errors) == 0, 
-            "dify_instance": dify_config.dify_base_url,
-            "files_processed": len(results),
-            "files_failed": len(errors),
-            "results": results, 
-            "errors": errors
-        }
-    except Exception as e:
-        logger.error(f"Error ingesting from JSON: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/connections")
+@app.get("/connections", tags=["System"])
 def get_connections(dify_config: StudentDifyConfig):
     """GET /connections - Test connections to Jira and student's Dify instance"""
     results = {"jira": False, "dify": False, "errors": {}}
@@ -601,7 +549,7 @@ def get_connections(dify_config: StudentDifyConfig):
     
     return results
 
-@app.get("/dify/status")
+@app.get("/dify/status", tags=["Dify Management"])
 def get_dify_status(
     dify_base_url: str = Query(..., description="Dify base URL"),
     dify_api_key: str = Query(..., description="Dify API key"),
@@ -650,7 +598,7 @@ def get_dify_status(
             "error": str(e)
         }
 
-@app.get("/dify/datasets")
+@app.get("/dify/datasets", tags=["Dify Management"])
 def get_dify_datasets(
     dify_base_url: str = Query(..., description="Dify base URL"),
     dify_api_key: str = Query(..., description="Dify API key")
