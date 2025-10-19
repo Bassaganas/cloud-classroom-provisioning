@@ -203,12 +203,37 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
     instance_info_html = ""
     if 'instance_id' in user_info and user_info['instance_id']:
         instance_info_html = f"""
-        <div class=\"url-box\">
-            <div class=\"dify-link-container\">
-                <a id=\"dify-link\" class=\"dify-link\" href=\"#\" target=\"_blank\" tabindex=\"-1\">Loading...</a>
-                <span id=\"dify-spinner\" class=\"spinner\"></span>
+        <div class=\"instance-section\">
+            <h2>Dify Instance Information</h2>
+            <div class=\"instance-cards\">
+                <div class=\"instance-card\">
+                    <div class=\"card-header\">
+                        <i class=\"fas fa-server\"></i>
+                        <span>Dify Instance</span>
+                    </div>
+                    <div class=\"dify-link-container\">
+                        <a id=\"dify-link\" class=\"dify-link\" href=\"#\" target=\"_blank\" tabindex=\"-1\">Loading...</a>
+                        <span id=\"dify-spinner\" class=\"spinner\"></span>
+                    </div>
+                    <div id=\"dify-status-msg\" class=\"status-message\"></div>
+                </div>
+                <div class=\"instance-card\">
+                    <div class=\"card-header\">
+                        <i class=\"fas fa-user-shield\"></i>
+                        <span>Admin Credentials</span>
+                    </div>
+                    <div class=\"credentials-info\">
+                        <div class=\"credential-row\">
+                            <span class=\"credential-label\">Username</span>
+                            <span class=\"credential-value\">admin@dify.local</span>
+                        </div>
+                        <div class=\"credential-row\">
+                            <span class=\"credential-label\">Password</span>
+                            <span class=\"credential-value\">AutomationSTAR2025</span>
+                        </div>
+                    </div>
+                </div>
             </div>
-            <div id=\"dify-status-msg\" style=\"margin-top:8px;font-size:0.98em;color:var(--blue);\"></div>
         </div>
         """
     elif 'instance_error' in user_info:
@@ -226,7 +251,7 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
         <title>Testus Patronus</title>
         <subtitle>No magic, just AI with your company context</subtitle>
-        <link rel=\"icon\" href=\"https://www.eicc.co.uk/media/1bpegpql/eurostar2025-logo-500px-x-500px-002.jpg?rmode=max&width=720&height=720&quality=70&v=1db515dc4767eb0\">
+        <link rel=\"icon\" href=\"https://automation.eurostarsoftwaretesting.com/wp-content/uploads/2025/04/AS2025-Amsterdam-Header-Graphic-1.webp">
         <link rel=\"stylesheet\" href=\"https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css\">
         <style>
             :root {{
@@ -244,11 +269,6 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                 padding: 0;
                 color: var(--blue);
             }}
-            .top-bar {{
-                background: var(--pink);
-                height: 8px;
-                width: 100vw;
-            }}
             .container {{
                 max-width: 1100px;
                 margin: 40px auto;
@@ -262,10 +282,11 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
             .logo {{
                 display: block;
                 margin: 0 auto 24px auto;
-                max-width: 180px;
+                max-width: 300px;
                 border-radius: 12px;
                 background: var(--white);
                 box-shadow: 0 2px 8px rgba(30,52,178,0.08);
+                object-fit: contain;
             }}
             .main-title {{
                 color: var(--blue);
@@ -367,16 +388,96 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                 background: var(--yellow);
                 color: var(--blue);
             }}
-            .url-box {{
-                background: var(--yellow);
-                border-radius: 6px;
-                padding: 10px 14px;
-                margin-bottom: 12px;
-                font-size: 1.1rem;
+            .instance-section {{
+                margin-bottom: 32px;
+            }}
+            .instance-cards {{
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 24px;
+                margin-top: 20px;
+            }}
+            .instance-card {{
+                background: var(--white);
+                border: 2px solid var(--blue);
+                border-radius: 12px;
+                padding: 24px;
+                box-shadow: 0 4px 12px rgba(30,52,178,0.08);
+                display: flex;
+                flex-direction: column;
+                gap: 16px;
+            }}
+            .card-header {{
+                display: flex;
+                align-items: center;
+                gap: 12px;
+                font-weight: 700;
                 color: var(--blue);
+                font-size: 1.1rem;
+                border-bottom: 2px solid var(--gray);
+                padding-bottom: 12px;
+            }}
+            .card-header i {{
+                font-size: 1.2rem;
+                color: var(--pink);
+            }}
+            .dify-link-container {{
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                gap: 10px;
+                background: var(--yellow);
+                padding: 16px;
+                border-radius: 8px;
                 font-weight: 600;
+                color: var(--blue);
+            }}
+            .dify-link {{
+                color: var(--blue);
+                text-decoration: underline;
+                pointer-events: none;
+                opacity: 0.6;
+                transition: opacity 0.2s;
+                font-size: 1.1rem;
+            }}
+            .dify-link.ready {{
+                pointer-events: auto;
+                opacity: 1;
+                font-weight: bold;
+            }}
+            .status-message {{
                 text-align: center;
-                box-shadow: 0 2px 8px rgba(30,52,178,0.04);
+                font-size: 0.95rem;
+                color: var(--blue);
+                font-weight: 500;
+            }}
+            .credentials-info {{
+                display: flex;
+                flex-direction: column;
+                gap: 12px;
+            }}
+            .credential-row {{
+                display: flex;
+                flex-direction: column;
+                gap: 6px;
+                background: var(--gray);
+                padding: 12px;
+                border-radius: 8px;
+            }}
+            .credential-label {{
+                font-weight: 600;
+                color: var(--blue);
+                font-size: 0.9rem;
+            }}
+            .credential-value {{
+                font-family: 'Fira Mono', 'Consolas', monospace;
+                background: var(--white);
+                padding: 8px 12px;
+                border-radius: 6px;
+                font-size: 1rem;
+                color: var(--blue);
+                border: 1px solid #e0e0e0;
+                word-break: break-all;
             }}
             .warning {{
                 background: var(--pink);
@@ -427,8 +528,8 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                 100% {{ transform: rotate(360deg); }}
             }}
             .get-new-user-btn {{
-                background: #e74c3c;
-                color: #fff;
+                background: ##82d642;
+                color: #1B1464;
                 border: none;
                 padding: 10px 22px;
                 border-radius: 6px;
@@ -438,7 +539,47 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                 margin-bottom: 8px;
             }}
             .get-new-user-btn:hover {{
-                background: #c0392b;
+                background: #fff;
+            }}
+            
+            /* Responsive design */
+            @media (max-width: 768px) {{
+                .container {{
+                    margin: 20px auto;
+                    padding: 20px 16px;
+                }}
+                .main-title {{
+                    font-size: 2.5rem;
+                }}
+                .subtitle {{
+                    font-size: 1.2rem;
+                }}
+                .instance-cards {{
+                    grid-template-columns: 1fr;
+                    gap: 16px;
+                }}
+                .azure-cards {{
+                    grid-template-columns: 1fr;
+                    gap: 20px;
+                }}
+                .azure-card {{
+                    padding: 16px;
+                }}
+            }}
+            
+            @media (max-width: 480px) {{
+                .main-title {{
+                    font-size: 2rem;
+                }}
+                .subtitle {{
+                    font-size: 1rem;
+                }}
+                .instance-card {{
+                    padding: 16px;
+                }}
+                .dify-link-container {{
+                    padding: 12px;
+                }}
             }}
         </style>
         <script>
@@ -522,31 +663,54 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
             }}
             function copyToClipboard(text) {{
                 navigator.clipboard.writeText(text).then(function() {{
-                    alert('Copied to clipboard!');
+                    // Show a subtle notification instead of alert
+                    showCopyNotification();
+                }}).catch(function(err) {{
+                    console.error('Failed to copy text: ', err);
                 }});
+            }}
+            
+            function showCopyNotification() {{
+                // Create a temporary notification element
+                var notification = document.createElement('div');
+                notification.style.cssText = `
+                    position: fixed;
+                    top: 20px;
+                    right: 20px;
+                    background: var(--pink);
+                    color: var(--white);
+                    padding: 12px 20px;
+                    border-radius: 6px;
+                    font-weight: 600;
+                    z-index: 1000;
+                    box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+                    transform: translateX(100%);
+                    transition: transform 0.3s ease;
+                `;
+                notification.textContent = 'Copied to clipboard!';
+                document.body.appendChild(notification);
+                
+                // Animate in
+                setTimeout(() => {{
+                    notification.style.transform = 'translateX(0)';
+                }}, 10);
+                
+                // Remove after 2 seconds
+                setTimeout(() => {{
+                    notification.style.transform = 'translateX(100%)';
+                    setTimeout(() => {{
+                        document.body.removeChild(notification);
+                    }}, 300);
+                }}, 2000);
             }}
         </script>
     </head>
     <body>
-        <div class="top-bar"></div>
         <div class="container">
-            <img src="https://www.eicc.co.uk/media/1bpegpql/eurostar2025-logo-500px-x-500px-002.jpg?rmode=max&width=720&height=720&quality=70&v=1db515dc4767eb0" alt="EuroSTAR 2025 Logo" class="logo">
+            <img src="https://automation.eurostarsoftwaretesting.com/wp-content/uploads/2025/04/AS2025-Amsterdam-Header-Graphic-1.webp" alt="AutomationSTAR 2025 Amsterdam Logo" class="logo">
             <div class="main-title">Testus Patronus</div>
             <div class="subtitle">No magic, just AI with your company context</div>
             <h2>Welcome! Here are your Azure LLM credentials and your Dify instance. This is your user: {user_info['user_name']}</h2>
-            <div class="info-box">
-                <h3>🔐 Dify Admin Credentials</h3>
-                <div class="config-row">
-                    <span class="config-label">Username</span>
-                    <span class="config-value">admin@dify.local</span>
-                    <button class="copy-btn" onclick="copyToClipboard('admin@dify.local')" title="Copy"><i class="fas fa-copy"></i></button>
-                </div>
-                <div class="config-row">
-                    <span class="config-label">Password</span>
-                    <span class="config-value">AutomationSTAR2025</span>
-                    <button class="copy-btn" onclick="copyToClipboard('AutomationSTAR2025')" title="Copy"><i class="fas fa-copy"></i></button>
-                </div>
-            </div>
             <button class="get-new-user-btn" onclick="getNewUser()">Get a new user</button>
             {instance_info_html}
             {azure_configs_html}

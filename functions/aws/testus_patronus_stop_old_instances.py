@@ -12,8 +12,12 @@ import os
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-# Initialize SSM client
-ssm = boto3.client('ssm', region_name='eu-west-1')
+# Initialize clients with region from environment
+region = os.environ.get('CLASSROOM_REGION', 'eu-west-3')
+ssm = boto3.client('ssm', region_name=region)
+dynamodb = boto3.resource('dynamodb', region_name=region)
+environment = os.environ.get('ENVIRONMENT', 'testus-patronus')
+table = dynamodb.Table(f'instance-assignments-{environment}')
 
 def get_timeout_parameters():
     """Get timeout parameters from Parameter Store"""
@@ -324,15 +328,17 @@ def process_instance(instance_id, ec2_client, ssm_client, table):
         return {'instance_id': instance_id, 'status': 'error', 'error': str(e)}
 
 def lambda_handler(event, context):
-    ec2_client = boto3.client('ec2', region_name='eu-west-1')
-    ssm_client = boto3.client('ssm', region_name='eu-west-1')
-    dynamodb = boto3.resource('dynamodb', region_name='eu-west-1')
-    table = dynamodb.Table('instance-assignments-dev')
+    region = os.environ.get('CLASSROOM_REGION', 'eu-west-3')
+    ec2_client = boto3.client('ec2', region_name=region)
+    ssm_client = boto3.client('ssm', region_name=region)
+    dynamodb = boto3.resource('dynamodb', region_name=region)
+    environment = os.environ.get('ENVIRONMENT', 'testus-patronus')
+    table = dynamodb.Table(f'instance-assignments-{environment}')
     try:
         # Get all instances in the pool
         response = ec2_client.describe_instances(
             Filters=[
-                {'Name': 'tag:Type', 'Values': ['pool']},
+                {'Name': 'tag:Project', 'Values': ['classroom']},
                 {'Name': 'instance-state-name', 'Values': ['running', 'stopped']}
             ]
         )

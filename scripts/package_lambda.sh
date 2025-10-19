@@ -74,6 +74,26 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
     zip -r9 "$PROJECT_ROOT/functions/packages/testus_patronus_stop_old_instances.zip" .
     cd "$PROJECT_ROOT"
     rm -rf "$TEMP_DIR3"
+
+    # Package dify_jira API Lambda function
+    echo "Packaging AWS Lambda dify_jira API function..."
+    TEMP_DIR4=$(mktemp -d)
+
+    # Copy the dify_jira API Lambda function
+    cp "$PROJECT_ROOT/functions/aws/dify_jira_api.py" "$TEMP_DIR4/"
+
+    # Copy the dataset directory with JSON files
+    echo "Copying dataset directory..."
+    cp -r "$PROJECT_ROOT/../dify_jira/data/dataset" "$TEMP_DIR4/data/"
+
+    # Install dependencies
+    pip install -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR4/"
+
+    # Create the package
+    cd "$TEMP_DIR4"
+    zip -r9 "$PROJECT_ROOT/functions/packages/dify_jira_api.zip" .
+    cd "$PROJECT_ROOT"
+    rm -rf "$TEMP_DIR4"
 else
     # Azure Function packaging
     echo "Packaging Azure Function..."

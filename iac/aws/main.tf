@@ -526,3 +526,63 @@ output "security_group_id" {
   description = "ID of the classroom security group"
   value       = aws_security_group.classroom_sg.id
 }
+
+# dify_jira API Lambda Function
+resource "aws_lambda_function" "dify_jira_api" {
+  filename         = "../../functions/packages/dify_jira_api.zip"
+  function_name    = "dify-jira-api-${var.classroom_name}-${var.environment}"
+  role             = aws_iam_role.lambda_role.arn
+  handler          = "dify_jira_api.lambda_handler"
+  runtime          = "python3.9"
+  timeout          = 300  # 5 minutes for ingestion operations
+  memory_size      = 1024  # 1GB for processing large datasets
+  package_type     = "Zip"
+  source_code_hash = filebase64sha256("../../functions/packages/dify_jira_api.zip")
+
+  environment {
+    variables = {
+      ENVIRONMENT = var.environment
+      CLASSROOM_NAME = var.classroom_name
+    }
+  }
+
+  tags = {
+    Environment = var.environment
+    Owner       = var.owner
+    Project     = "classroom"
+    Service     = "dify-jira-api"
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.lambda_basic,
+    aws_iam_role_policy.lambda_iam_policy,
+    aws_iam_role.lambda_role
+  ]
+}
+
+# Lambda Function URL for dify_jira API
+resource "aws_lambda_function_url" "dify_jira_api_url" {
+  function_name      = aws_lambda_function.dify_jira_api.function_name
+  authorization_type = "NONE"
+  invoke_mode        = "BUFFERED"
+
+  cors {
+    allow_credentials = true
+    allow_headers     = ["*"]
+    allow_methods     = [
+      "GET",
+      "POST", 
+      "PUT",
+      "DELETE"
+    ]
+    allow_origins     = ["*"]
+    expose_headers    = ["*"]
+    max_age           = 86400
+  }
+}
+
+# Output the dify_jira API URL
+output "dify_jira_api_url" {
+  description = "The URL of the dify_jira API Lambda function"
+  value       = aws_lambda_function_url.dify_jira_api_url.function_url
+}
