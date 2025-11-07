@@ -23,10 +23,13 @@ variable "classroom_name" {
 }
 
 # --- EC2 Pool for Classroom Assignment ---
+# EMERGENCY OPTION: EC2 instances are normally created dynamically via the instance_manager Lambda function
+# This variable allows creating instances via Terraform as an emergency option
+# Default is 0 (instances created via Lambda). Set to > 0 to enable Terraform-created instances.
 variable "ec2_pool_size" {
-  description = "Number of EC2 instances to pre-provision in the pool."
+  description = "Emergency option: Number of EC2 instances to create via Terraform (default: 0). Normally, instances are created via the instance_manager Lambda UI at /ui"
   type        = number
-  default     = 4
+  default     = 0
 }
 
 variable "ec2_ami_id" {
@@ -42,9 +45,9 @@ variable "ec2_instance_type" {
 }
 
 variable "ec2_subnet_id" {
-  description = "Subnet ID for classroom EC2 instances."
+  description = "Subnet ID for classroom EC2 instances. Leave empty to auto-discover default subnet."
   type        = string
-  default     = "subnet-08ecd608aae4c9a36"
+  default     = ""
 }
 
 variable "instance_stop_timeout_minutes" {
@@ -63,4 +66,23 @@ variable "hard_terminate_timeout_minutes" {
   description = "Number of minutes before a stopped instance should be hard terminated"
   type        = number
   default     = 45
+}
+
+variable "admin_cleanup_interval_days" {
+  description = "Number of days after which admin instances should be automatically deleted (default: 7 for weekly cleanup)"
+  type        = number
+  default     = 7
+}
+
+variable "admin_cleanup_schedule" {
+  description = "Schedule expression for admin instance cleanup (default: weekly on Sunday at 2 AM UTC)"
+  type        = string
+  default     = "cron(0 2 ? * SUN *)"  # Weekly on Sunday at 2 AM UTC
+}
+
+variable "instance_manager_password" {
+  description = "Password for instance manager authentication (leave empty to auto-generate a secure password)"
+  type        = string
+  default     = ""
+  sensitive   = true
 }

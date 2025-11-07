@@ -236,9 +236,70 @@ https://abc123.lambda-url.eu-west-3.on.aws/
 Status Lambda URL:
 https://def456.lambda-url.eu-west-3.on.aws/
 
+Instance Manager Lambda URL:
+https://xyz789.lambda-url.eu-west-3.on.aws/
+  Frontend UI: https://xyz789.lambda-url.eu-west-3.on.aws/ui
+
+Custom Domain (CloudFront):
+https://ec2-management.testingfantasy.com
+  (Requires DNS configuration - see below)
+
 EC2 Pool Information:
 Pool Size: 15 instances
 ```
+
+**🌐 Setting Up Custom Domain (CloudFront):**
+
+The Instance Manager is available via a custom domain `ec2-management.testingfantasy.com` using CloudFront. To complete the setup:
+
+1. **After first `terraform apply`, get the DNS validation records:**
+   ```bash
+   cd iac/aws
+   terraform output acm_certificate_validation_records
+   ```
+
+2. **Add DNS validation record to GoDaddy:**
+   
+   **If the "Añadir un registro nuevo" button is greyed out:**
+   
+   **Option A: Check Domain Lock Status**
+   - Go to "Configuración de registro" (Registration configuration) tab
+   - Look for "Bloqueo de dominio" (Domain lock) or "Registro protegido" (Protected registration)
+   - If locked, temporarily unlock it to add DNS records
+   
+   **Option B: Use Direct DNS Management**
+   - Navigate to: `https://dcc.godaddy.com/manage/testingfantasy.com/dns`
+   - Or go to: Domain Settings → DNS → Manage DNS
+   - Click "Add" or "+" button to add a new record
+   
+   **Option C: Use GoDaddy API or Contact Support**
+   - If buttons remain greyed out, contact GoDaddy support
+   - Or use GoDaddy's API to add the record programmatically
+   
+   **Add the CNAME record:**
+   - **Type**: `CNAME`
+   - **Name**: `_add7b2dcf428fa760e92d0013697ce93.ec2-management` (from terraform output, remove trailing dot)
+   - **Value**: `_33d59d59fde28e92099116f13c9f1416.jkddzztszm.acm-validations.aws.` (from terraform output, include trailing dot)
+   - **TTL**: `600` (or 1 hour)
+
+3. **Wait for certificate validation (5-40 minutes), then run:**
+   ```bash
+   terraform apply  # This will complete certificate validation
+   ```
+
+4. **Get CloudFront domain name:**
+   ```bash
+   terraform output instance_manager_cloudfront_domain
+   ```
+
+5. **Add final CNAME record in GoDaddy:**
+   - **Name**: `ec2-management`
+   - **Value**: `<cloudfront-domain-from-step-4>` (e.g., `d1234567890.cloudfront.net`)
+   - **TTL**: 600
+
+6. **Access your Instance Manager:**
+   - Wait 5-15 minutes for DNS propagation
+   - Visit: `https://ec2-management.testingfantasy.com/ui`
 
 #### 5. Manage Students
 
@@ -822,9 +883,23 @@ terraform destroy
 ### Common Issues
 
 1. **Terraform State Locked**:
+   
+   This happens when a previous Terraform operation was interrupted. You have two options:
+   
+   **Option A: Manual Force Unlock (Quick Fix)**
+   ```bash
+   cd iac/aws  # or iac/azure depending on your cloud provider
+   terraform force-unlock <LOCK_ID>
+   # Use the lock ID shown in the error message
+   # Example: terraform force-unlock 2f359820-eb1b-6f33-0411-8ae0f94d6152
+   ```
+   
+   **Option B: Using the Setup Script**
    ```bash
    ./scripts/setup_classroom.sh --name my-class --cloud aws --force-unlock
    ```
+   
+   ⚠️ **Warning**: Only force-unlock if you're certain no other Terraform process is running. Otherwise, wait for the operation to complete.
 
 2. **Lambda Packaging Fails**:
    ```bash

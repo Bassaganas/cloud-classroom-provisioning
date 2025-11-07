@@ -3,7 +3,7 @@ import json
 import logging
 import time
 from datetime import datetime, timezone, timedelta
-from botocore.exceptions import ClientError
+from botocore.exceptions import ClientError, WaiterError
 import concurrent.futures
 from typing import List, Dict
 from boto3.dynamodb.conditions import Attr
@@ -327,7 +327,80 @@ def process_instance(instance_id, ec2_client, ssm_client, table):
         logger.error(f"Unexpected error processing instance {instance_id}: {str(e)}")
         return {'instance_id': instance_id, 'status': 'error', 'error': str(e)}
 
+def process_admin_instance(instance_id, ec2_client, table):
+    """Process an admin instance - delete if expired based on CleanupDays tag"""
+    try:
+        # Get instance details
+        response = ec2_client.describe_instances(InstanceIds=[instance_id])
+        if not response.get('Reservations') or not response['Reservations'][0].get('Instances'):
+            return {'instance_id': instance_id, 'status': 'error', 'error': 'Instance not found'}
+        
+        instance = response['Reservations'][0]['Instances'][0]
+        launch_time = instance['LaunchTime']
+        now = datetime.now(timezone.utc)
+        
+        # Get tags
+        tags = {tag['Key']: tag['Value'] for tag in instance.get('Tags', [])}
+        instance_type = tags.get('Type', 'unknown')
+        
+        # Only process admin instances
+        if instance_type != 'admin':
+            return {'instance_id': instance_id, 'status': 'skipped', 'reason': 'not an admin instance'}
+        
+        # Get cleanup days from tag (default to 7 if not set)
+        cleanup_days = int(tags.get('CleanupDays', '7'))
+        age_days = (now - launch_time).days
+        
+        logger.info(f"Admin instance {instance_id}: age={age_days} days, cleanup_days={cleanup_days}")
+        
+        # Check if instance has expired
+        if age_days >= cleanup_days:
+            logger.info(f"Admin instance {instance_id} has expired (age={age_days} >= cleanup_days={cleanup_days}). Deleting...")
+            try:
+                # Terminate the instance
+                ec2_client.terminate_instances(InstanceIds=[instance_id])
+                logger.info(f"Terminated expired admin instance {instance_id}")
+                
+                # Wait for termination (with timeout)
+                try:
+                    waiter = ec2_client.get_waiter('instance_terminated')
+                    waiter.wait(InstanceIds=[instance_id], WaiterConfig={'Delay': 5, 'MaxAttempts': 12})
+                except WaiterError:
+                    logger.warning(f"Timeout waiting for instance {instance_id} to terminate, but termination was initiated")
+                
+                # Clean up any DynamoDB records (though admin instances shouldn't have assignments)
+                try:
+                    table.delete_item(Key={'instance_id': instance_id})
+                    logger.info(f"Deleted DynamoDB record for admin instance {instance_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to delete DynamoDB record for admin instance {instance_id}: {str(e)}")
+                
+                return {
+                    'instance_id': instance_id,
+                    'status': 'deleted',
+                    'reason': f'expired (age={age_days} days >= cleanup_days={cleanup_days})'
+                }
+            except Exception as e:
+                logger.error(f"Failed to delete expired admin instance {instance_id}: {str(e)}")
+                return {'instance_id': instance_id, 'status': 'error', 'error': str(e)}
+        else:
+            days_remaining = cleanup_days - age_days
+            logger.info(f"Admin instance {instance_id} has {days_remaining} days remaining")
+            return {
+                'instance_id': instance_id,
+                'status': 'skipped',
+                'reason': f'not expired (age={age_days} days < cleanup_days={cleanup_days}, {days_remaining} days remaining)'
+            }
+    except Exception as e:
+        logger.error(f"Error processing admin instance {instance_id}: {str(e)}")
+        return {'instance_id': instance_id, 'status': 'error', 'error': str(e)}
+
 def lambda_handler(event, context):
+    """
+    Lambda handler for managing instance lifecycle.
+    - Processes pool instances (Type: pool): stops unassigned running instances, terminates stopped instances
+    - Processes admin instances (Type: admin): deletes expired instances based on CleanupDays tag
+    """
     region = os.environ.get('CLASSROOM_REGION', 'eu-west-3')
     ec2_client = boto3.client('ec2', region_name=region)
     ssm_client = boto3.client('ssm', region_name=region)
@@ -335,43 +408,78 @@ def lambda_handler(event, context):
     environment = os.environ.get('ENVIRONMENT', 'testus-patronus')
     table = dynamodb.Table(f'instance-assignments-{environment}')
     try:
-        # Get all instances in the pool
-        response = ec2_client.describe_instances(
+        # Get all pool instances
+        pool_response = ec2_client.describe_instances(
             Filters=[
                 {'Name': 'tag:Project', 'Values': ['classroom']},
+                {'Name': 'tag:Type', 'Values': ['pool']},
                 {'Name': 'instance-state-name', 'Values': ['running', 'stopped']}
             ]
         )
         
-        instance_ids = []
-        for reservation in response['Reservations']:
+        pool_instance_ids = []
+        for reservation in pool_response['Reservations']:
             for instance in reservation['Instances']:
-                instance_ids.append(instance['InstanceId'])
+                pool_instance_ids.append(instance['InstanceId'])
         
-        if not instance_ids:
+        # Get all admin instances
+        admin_response = ec2_client.describe_instances(
+            Filters=[
+                {'Name': 'tag:Project', 'Values': ['classroom']},
+                {'Name': 'tag:Type', 'Values': ['admin']},
+                {'Name': 'instance-state-name', 'Values': ['running', 'stopped']}
+            ]
+        )
+        
+        admin_instance_ids = []
+        for reservation in admin_response['Reservations']:
+            for instance in reservation['Instances']:
+                admin_instance_ids.append(instance['InstanceId'])
+        
+        if not pool_instance_ids and not admin_instance_ids:
             logger.info("No instances to process")
             return {
                 'statusCode': 200,
                 'body': json.dumps({'message': 'No instances to process'})
             }
-            
-        logger.info(f"Found {len(instance_ids)} instances to process")
+        
         results = []
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            future_to_instance = {
-                executor.submit(process_instance, instance_id, ec2_client, ssm_client, table): instance_id
-                for instance_id in instance_ids
-            }
-            for future in concurrent.futures.as_completed(future_to_instance):
-                instance_id = future_to_instance[future]
-                try:
-                    result = future.result()
-                    results.append(result)
-                except Exception as e:
-                    logger.error(f"Error processing instance {instance_id}: {str(e)}")
-                    results.append({'instance_id': instance_id, 'status': 'error', 'error': str(e)})
+        
+        # Process pool instances
+        if pool_instance_ids:
+            logger.info(f"Found {len(pool_instance_ids)} pool instances to process")
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                future_to_instance = {
+                    executor.submit(process_instance, instance_id, ec2_client, ssm_client, table): instance_id
+                    for instance_id in pool_instance_ids
+                }
+                for future in concurrent.futures.as_completed(future_to_instance):
+                    instance_id = future_to_instance[future]
+                    try:
+                        result = future.result()
+                        results.append(result)
+                    except Exception as e:
+                        logger.error(f"Error processing pool instance {instance_id}: {str(e)}")
+                        results.append({'instance_id': instance_id, 'status': 'error', 'error': str(e)})
+        
+        # Process admin instances
+        if admin_instance_ids:
+            logger.info(f"Found {len(admin_instance_ids)} admin instances to process")
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                future_to_instance = {
+                    executor.submit(process_admin_instance, instance_id, ec2_client, table): instance_id
+                    for instance_id in admin_instance_ids
+                }
+                for future in concurrent.futures.as_completed(future_to_instance):
+                    instance_id = future_to_instance[future]
+                    try:
+                        result = future.result()
+                        results.append(result)
+                    except Exception as e:
+                        logger.error(f"Error processing admin instance {instance_id}: {str(e)}")
+                        results.append({'instance_id': instance_id, 'status': 'error', 'error': str(e)})
                     
-        successful = sum(1 for r in results if r['status'] in ['stopped', 'terminated', 'hard_terminated'])
+        successful = sum(1 for r in results if r['status'] in ['stopped', 'terminated', 'hard_terminated', 'deleted'])
         failed = len(results) - successful
         return {
             'statusCode': 200,

@@ -13,10 +13,14 @@ usage() {
   echo "  action           Action to perform: create or destroy (default: create)"
   echo ""
   echo "Options:"
-  echo "  --with-pool      Include EC2 instances pool for classroom"
-  echo "  --pool-size      Number of EC2 instances in the pool (default: 4)"
+  echo "  --with-pool      Emergency option: Create EC2 instances via Terraform (not recommended)"
+  echo "  --pool-size      Emergency option: Number of EC2 instances to create via Terraform (default: 4)"
   echo "  --skip-packaging Skip Lambda function packaging (use existing packages)"
   echo "  --help           Show this help message"
+  echo ""
+  echo "Note: EC2 instances are normally created dynamically via the instance_manager Lambda function."
+  echo "      After deployment, use the Instance Manager URL at /ui to create and manage instances."
+  echo "      --with-pool is an EMERGENCY OPTION only. Use Lambda UI for normal operations."
   exit 1
 }
 
@@ -48,7 +52,7 @@ CLASSROOM_NAME="$1"
 REGION="$2"
 ACTION="${3:-create}"
 WITH_POOL=false
-POOL_SIZE=4
+POOL_SIZE=4  # Default for emergency option
 SKIP_PACKAGING=false
 
 # Shift past the required arguments
@@ -58,10 +62,15 @@ shift 3 2>/dev/null || true
 while [[ $# -gt 0 ]]; do
   case $1 in
     --with-pool)
+      echo "WARNING: --with-pool is an EMERGENCY OPTION only."
+      echo "         Normally, EC2 instances should be created via the instance_manager Lambda UI at /ui"
+      echo "         This option creates instances via Terraform (not recommended for normal use)"
       WITH_POOL=true
       shift
       ;;
     --pool-size)
+      echo "WARNING: --pool-size is an EMERGENCY OPTION only."
+      echo "         Normally, use the Lambda Function URL at /ui to create instances dynamically."
       POOL_SIZE="$2"
       shift 2
       ;;
@@ -162,19 +171,27 @@ terraform {
 }
 EOF
 
-# Create terraform.tfvars for pool configuration
-cat > terraform.tfvars << EOF
+# Create terraform.tfvars
+# Set ec2_pool_size based on --with-pool option (emergency option only)
+if [ "$WITH_POOL" = true ]; then
+  echo "EMERGENCY MODE: Creating $POOL_SIZE EC2 instances via Terraform"
+  cat > terraform.tfvars << EOF
 classroom_name = "$CLASSROOM_NAME"
 environment = "dev"
 region = "$REGION"
 ec2_pool_size = $POOL_SIZE
 EOF
-
-# Add pool size override if --with-pool is not specified
-if [ "$WITH_POOL" = false ]; then
-  echo "ec2_pool_size = 0" >> terraform.tfvars
-  echo "Note: EC2 pool disabled. Use --with-pool to enable instance pool."
+else
+  echo "Normal mode: EC2 instances will be created via the instance_manager Lambda function"
+  cat > terraform.tfvars << EOF
+classroom_name = "$CLASSROOM_NAME"
+environment = "dev"
+region = "$REGION"
+ec2_pool_size = 0
+EOF
 fi
+
+echo "Note: After deployment, use the Instance Manager URL at /ui to create and manage instances."
 
 if [ "$ACTION" = "destroy" ]; then
   terraform init
@@ -189,13 +206,164 @@ else
   terraform output -raw lambda_function_url
   echo -e "\n\nStatus Lambda URL:"
   terraform output -raw status_lambda_url
+  echo -e "\n\nInstance Manager Lambda URL:"
+  INSTANCE_MANAGER_URL=$(terraform output -raw instance_manager_url)
+  echo "$INSTANCE_MANAGER_URL"
+  echo -e "\n  Frontend UI: $INSTANCE_MANAGER_URL/ui"
+  echo -e "\n  Use the frontend UI to create and manage EC2 instances dynamically."
+  
+  echo -e "\n\n=== CLOUDFRONT CUSTOM DOMAINS ==="
+  echo ""
+  
+  # Check certificate validation records
+  echo "📋 ACM Certificate Validation Records:"
+  echo ""
+  echo "  Instance Manager (ec2-management.testingfantasy.com):"
+  INSTANCE_MGR_VALIDATION=$(terraform output -json instance_manager_acm_certificate_validation_records 2>/dev/null | jq -r '.[0] | "\(.resource_record_name) -> \(.resource_record_value)"' 2>/dev/null || echo "  (No validation records found)")
+  echo "    $INSTANCE_MGR_VALIDATION"
+  echo ""
+  echo "  User Management (testus-patronus.testingfantasy.com):"
+  USER_MGMT_VALIDATION=$(terraform output -json user_management_acm_certificate_validation_records 2>/dev/null | jq -r '.[0] | "\(.resource_record_name) -> \(.resource_record_value)"' 2>/dev/null || echo "  (No validation records found)")
+  echo "    $USER_MGMT_VALIDATION"
+  echo ""
+  echo "  Dify Jira API (dify-jira.testingfantasy.com):"
+  DIFY_JIRA_VALIDATION=$(terraform output -json dify_jira_acm_certificate_validation_records 2>/dev/null | jq -r '.[0] | "\(.resource_record_name) -> \(.resource_record_value)"' 2>/dev/null || echo "  (No validation records found)")
+  echo "    $DIFY_JIRA_VALIDATION"
+  echo ""
+  
+  # Check CloudFront status
+  CUSTOM_URL=$(terraform output -raw instance_manager_custom_url 2>/dev/null || echo "null")
+  CLOUDFRONT_DOMAIN=$(terraform output -raw instance_manager_cloudfront_domain 2>/dev/null || echo "null")
+  USER_MGMT_CUSTOM_URL=$(terraform output -raw user_management_custom_url 2>/dev/null || echo "null")
+  USER_MGMT_CF_DOMAIN=$(terraform output -raw user_management_cloudfront_domain 2>/dev/null || echo "null")
+  DIFY_JIRA_CUSTOM_URL=$(terraform output -raw dify_jira_custom_url 2>/dev/null || echo "null")
+  DIFY_JIRA_CF_DOMAIN=$(terraform output -raw dify_jira_cloudfront_domain 2>/dev/null || echo "null")
+  
+  # Determine deployment status
+  INSTANCE_MGR_CF_CREATED=false
+  USER_MGMT_CF_CREATED=false
+  DIFY_JIRA_CF_CREATED=false
+  
+  if [ "$CLOUDFRONT_DOMAIN" != "null" ] && [ -n "$CLOUDFRONT_DOMAIN" ]; then
+    INSTANCE_MGR_CF_CREATED=true
+  fi
+  
+  if [ "$USER_MGMT_CF_DOMAIN" != "null" ] && [ -n "$USER_MGMT_CF_DOMAIN" ]; then
+    USER_MGMT_CF_CREATED=true
+  fi
+  
+  if [ "$DIFY_JIRA_CF_DOMAIN" != "null" ] && [ -n "$DIFY_JIRA_CF_DOMAIN" ]; then
+    DIFY_JIRA_CF_CREATED=true
+  fi
+  
+  echo "🌐 CloudFront Distribution Status:"
+  echo ""
+  echo "  Instance Manager:"
+  if [ "$INSTANCE_MGR_CF_CREATED" = true ]; then
+    echo "    ✅ CloudFront Distribution: $CLOUDFRONT_DOMAIN"
+    echo "    ✅ Custom URL: $CUSTOM_URL"
+    echo "    ✅ Access at: $CUSTOM_URL/ui"
+  else
+    echo "    ⏳ CloudFront Distribution: Not created yet"
+    echo "    ⏳ Custom URL: $CUSTOM_URL (will work after DNS setup)"
+    echo "    ℹ️  Status: Waiting for certificate validation and DNS setup"
+  fi
+  echo ""
+  echo "  User Management:"
+  if [ "$USER_MGMT_CF_CREATED" = true ]; then
+    echo "    ✅ CloudFront Distribution: $USER_MGMT_CF_DOMAIN"
+    echo "    ✅ Custom URL: $USER_MGMT_CUSTOM_URL"
+    echo "    ✅ Access at: $USER_MGMT_CUSTOM_URL"
+  else
+    echo "    ⏳ CloudFront Distribution: Not created yet"
+    echo "    ⏳ Custom URL: $USER_MGMT_CUSTOM_URL (will work after DNS setup)"
+    echo "    ℹ️  Status: Waiting for certificate validation and DNS setup"
+  fi
+  echo ""
+  echo "  Dify Jira API:"
+  if [ "$DIFY_JIRA_CF_CREATED" = true ]; then
+    echo "    ✅ CloudFront Distribution: $DIFY_JIRA_CF_DOMAIN"
+    echo "    ✅ Custom URL: $DIFY_JIRA_CUSTOM_URL"
+    echo "    ✅ Access at: $DIFY_JIRA_CUSTOM_URL"
+  else
+    echo "    ⏳ CloudFront Distribution: Not created yet"
+    echo "    ⏳ Custom URL: $DIFY_JIRA_CUSTOM_URL (will work after DNS setup)"
+    echo "    ℹ️  Status: Waiting for certificate validation and DNS setup"
+  fi
+  echo ""
+  
+  # Provide step-by-step instructions
+  echo "📝 DEPLOYMENT STEPS FOR CLOUDFRONT:"
+  echo ""
+  echo "  STEP 1: Add DNS Validation Records to GoDaddy"
+  echo "    └─ These records validate the SSL certificates"
+  echo "    └─ Go to GoDaddy DNS Management for testingfantasy.com"
+  echo "    └─ Add CNAME records shown above"
+  echo "    └─ Wait 5-10 minutes for validation"
+  echo ""
+  
+  if [ "$INSTANCE_MGR_CF_CREATED" = false ] || [ "$USER_MGMT_CF_CREATED" = false ] || [ "$DIFY_JIRA_CF_CREATED" = false ]; then
+    echo "  STEP 2: Enable CloudFront Distribution Creation"
+    echo "    └─ Edit: iac/aws/main.tf"
+    echo "    └─ Set wait_for_certificate_validation = true for the module(s) you want"
+    echo "    └─ Currently:"
+    INSTANCE_MGR_WAIT=$(grep -A 10 "module \"cloudfront_instance_manager\"" iac/aws/main.tf | grep "wait_for_certificate_validation" | awk '{print $3}' || echo "unknown")
+    USER_MGMT_WAIT=$(grep -A 10 "module \"cloudfront_user_management\"" iac/aws/main.tf | grep "wait_for_certificate_validation" | awk '{print $3}' || echo "unknown")
+    DIFY_JIRA_WAIT=$(grep -A 10 "module \"cloudfront_dify_jira\"" iac/aws/main.tf | grep "wait_for_certificate_validation" | awk '{print $3}' || echo "unknown")
+    echo "      • Instance Manager: $INSTANCE_MGR_WAIT"
+    echo "      • User Management: $USER_MGMT_WAIT"
+    echo "      • Dify Jira API: $DIFY_JIRA_WAIT"
+    echo ""
+    echo "  STEP 3: Create CloudFront Distributions"
+    echo "    └─ Run: cd iac/aws && terraform apply"
+    echo "    └─ This will create the CloudFront distributions"
+    echo ""
+  fi
+  
+  if [ "$INSTANCE_MGR_CF_CREATED" = true ] || [ "$USER_MGMT_CF_CREATED" = true ] || [ "$DIFY_JIRA_CF_CREATED" = true ]; then
+    echo "  STEP 4: Add Final DNS CNAME Records to GoDaddy"
+    echo "    └─ Point your custom domains to CloudFront:"
+    if [ "$INSTANCE_MGR_CF_CREATED" = true ]; then
+      echo "      • Name: ec2-management"
+      echo "        Type: CNAME"
+      echo "        Value: $CLOUDFRONT_DOMAIN"
+      echo "        TTL: 600"
+    fi
+    if [ "$USER_MGMT_CF_CREATED" = true ]; then
+      echo "      • Name: testus-patronus"
+      echo "        Type: CNAME"
+      echo "        Value: $USER_MGMT_CF_DOMAIN"
+      echo "        TTL: 600"
+    fi
+    if [ "$DIFY_JIRA_CF_CREATED" = true ]; then
+      echo "      • Name: dify-jira"
+      echo "        Type: CNAME"
+      echo "        Value: $DIFY_JIRA_CF_DOMAIN"
+      echo "        TTL: 600"
+    fi
+    echo ""
+    echo "  STEP 5: Wait for DNS Propagation (5-15 minutes)"
+    echo "    └─ Then access your custom domains:"
+    if [ "$INSTANCE_MGR_CF_CREATED" = true ]; then
+      echo "      • Instance Manager: $CUSTOM_URL/ui"
+    fi
+    if [ "$USER_MGMT_CF_CREATED" = true ]; then
+      echo "      • User Management: $USER_MGMT_CUSTOM_URL"
+    fi
+    if [ "$DIFY_JIRA_CF_CREATED" = true ]; then
+      echo "      • Dify Jira API: $DIFY_JIRA_CUSTOM_URL" + "/docs"
+    fi
+    echo ""
+  fi
   
   if [ "$WITH_POOL" = true ]; then
-    echo -e "\n\nEC2 Pool Information:"
+    echo -e "\n\nEMERGENCY MODE: EC2 Pool Information (created via Terraform):"
     echo "Pool Size: $POOL_SIZE instances"
-    terraform output pool_instance_ids
+    terraform output pool_instance_ids 2>/dev/null || echo "  (No instances created)"
+    terraform output pool_instance_private_ips 2>/dev/null || echo "  (No instances created)"
   fi
   
   echo -e "\n\nUse the User Management URL to create student accounts on demand"
-  echo -e "Use the Status URL to check the status of instances and users\n"
+  echo -e "Use the Status URL to check the status of instances and users"
+  echo -e "Use the Instance Manager URL to manage EC2 instances (UI at /ui)\n"
 fi 

@@ -223,14 +223,21 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                         <span>Admin Credentials</span>
                     </div>
                     <div class=\"credentials-info\">
-                        <div class=\"credential-row\">
+                        <div class=\"config-row\">
                             <span class=\"credential-label\">Username</span>
                             <span class=\"credential-value\">admin@dify.local</span>
+                            <button class=\"copy-btn\" onclick=\"copyToClipboard('admin@dify.local')\" title=\"Copy\"><i class=\"fas fa-copy\"></i></button>
                         </div>
-                        <div class=\"credential-row\">
-                            <span class=\"credential-label\">Password</span>
-                            <span class=\"credential-value\">AutomationSTAR2025</span>
-                        </div>
+                        <details>
+                            <summary style=\"cursor: pointer; font-weight: 600; color: var(--blue); margin: 8px 0; padding: 8px; background: #f7f8fa; border-radius: 6px; border: 1px solid #e0e0e0;\">
+                                <i class=\"fas fa-key\"></i> Show Password
+                            </summary>
+                            <div class=\"config-row\" style=\"margin-top: 8px;\">
+                                <span class=\"credential-label\">Password</span>
+                                <span class=\"credential-value\">AutomationSTAR2025</span>
+                                <button class=\"copy-btn\" onclick=\"copyToClipboard('AutomationSTAR2025')\" title=\"Copy\"><i class=\"fas fa-copy\"></i></button>
+                            </div>
+                        </details>
                     </div>
                 </div>
             </div>
@@ -617,6 +624,23 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                         .then(res => res.json())
                         .then(data => {{
                             pollCount++;
+                            
+                            // Check if reassignment is needed (instance was deleted/terminated)
+                            if (data.reassign_needed) {{
+                                console.log('[Testus Patronus] Instance was deleted/terminated, triggering reassignment. Reason:', data.reason);
+                                statusMsg.textContent = 'Your previous instance was deleted. Reassigning a new instance...';
+                                // Stop polling
+                                pollCount = 999; // Prevent further polling
+                                // Clear the instance_id cookie to force reassignment
+                                setCookie('testus_patronus_instance_id', '', -1);
+                                setCookie('testus_patronus_ip', '', -1);
+                                // Reload the page to trigger reassignment in user_management Lambda
+                                setTimeout(() => {{
+                                    window.location.href = window.location.origin + window.location.pathname;
+                                }}, 1500);
+                                return;
+                            }}
+                            
                             if (data.ready && data.ip) {{
                                 difyLink.href = 'http://' + data.ip;
                                 difyLink.textContent = 'http://' + data.ip;
@@ -634,6 +658,7 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                             }}
                         }})
                         .catch(err => {{
+                            console.error('[Testus Patronus] Error polling status:', err);
                             statusMsg.textContent = 'Checking instance status...';
                             if (pollCount < 60) setTimeout(pollStatus, 5000);
                         }});
@@ -855,7 +880,11 @@ def lambda_handler(event, context):
         logger.info(f"Lambda handler invoked. Event: {json.dumps(event)}")
         # Check if it's a GET request
         if event['requestContext']['http']['method'] == 'GET':
-            path = event['requestContext']['http']['path']
+            # Normalize path - handle empty paths and trailing slashes
+            path = event['requestContext']['http']['path'] or '/'
+            # Remove trailing slash except for root
+            if path != '/' and path.endswith('/'):
+                path = path.rstrip('/')
             logger.info(f"Received request for path: {path}")
             
             if path == '/destroy':
@@ -897,31 +926,59 @@ def lambda_handler(event, context):
                             'Content-Type': 'application/json'
                         }
                     }
-            elif path == '/':
+            elif path == '/' or path == '' or path == '/index.html':
                 headers = event.get('headers', {}) or {}
-                cookies = headers.get('cookie', '')
                 user_name = None
-                # Parse cookies
-                for cookie in cookies.split(';'):
-                    if cookie.strip().startswith('testus_patronus_user='):
-                        user_name = cookie.strip().split('=', 1)[1]
-                        break
+                
+                # Lambda Function URL events have a 'cookies' array - use that first
+                cookies_list = event.get('cookies', [])
+                if cookies_list:
+                    for cookie in cookies_list:
+                        if cookie.startswith('testus_patronus_user='):
+                            cookie_value = cookie.split('=', 1)[1].strip()
+                            user_name = urllib.parse.unquote(cookie_value)
+                            logger.info(f"Found user in cookies array: {user_name}")
+                            break
+                
+                # Fallback to parsing cookie header
+                if not user_name:
+                    cookies = headers.get('cookie', '') or headers.get('Cookie', '')
+                    if cookies:
+                        for cookie in cookies.split(';'):
+                            cookie = cookie.strip()
+                            if cookie.startswith('testus_patronus_user='):
+                                cookie_value = cookie.split('=', 1)[1].strip()
+                                user_name = urllib.parse.unquote(cookie_value)
+                                logger.info(f"Found user in cookie header: {user_name}")
+                                break
+                
                 # Fallback to query param if needed
                 if not user_name:
                     query_params = event.get('queryStringParameters', {}) or {}
                     user_name = query_params.get('user_name')
+                
                 if user_name:
                     logger.info(f"[Azure Config] Reload path for user: {user_name}")
                     # Try to look up the user in DynamoDB
-                    response = table.query(
-                        IndexName='student_name-index',
-                        KeyConditionExpression='student_name = :sn',
-                        ExpressionAttributeValues={':sn': user_name}
-                    )
-                    if response['Items']:
+                    try:
+                        logger.info(f"Querying DynamoDB for user: {user_name}")
+                        response = table.query(
+                            IndexName='student_name-index',
+                            KeyConditionExpression='student_name = :sn',
+                            ExpressionAttributeValues={':sn': user_name}
+                        )
+                        logger.info(f"DynamoDB query response: {len(response.get('Items', []))} items found")
+                    except Exception as e:
+                        logger.error(f"Error querying DynamoDB for user {user_name}: {str(e)}", exc_info=True)
+                        response = {'Items': []}
+                    
+                    if response.get('Items'):
+                        # User found in DynamoDB - return existing assignment
+                        logger.info(f"User {user_name} found in DynamoDB")
                         user_info = response['Items'][0]
                         user_info['user_name'] = user_info.get('student_name', user_name)
                         user_info['instance_id'] = user_info.get('instance_id')
+                        
                         # Check EC2 instance status
                         if user_info['instance_id']:
                             try:
@@ -929,35 +986,204 @@ def lambda_handler(event, context):
                                 instance_response = ec2.describe_instances(
                                     InstanceIds=[user_info['instance_id']]
                                 )
-                                instance = instance_response['Reservations'][0]['Instances'][0]
-                                state = instance['State']['Name']
-                                if state in ['running', 'pending']:
-                                    user_info['ec2_ip'] = instance.get('PublicIpAddress')
-                                elif state == 'stopped':
-                                    ec2.start_instances(InstanceIds=[user_info['instance_id']])
-                                    user_info['instance_error'] = 'Instance is starting...'
+                                
+                                # Safely check if instance exists in response
+                                reservations = instance_response.get('Reservations', [])
+                                if not reservations or len(reservations) == 0:
+                                    logger.warning(f"Instance {user_info['instance_id']} not found in EC2 (no reservations)")
+                                    # Instance doesn't exist - clean up old record and assign a new one
+                                    old_instance_id = user_info['instance_id']
+                                    try:
+                                        # Delete the old DynamoDB record for the terminated instance
+                                        try:
+                                            table.delete_item(Key={'instance_id': old_instance_id})
+                                            logger.info(f"Deleted old DynamoDB record for terminated instance {old_instance_id}")
+                                        except Exception as delete_error:
+                                            logger.warning(f"Could not delete old DynamoDB record: {str(delete_error)}")
+                                        
+                                        # Assign a new instance
+                                        assignment_result = assign_ec2_instance_to_student(user_name)
+                                        logger.info(f"Re-assigned instance: {assignment_result}")
+                                        user_info['instance_id'] = assignment_result['instance_id']
+                                        user_info['ec2_ip'] = assignment_result.get('public_ip')
+                                    except Exception as assign_error:
+                                        logger.error(f"Failed to re-assign instance: {str(assign_error)}")
+                                        user_info['instance_error'] = f'Previous instance was terminated. Failed to assign new instance: {str(assign_error)}'
                                 else:
-                                    user_info['instance_error'] = f'Instance is {state}. Please try again.'
+                                    instances = reservations[0].get('Instances', [])
+                                    if not instances or len(instances) == 0:
+                                        logger.warning(f"Instance {user_info['instance_id']} has no instances in reservation")
+                                        # Instance doesn't exist - clean up and reassign
+                                        old_instance_id = user_info['instance_id']
+                                        try:
+                                            table.delete_item(Key={'instance_id': old_instance_id})
+                                            logger.info(f"Deleted old DynamoDB record for instance with no instances")
+                                            assignment_result = assign_ec2_instance_to_student(user_name)
+                                            logger.info(f"Re-assigned instance: {assignment_result}")
+                                            user_info['instance_id'] = assignment_result['instance_id']
+                                            user_info['ec2_ip'] = assignment_result.get('public_ip')
+                                        except Exception as assign_error:
+                                            logger.error(f"Failed to re-assign instance: {str(assign_error)}")
+                                            user_info['instance_error'] = f'Instance not found. Failed to assign new instance: {str(assign_error)}'
+                                    else:
+                                        instance = instances[0]
+                                        state = instance['State']['Name']
+                                        if state in ['running', 'pending']:
+                                            user_info['ec2_ip'] = instance.get('PublicIpAddress')
+                                        elif state == 'stopped':
+                                            ec2.start_instances(InstanceIds=[user_info['instance_id']])
+                                            user_info['instance_error'] = 'Instance is starting...'
+                                        elif state == 'terminated':
+                                            # Instance was terminated - clean up and assign a new one
+                                            old_instance_id = user_info['instance_id']
+                                            logger.warning(f"Instance {old_instance_id} is terminated, assigning new instance")
+                                            try:
+                                                # Delete the old DynamoDB record for the terminated instance
+                                                try:
+                                                    table.delete_item(Key={'instance_id': old_instance_id})
+                                                    logger.info(f"Deleted old DynamoDB record for terminated instance {old_instance_id}")
+                                                except Exception as delete_error:
+                                                    logger.warning(f"Could not delete old DynamoDB record: {str(delete_error)}")
+                                                
+                                                # Assign a new instance
+                                                assignment_result = assign_ec2_instance_to_student(user_name)
+                                                logger.info(f"Re-assigned instance after termination: {assignment_result}")
+                                                user_info['instance_id'] = assignment_result['instance_id']
+                                                user_info['ec2_ip'] = assignment_result.get('public_ip')
+                                            except Exception as assign_error:
+                                                logger.error(f"Failed to re-assign instance after termination: {str(assign_error)}")
+                                                user_info['instance_error'] = f'Previous instance was terminated. Failed to assign new instance: {str(assign_error)}'
+                                        else:
+                                            user_info['instance_error'] = f'Instance is {state}. Please try again.'
+                            except ClientError as e:
+                                error_code = e.response.get('Error', {}).get('Code', '')
+                                if error_code == 'InvalidInstanceID.NotFound':
+                                    logger.warning(f"Instance {user_info['instance_id']} not found (InvalidInstanceID.NotFound)")
+                                    # Instance doesn't exist - clean up old record and assign a new one
+                                    old_instance_id = user_info['instance_id']
+                                    try:
+                                        # Delete the old DynamoDB record for the non-existent instance
+                                        try:
+                                            table.delete_item(Key={'instance_id': old_instance_id})
+                                            logger.info(f"Deleted old DynamoDB record for non-existent instance {old_instance_id}")
+                                        except Exception as delete_error:
+                                            logger.warning(f"Could not delete old DynamoDB record: {str(delete_error)}")
+                                        
+                                        # Assign a new instance
+                                        assignment_result = assign_ec2_instance_to_student(user_name)
+                                        logger.info(f"Re-assigned instance after InvalidInstanceID: {assignment_result}")
+                                        user_info['instance_id'] = assignment_result['instance_id']
+                                        user_info['ec2_ip'] = assignment_result.get('public_ip')
+                                    except Exception as assign_error:
+                                        logger.error(f"Failed to re-assign instance: {str(assign_error)}")
+                                        user_info['instance_error'] = f'Previous instance was not found. Failed to assign new instance: {str(assign_error)}'
+                                else:
+                                    logger.error(f"Error checking instance status: {str(e)}", exc_info=True)
+                                    # For any other ClientError, try to reassign
+                                    old_instance_id = user_info.get('instance_id')
+                                    if old_instance_id:
+                                        try:
+                                            table.delete_item(Key={'instance_id': old_instance_id})
+                                            logger.info(f"Deleted old DynamoDB record after ClientError")
+                                            assignment_result = assign_ec2_instance_to_student(user_name)
+                                            logger.info(f"Re-assigned instance after ClientError: {assignment_result}")
+                                            user_info['instance_id'] = assignment_result['instance_id']
+                                            user_info['ec2_ip'] = assignment_result.get('public_ip')
+                                        except Exception as assign_error:
+                                            logger.error(f"Failed to re-assign instance: {str(assign_error)}")
+                                            user_info['instance_error'] = f'Error checking instance status: {str(e)}. Failed to assign new instance: {str(assign_error)}'
+                                    else:
+                                        user_info['instance_error'] = f'Error checking instance status: {str(e)}'
                             except Exception as e:
-                                logger.error(f"Error checking instance status: {str(e)}")
-                                user_info['instance_error'] = 'Error checking instance status'
-                        # Always load Azure LLM configurations (even if instance is ready)
+                                logger.error(f"Error checking instance status: {str(e)}", exc_info=True)
+                                # For any other exception, try to reassign
+                                old_instance_id = user_info.get('instance_id')
+                                if old_instance_id:
+                                    try:
+                                        table.delete_item(Key={'instance_id': old_instance_id})
+                                        logger.info(f"Deleted old DynamoDB record after exception")
+                                        assignment_result = assign_ec2_instance_to_student(user_name)
+                                        logger.info(f"Re-assigned instance after exception: {assignment_result}")
+                                        user_info['instance_id'] = assignment_result['instance_id']
+                                        user_info['ec2_ip'] = assignment_result.get('public_ip')
+                                    except Exception as assign_error:
+                                        logger.error(f"Failed to re-assign instance: {str(assign_error)}")
+                                        user_info['instance_error'] = f'Error checking instance status: {str(e)}. Failed to assign new instance: {str(assign_error)}'
+                                else:
+                                    user_info['instance_error'] = f'Error checking instance status: {str(e)}'
+                        else:
+                            # User exists in DynamoDB but no instance assigned - try to assign one
+                            try:
+                                assignment_result = assign_ec2_instance_to_student(user_name)
+                                logger.info(f"Assignment result for existing user: {assignment_result}")
+                                user_info['instance_id'] = assignment_result['instance_id']
+                                user_info['ec2_ip'] = assignment_result.get('public_ip')
+                            except Exception as e:
+                                logger.error(f"Failed to assign instance to existing user: {str(e)}")
+                                user_info['instance_error'] = str(e)
+                        
+                        # Always load Azure LLM configurations
                         try:
                             azure_configs = get_secret()
                             user_info['azure_configs'] = azure_configs
-                            logger.info(f"[Azure Config] For user {user_name}, loaded {len(azure_configs)} configs: {azure_configs}")
-                            if not azure_configs:
-                                logger.warning(f"[Azure Config] No LLM configs available for user {user_name} (reload path)")
+                            logger.info(f"[Azure Config] For user {user_name}, loaded {len(azure_configs)} configs")
                         except Exception as e:
                             logger.error(f"Error loading Azure configurations: {str(e)}")
                             user_info['azure_configs'] = []
+                        
                         html_content = generate_html_response(user_info=user_info, error_message=None, status_lambda_url=status_lambda_url)
                         return {
                             'statusCode': 200,
                             'body': html_content,
                             'headers': {'Content-Type': 'text/html'}
                         }
-                # No user_name or not found: create a new user as before
+                    else:
+                        # User found in cookie but NOT in DynamoDB - check if IAM user exists
+                        logger.info(f"User {user_name} not found in DynamoDB (Items: {response.get('Items', [])}), checking IAM")
+                        try:
+                            if user_exists(user_name):
+                                logger.info(f"User {user_name} exists in IAM but not in DynamoDB - creating assignment")
+                                # User exists in IAM, reuse it and assign instance
+                                user_info = {
+                                    'user_name': user_name,
+                                    'account_id': ACCOUNT_ID,
+                                    'login_url': f"https://{ACCOUNT_ID}.signin.aws.amazon.com/console"
+                                }
+                                
+                                # Assign EC2 instance
+                                try:
+                                    assignment_result = assign_ec2_instance_to_student(user_name)
+                                    logger.info(f"Assignment result: {assignment_result}")
+                                    user_info['instance_id'] = assignment_result['instance_id']
+                                    user_info['ec2_ip'] = assignment_result.get('public_ip')
+                                except Exception as e:
+                                    logger.error(f"Failed to assign instance: {str(e)}")
+                                    user_info['instance_error'] = str(e)
+                                
+                                # Load Azure configs
+                                try:
+                                    azure_configs = get_secret()
+                                    user_info['azure_configs'] = azure_configs
+                                except Exception as e:
+                                    logger.error(f"Error loading Azure configurations: {str(e)}")
+                                    user_info['azure_configs'] = []
+                                
+                                html_content = generate_html_response(user_info=user_info, error_message=None, status_lambda_url=status_lambda_url)
+                                return {
+                                    'statusCode': 200,
+                                    'body': html_content,
+                                    'headers': {'Content-Type': 'text/html'}
+                                }
+                            else:
+                                # Cookie has invalid user, create new one (this should rarely happen)
+                                logger.warning(f"User {user_name} in cookie doesn't exist in IAM or DynamoDB, creating new user")
+                                # Fall through to create new user below
+                        except Exception as e:
+                            logger.error(f"Error checking IAM user existence: {str(e)}", exc_info=True)
+                            logger.warning(f"Exception during IAM check, falling through to create new user")
+                            # Fall through to create new user below
+                
+                # No user_name in cookie or cookie user invalid: create a new user
                 logger.info(f"[Azure Config] New user path")
                 user_info = create_user()
                 # Always load Azure LLM configurations for new users as well

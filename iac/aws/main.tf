@@ -1,8 +1,13 @@
-locals {
-  lambda_function_name = "lambda-${var.classroom_name}-${var.environment}"
-  s3_bucket_name       = "s3-${var.classroom_name}-${var.environment}"
+# Provider for us-east-1 (required for CloudFront ACM certificates)
+provider "aws" {
+  alias  = "us_east_1"
+  region = "us-east-1"
 }
 
+# Data source for current AWS account
+data "aws_caller_identity" "current" {}
+
+# IAM Module for User Restrictions (existing)
 module "iam" {
   source = "./iam"
 
@@ -11,578 +16,125 @@ module "iam" {
   region      = var.region
 }
 
-# IAM Role for Lambda Execution
-resource "aws_iam_role" "lambda_role" {
-  name = "classroom-lambda-execution-role-${var.environment}"
+# IAM Lambda Module - Lambda Execution Role
+# Note: We pass both ARN and name - name is used for count check (to avoid dependency issues),
+# ARN is used in the actual policy
+module "iam_lambda" {
+  source = "./modules/iam-lambda"
 
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "lambda.amazonaws.com"
-        }
-      }
-    ]
-  })
-
-  tags = {
-    Environment = var.environment
-    Owner       = var.owner
-    Project     = "classroom"
-  }
+  environment              = var.environment
+  owner                    = var.owner
+  account_id               = data.aws_caller_identity.current.account_id
+  # Allow access to both Azure LLM configs and instance manager password secrets
+  secrets_manager_secret_arn = "arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:azure/llm/configs*"
+  instance_manager_password_secret_arn = module.storage.instance_manager_password_secret_arn
+  instance_manager_password_secret_name = module.storage.instance_manager_password_secret_name
 }
 
-# DynamoDB table for instance assignments
-resource "aws_dynamodb_table" "instance_assignments" {
-  name         = "instance-assignments-${var.environment}"
-  billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "instance_id"
+# Storage Module - DynamoDB, SSM Parameters, and Secrets Manager
+module "storage" {
+  source = "./modules/storage"
 
-  attribute {
-    name = "instance_id"
-    type = "S"
-  }
-
-  attribute {
-    name = "student_name"
-    type = "S"
-  }
-
-  global_secondary_index {
-    name            = "student_name-index"
-    hash_key        = "student_name"
-    projection_type = "ALL"
-  }
-
-  tags = {
-    Environment = var.environment
-    Owner       = var.owner
-    Project     = "classroom"
-  }
+  environment                        = var.environment
+  owner                             = var.owner
+  instance_stop_timeout_minutes     = var.instance_stop_timeout_minutes
+  instance_terminate_timeout_minutes = var.instance_terminate_timeout_minutes
+  instance_hard_terminate_timeout_minutes = var.hard_terminate_timeout_minutes
+  instance_manager_password         = var.instance_manager_password
 }
 
-# Parameter Store parameters for instance timeouts
-resource "aws_ssm_parameter" "instance_stop_timeout" {
-  name        = "/classroom/${var.environment}/instance_stop_timeout_minutes"
-  description = "Timeout in minutes before stopping unassigned running instances"
-  type        = "String"
-  value       = "60" # 1 hours
-  tags = {
-    Environment = var.environment
-    Owner       = var.owner
-    Project     = "classroom"
-  }
+# Compute Module - EC2 Instances, Security Groups, EC2 IAM
+module "compute" {
+  source = "./modules/compute"
+
+  environment         = var.environment
+  owner               = var.owner
+  ec2_pool_size       = var.ec2_pool_size
+  ec2_ami_id          = var.ec2_ami_id
+  ec2_instance_type   = var.ec2_instance_type
+  ec2_subnet_id       = var.ec2_subnet_id
+  user_data_script_path = "${path.module}/user_data.sh"
 }
 
-resource "aws_ssm_parameter" "instance_terminate_timeout" {
-  name        = "/classroom/${var.environment}/instance_terminate_timeout_minutes"
-  description = "Timeout in minutes before terminating stopped instances"
-  type        = "String"
-  value       = "20"
-  tags = {
-    Environment = var.environment
-    Owner       = var.owner
-    Project     = "classroom"
-  }
+# Lambda Module - All Lambda Functions
+# The module handles the dependency: status Lambda is created first, then user_management uses its URL
+module "lambda" {
+  source = "./modules/lambda"
+
+  environment              = var.environment
+  owner                    = var.owner
+  classroom_name           = var.classroom_name
+  region                   = var.region
+  lambda_role_arn          = module.iam_lambda.lambda_role_arn
+  status_lambda_url        = ""  # Module will use its own status URL internally
+  subnet_id                = module.compute.subnet_id
+  security_group_ids       = [module.compute.security_group_id]
+  iam_instance_profile_name = module.compute.ec2_iam_instance_profile_name
+  instance_type            = var.ec2_instance_type
+  admin_cleanup_interval_days = var.admin_cleanup_interval_days
+  admin_cleanup_schedule   = var.admin_cleanup_schedule
+  functions_path           = "../../functions/packages"
+  instance_manager_password_secret_name = module.storage.instance_manager_password_secret_name
 }
 
-resource "aws_ssm_parameter" "instance_hard_terminate_timeout" {
-  name        = "/classroom/${var.environment}/instance_hard_terminate_timeout_minutes"
-  description = "Timeout in minutes before hard terminating any instance"
-  type        = "String"
-  value       = "240" # 4 hours
-  tags = {
-    Environment = var.environment
-    Owner       = var.owner
-    Project     = "classroom"
-  }
+# Monitoring Module - CloudWatch Events
+module "monitoring" {
+  source = "./modules/monitoring"
+
+  environment                = var.environment
+  stop_old_instances_lambda_arn = module.lambda.stop_old_instances_function_arn
+  admin_cleanup_lambda_arn   = module.lambda.admin_cleanup_function_arn
+  admin_cleanup_schedule     = var.admin_cleanup_schedule
 }
 
-# Update Lambda IAM policy to allow SSM Parameter Store access
-resource "aws_iam_role_policy" "lambda_iam_policy" {
-  name = "LambdaIAMManagementPolicy"
-  role = aws_iam_role.lambda_role.id
+# CloudFront Module - Custom Domain and CDN for Instance Manager
+module "cloudfront_instance_manager" {
+  source = "./modules/cloudfront"
 
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "iam:CreateUser",
-          "iam:DeleteUser",
-          "iam:GetUser",
-          "iam:CreateAccessKey",
-          "iam:DeleteAccessKey",
-          "iam:ListUsers",
-          "iam:ListAccessKeys",
-          "iam:PutUserPolicy",
-          "iam:AttachUserPolicy",
-          "s3:PutObject",
-          "s3:GetObject",
-          "s3:ListBucket",
-          "iam:*",
-          "tag:*",
-          "resource-groups:*",
-          "logs:CreateLogGroup",
-          "logs:CreateLogStream",
-          "logs:PutLogEvents",
-          "ssm:*",
-          "ec2:StartInstances",
-          "ec2:StopInstances",
-          "ec2:TerminateInstances",
-          "ec2:DescribeInstances",
-          "ec2:CreateTags",
-          "ec2:DescribeInstanceStatus",
-          "ec2:DescribeTags",
-          "ec2:ModifyInstanceAttribute",
-          "dynamodb:PutItem",
-          "dynamodb:GetItem",
-          "dynamodb:UpdateItem",
-          "dynamodb:DeleteItem",
-          "dynamodb:Query",
-          "dynamodb:Scan",
-          "ssm:GetParameter",
-          "ssm:GetParameters"
-        ]
-        Resource = "*"
-      },
-      {
-        Effect   = "Allow"
-        Action   = "iam:PassRole"
-        Resource = "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/*"
-      }
-    ]
-  })
-}
-
-# Add AWS Managed Policy for Lambda Basic Execution
-resource "aws_iam_role_policy_attachment" "lambda_basic" {
-  role       = aws_iam_role.lambda_role.name
-  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
-}
-
-# Lambda Function
-resource "aws_lambda_function" "user_management" {
-  filename         = "../../functions/packages/testus_patronus_user_management.zip"
-  function_name    = local.lambda_function_name
-  role             = aws_iam_role.lambda_role.arn
-  handler          = "testus_patronus_user_management.lambda_handler"
-  runtime          = "python3.9"
-  timeout          = 60
-  memory_size      = 256
-  package_type     = "Zip"
-  source_code_hash = filebase64sha256("../../functions/packages/testus_patronus_user_management.zip")
-
-  environment {
-    variables = {
-      ENVIRONMENT       = var.environment
-      STATUS_LAMBDA_URL = aws_lambda_function_url.status_lambda_url.function_url
-    }
+  providers = {
+    aws.us_east_1 = aws.us_east_1
   }
 
-  tags = {
-    Environment = var.environment
-    Owner       = var.owner
-    Project     = "classroom"
+  environment      = var.environment
+  owner            = var.owner
+  domain_name      = "ec2-management.testingfantasy.com"
+  lambda_function_url = module.lambda.instance_manager_url
+  # Set to true only after DNS validation records are added to GoDaddy
+  # After adding the DNS record, wait 5-10 minutes, then set this to true and run terraform apply
+  # ⚠️  Temporarily set to false to avoid CNAME conflict - update DNS first, then set to true
+  wait_for_certificate_validation = true
+}
+
+# CloudFront Module - Custom Domain and CDN for User Management
+module "cloudfront_user_management" {
+  source = "./modules/cloudfront"
+
+  providers = {
+    aws.us_east_1 = aws.us_east_1
   }
 
-  depends_on = [
-    aws_iam_role_policy_attachment.lambda_basic,
-    aws_iam_role_policy.lambda_iam_policy,
-    aws_iam_role.lambda_role,
-    aws_lambda_function.status_lambda,
-    aws_lambda_function_url.status_lambda_url
-  ]
+  environment      = var.environment
+  owner            = var.owner
+  domain_name      = "testus-patronus.testingfantasy.com"
+  lambda_function_url = module.lambda.user_management_url
+  # Set to true only after DNS validation records are added to GoDaddy
+  # After adding the DNS record, wait 5-10 minutes, then set this to true and run terraform apply
+  wait_for_certificate_validation = false
 }
 
-# Lambda Function URL
-resource "aws_lambda_function_url" "create_user_url" {
-  function_name      = aws_lambda_function.user_management.function_name
-  authorization_type = "NONE"
+# CloudFront Module - Custom Domain and CDN for Dify Jira API
+module "cloudfront_dify_jira" {
+  source = "./modules/cloudfront"
 
-  cors {
-    allow_credentials = true
-    allow_headers     = ["*"]
-    allow_methods     = ["GET", "POST"]
-    allow_origins     = ["*"]
-    expose_headers    = ["*"]
-    max_age           = 86400
-  }
-}
-
-# Data source for current AWS account
-data "aws_caller_identity" "current" {}
-
-# Data source for latest Amazon Linux 2 AMI
-data "aws_ami" "amazon_linux_2" {
-  most_recent = true
-  owners      = ["amazon"]
-
-  filter {
-    name   = "name"
-    values = ["amzn2-ami-hvm-*-x86_64-gp2"]
+  providers = {
+    aws.us_east_1 = aws.us_east_1
   }
 
-  filter {
-    name   = "virtualization-type"
-    values = ["hvm"]
-  }
-}
-
-# IAM Role for EC2 instances
-resource "aws_iam_role" "ec2_ssm_role" {
-  name = "ec2-ssm-role-${var.environment}"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Action = "sts:AssumeRole"
-        Effect = "Allow"
-        Principal = {
-          Service = "ec2.amazonaws.com"
-        }
-      }
-    ]
-  })
-
-  tags = {
-    Environment = var.environment
-    Owner       = var.owner
-    Project     = "classroom"
-  }
-}
-
-# Attach SSM policy to EC2 role
-resource "aws_iam_role_policy_attachment" "ssm_policy" {
-  role       = aws_iam_role.ec2_ssm_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
-}
-
-# Create instance profile
-resource "aws_iam_instance_profile" "ec2_ssm_profile" {
-  name = "ec2-ssm-profile-${var.environment}"
-  role = aws_iam_role.ec2_ssm_role.name
-}
-
-# EC2 Pool Instances - Minimal Cost Configuration
-resource "aws_instance" "classroom_pool" {
-  count                  = var.ec2_pool_size
-  ami                    = data.aws_ami.amazon_linux_2.id
-  instance_type          = var.ec2_instance_type
-  vpc_security_group_ids = [aws_security_group.classroom_sg.id]
-  subnet_id              = data.aws_subnet.default.id
-  iam_instance_profile   = aws_iam_instance_profile.ec2_ssm_profile.name
-
-  # Force replacement when user_data changes
-  user_data_replace_on_change = true
-  user_data = file("${path.module}/user_data.sh")
-
-  root_block_device {
-    volume_size           = 40
-    volume_type           = "gp3"
-    delete_on_termination = true
-  }
-
-  metadata_options {
-    http_tokens   = "required"
-    http_endpoint = "enabled"
-  }
-
-  # Use the external user_data.sh file instead of inline script
-  # user_data = file("${path.module}/user_data.sh") # This line is now redundant due to user_data_replace_on_change
-
-  tags = {
-    Name        = "classroom-pool-${count.index}"
-    Status      = "available"
-    Project     = "classroom"
-    Environment = var.environment
-    Owner       = var.owner
-    Type        = "pool"
-  }
-
-  lifecycle {
-    create_before_destroy = true
-  }
-}
-
-
-# Output the instance IDs for reference
-output "pool_instance_ids" {
-  description = "IDs of the EC2 instances in the pool"
-  value       = aws_instance.classroom_pool[*].id
-}
-
-# Output the instance private IPs for reference
-output "pool_instance_private_ips" {
-  description = "Private IPs of the EC2 instances in the pool"
-  value       = aws_instance.classroom_pool[*].private_ip
-}
-
-resource "aws_lambda_function" "status_lambda" {
-  filename         = "../../functions/packages/testus_patronus_status.zip"
-  function_name    = "status-lambda-${var.classroom_name}-${var.environment}"
-  role             = aws_iam_role.lambda_role.arn
-  handler          = "testus_patronus_status.lambda_handler"
-  runtime          = "python3.9"
-  timeout          = 30
-  memory_size      = 128
-  package_type     = "Zip"
-  source_code_hash = filebase64sha256("../../functions/packages/testus_patronus_status.zip")
-
-  environment {
-    variables = {
-      ENVIRONMENT = var.environment
-    }
-  }
-
-  tags = {
-    Environment = var.environment
-    Owner       = var.owner
-    Project     = "classroom"
-  }
-
-  depends_on = [
-    aws_iam_role_policy_attachment.lambda_basic,
-    aws_iam_role_policy.lambda_iam_policy,
-    aws_iam_role.lambda_role
-  ]
-}
-
-resource "aws_lambda_function_url" "status_lambda_url" {
-  function_name      = aws_lambda_function.status_lambda.function_name
-  authorization_type = "NONE"
-
-  cors {
-    allow_credentials = true
-    allow_headers     = ["*"]
-    allow_methods     = ["GET"]
-    allow_origins     = ["*"]
-    expose_headers    = ["*"]
-    max_age           = 86400
-  }
-}
-
-output "status_lambda_url" {
-  description = "The URL of the status Lambda function"
-  value       = aws_lambda_function_url.status_lambda_url.function_url
-}
-
-resource "aws_lambda_function" "stop_old_instances" {
-  filename         = "../../functions/packages/testus_patronus_stop_old_instances.zip"
-  function_name    = "stop-old-instances-${var.classroom_name}-${var.environment}"
-  role             = aws_iam_role.lambda_role.arn
-  handler          = "testus_patronus_stop_old_instances.lambda_handler"
-  runtime          = "python3.9"
-  timeout          = 300
-  memory_size      = 256
-  package_type     = "Zip"
-  source_code_hash = filebase64sha256("../../functions/packages/testus_patronus_stop_old_instances.zip")
-
-  environment {
-    variables = {
-      ENVIRONMENT      = var.environment
-      PARAMETER_PREFIX = "/classroom/${var.environment}"
-    }
-  }
-
-  tags = {
-    Environment = var.environment
-    Owner       = var.owner
-    Project     = "classroom"
-  }
-
-  depends_on = [
-    aws_iam_role_policy_attachment.lambda_basic,
-    aws_iam_role_policy.lambda_iam_policy,
-    aws_iam_role.lambda_role
-  ]
-}
-
-resource "aws_cloudwatch_event_rule" "stop_old_instances_schedule" {
-  name                = "stop-old-instances-schedule-${var.environment}"
-  schedule_expression = "rate(10 minutes)" # or use cron() for more control
-  description         = "Stop EC2 instances running for more than 3 hours"
-}
-
-resource "aws_cloudwatch_event_target" "stop_old_instances_target" {
-  rule      = aws_cloudwatch_event_rule.stop_old_instances_schedule.name
-  target_id = "stop-old-instances-lambda"
-  arn       = aws_lambda_function.stop_old_instances.arn
-}
-
-resource "aws_lambda_permission" "allow_eventbridge_stop_old_instances" {
-  statement_id  = "AllowExecutionFromEventBridgeStopOldInstances"
-  action        = "lambda:InvokeFunction"
-  function_name = aws_lambda_function.stop_old_instances.function_name
-  principal     = "events.amazonaws.com"
-  source_arn    = aws_cloudwatch_event_rule.stop_old_instances_schedule.arn
-}
-
-resource "aws_iam_policy" "lambda_secretsmanager_policy" {
-  name        = "lambda-secretsmanager-policy"
-  description = "Allow Lambda to get Azure LLM configs from Secrets Manager"
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Effect = "Allow"
-        Action = [
-          "secretsmanager:GetSecretValue"
-        ]
-        Resource = "arn:aws:secretsmanager:eu-west-3:087559609246:secret:azure/llm/configs*"
-      }
-    ]
-  })
-}
-
-resource "aws_iam_role_policy_attachment" "lambda_secretsmanager_attach" {
-  role       = aws_iam_role.lambda_role.name
-  policy_arn = aws_iam_policy.lambda_secretsmanager_policy.arn
-}
-
-# Data source for default VPC (FREE - uses existing AWS infrastructure)
-data "aws_vpc" "default" {
-  default = true
-}
-
-# Data source for default subnet (FREE)
-data "aws_subnet" "default" {
-  vpc_id            = data.aws_vpc.default.id
-  availability_zone = data.aws_availability_zones.available.names[0]
-}
-
-# Data source for available AZs
-data "aws_availability_zones" "available" {
-  state = "available"
-}
-
-# Minimal Security Group (FREE)
-resource "aws_security_group" "classroom_sg" {
-  name_prefix = "classroom-sg-${var.environment}-"
-  vpc_id      = data.aws_vpc.default.id
-  description = "Minimal security group for classroom EC2 instances"
-
-  # SSH access (optional - remove if you only want SSM access)
-  ingress {
-    description = "SSH"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # HTTP access (for web applications)
-  ingress {
-    description = "HTTP"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # HTTPS access (for secure web applications)
-  ingress {
-    description = "HTTPS"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  # All outbound traffic (needed for package downloads, SSM, etc.)
-  egress {
-    description = "All outbound traffic"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  tags = {
-    Name        = "classroom-sg-${var.environment}"
-    Environment = var.environment
-    Owner       = var.owner
-    Project     = "classroom"
-  }
-}
-
-# Minimal network outputs
-output "vpc_id" {
-  description = "ID of the default VPC being used"
-  value       = data.aws_vpc.default.id
-}
-
-output "subnet_id" {
-  description = "ID of the default subnet being used"
-  value       = data.aws_subnet.default.id
-}
-
-output "security_group_id" {
-  description = "ID of the classroom security group"
-  value       = aws_security_group.classroom_sg.id
-}
-
-# dify_jira API Lambda Function
-resource "aws_lambda_function" "dify_jira_api" {
-  filename         = "../../functions/packages/dify_jira_api.zip"
-  function_name    = "dify-jira-api-${var.classroom_name}-${var.environment}"
-  role             = aws_iam_role.lambda_role.arn
-  handler          = "dify_jira_api.lambda_handler"
-  runtime          = "python3.9"
-  timeout          = 300  # 5 minutes for ingestion operations
-  memory_size      = 1024  # 1GB for processing large datasets
-  package_type     = "Zip"
-  source_code_hash = filebase64sha256("../../functions/packages/dify_jira_api.zip")
-
-  environment {
-    variables = {
-      ENVIRONMENT = var.environment
-      CLASSROOM_NAME = var.classroom_name
-    }
-  }
-
-  tags = {
-    Environment = var.environment
-    Owner       = var.owner
-    Project     = "classroom"
-    Service     = "dify-jira-api"
-  }
-
-  depends_on = [
-    aws_iam_role_policy_attachment.lambda_basic,
-    aws_iam_role_policy.lambda_iam_policy,
-    aws_iam_role.lambda_role
-  ]
-}
-
-# Lambda Function URL for dify_jira API
-resource "aws_lambda_function_url" "dify_jira_api_url" {
-  function_name      = aws_lambda_function.dify_jira_api.function_name
-  authorization_type = "NONE"
-  invoke_mode        = "BUFFERED"
-
-  cors {
-    allow_credentials = true
-    allow_headers     = ["*"]
-    allow_methods     = [
-      "GET",
-      "POST", 
-      "PUT",
-      "DELETE"
-    ]
-    allow_origins     = ["*"]
-    expose_headers    = ["*"]
-    max_age           = 86400
-  }
-}
-
-# Output the dify_jira API URL
-output "dify_jira_api_url" {
-  description = "The URL of the dify_jira API Lambda function"
-  value       = aws_lambda_function_url.dify_jira_api_url.function_url
+  environment      = var.environment
+  owner            = var.owner
+  domain_name      = "dify-jira.testingfantasy.com"
+  lambda_function_url = module.lambda.dify_jira_api_url
+  # Set to true only after DNS validation records are added to GoDaddy
+  # After adding the DNS record, wait 5-10 minutes, then set this to true and run terraform apply
+  wait_for_certificate_validation = true
 }
