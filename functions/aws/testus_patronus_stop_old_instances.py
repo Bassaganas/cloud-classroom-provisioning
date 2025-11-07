@@ -442,25 +442,25 @@ def lambda_handler(event, context):
                 'statusCode': 200,
                 'body': json.dumps({'message': 'No instances to process'})
             }
-        
+            
         results = []
         
         # Process pool instances
         if pool_instance_ids:
             logger.info(f"Found {len(pool_instance_ids)} pool instances to process")
-            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-                future_to_instance = {
-                    executor.submit(process_instance, instance_id, ec2_client, ssm_client, table): instance_id
-                    for instance_id in pool_instance_ids
-                }
-                for future in concurrent.futures.as_completed(future_to_instance):
-                    instance_id = future_to_instance[future]
-                    try:
-                        result = future.result()
-                        results.append(result)
-                    except Exception as e:
-                        logger.error(f"Error processing pool instance {instance_id}: {str(e)}")
-                        results.append({'instance_id': instance_id, 'status': 'error', 'error': str(e)})
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            future_to_instance = {
+                executor.submit(process_instance, instance_id, ec2_client, ssm_client, table): instance_id
+                for instance_id in pool_instance_ids
+            }
+            for future in concurrent.futures.as_completed(future_to_instance):
+                instance_id = future_to_instance[future]
+                try:
+                    result = future.result()
+                    results.append(result)
+                except Exception as e:
+                    logger.error(f"Error processing pool instance {instance_id}: {str(e)}")
+                    results.append({'instance_id': instance_id, 'status': 'error', 'error': str(e)})
         
         # Process admin instances
         if admin_instance_ids:
@@ -469,15 +469,15 @@ def lambda_handler(event, context):
                 future_to_instance = {
                     executor.submit(process_admin_instance, instance_id, ec2_client, table): instance_id
                     for instance_id in admin_instance_ids
-                }
-                for future in concurrent.futures.as_completed(future_to_instance):
-                    instance_id = future_to_instance[future]
-                    try:
-                        result = future.result()
-                        results.append(result)
-                    except Exception as e:
-                        logger.error(f"Error processing admin instance {instance_id}: {str(e)}")
-                        results.append({'instance_id': instance_id, 'status': 'error', 'error': str(e)})
+            }
+            for future in concurrent.futures.as_completed(future_to_instance):
+                instance_id = future_to_instance[future]
+                try:
+                    result = future.result()
+                    results.append(result)
+                except Exception as e:
+                    logger.error(f"Error processing admin instance {instance_id}: {str(e)}")
+                    results.append({'instance_id': instance_id, 'status': 'error', 'error': str(e)})
                     
         successful = sum(1 for r in results if r['status'] in ['stopped', 'terminated', 'hard_terminated', 'deleted'])
         failed = len(results) - successful

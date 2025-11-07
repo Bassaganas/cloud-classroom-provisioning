@@ -35,6 +35,26 @@ status_lambda_url = os.environ.get('STATUS_LAMBDA_URL')
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
+def create_cookie_headers(user_info):
+    """Create Set-Cookie headers for user session information"""
+    cookies = []
+    max_age = 7 * 24 * 60 * 60  # 7 days in seconds
+    
+    if user_info.get('user_name'):
+        user_cookie = f"testus_patronus_user={urllib.parse.quote(user_info['user_name'])}; Path=/; Max-Age={max_age}; Secure; SameSite=Lax"
+        cookies.append(user_cookie)
+    
+    if user_info.get('instance_id'):
+        instance_cookie = f"testus_patronus_instance_id={urllib.parse.quote(user_info['instance_id'])}; Path=/; Max-Age={max_age}; Secure; SameSite=Lax"
+        cookies.append(instance_cookie)
+    
+    if user_info.get('ec2_ip'):
+        ip_cookie = f"testus_patronus_ip={urllib.parse.quote(user_info['ec2_ip'])}; Path=/; Max-Age={max_age}; Secure; SameSite=Lax"
+        cookies.append(ip_cookie)
+    
+    # Return as a list for multi-value headers (Lambda Function URLs support this)
+    return cookies
+
 def get_secret():
     """Retrieve Azure OpenAI configuration from AWS Secrets Manager"""
     secret_name = "azure/llm/configs"
@@ -667,14 +687,24 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                 if (userCookie) {{
                     // We have a user, always start polling
                     console.log('[Testus Patronus] User found in cookies, starting status polling');
+                    // Ensure instance_id cookie is set if we have it in the response
+                    var instanceId = "{user_info.get('instance_id', '')}";
+                    if (instanceId && !instanceIdCookie) {{
+                        setCookie('testus_patronus_instance_id', instanceId, 7);
+                        console.log('[Testus Patronus] Stored instance_id in cookie from response:', instanceId);
+                    }}
                     // Start polling immediately
                     pollStatus();
                 }} else {{
                     // No user in cookies, let backend/user creation logic run as normal
                     console.log('[Testus Patronus] No user in cookies, proceeding with normal logic.');
-                    // After assignment, store the user in cookies if not already present
+                    // After assignment, store the user and instance_id in cookies if not already present
                     setCookie('testus_patronus_user', "{user_info['user_name']}", 7);
-                    setCookie('testus_patronus_instance_id', "{user_info.get('instance_id', '')}", 7);
+                    var instanceId = "{user_info.get('instance_id', '')}";
+                    if (instanceId) {{
+                        setCookie('testus_patronus_instance_id', instanceId, 7);
+                        console.log('[Testus Patronus] Stored instance_id in cookie:', instanceId);
+                    }}
                     // Start polling for new assignments
                     pollStatus();
                 }}
@@ -929,6 +959,7 @@ def lambda_handler(event, context):
             elif path == '/' or path == '' or path == '/index.html':
                 headers = event.get('headers', {}) or {}
                 user_name = None
+                instance_id_from_cookie = None
                 
                 # Lambda Function URL events have a 'cookies' array - use that first
                 cookies_list = event.get('cookies', [])
@@ -938,10 +969,13 @@ def lambda_handler(event, context):
                             cookie_value = cookie.split('=', 1)[1].strip()
                             user_name = urllib.parse.unquote(cookie_value)
                             logger.info(f"Found user in cookies array: {user_name}")
-                            break
+                        elif cookie.startswith('testus_patronus_instance_id='):
+                            cookie_value = cookie.split('=', 1)[1].strip()
+                            instance_id_from_cookie = urllib.parse.unquote(cookie_value)
+                            logger.info(f"Found instance_id in cookies array: {instance_id_from_cookie}")
                 
                 # Fallback to parsing cookie header
-                if not user_name:
+                if not user_name or not instance_id_from_cookie:
                     cookies = headers.get('cookie', '') or headers.get('Cookie', '')
                     if cookies:
                         for cookie in cookies.split(';'):
@@ -950,27 +984,146 @@ def lambda_handler(event, context):
                                 cookie_value = cookie.split('=', 1)[1].strip()
                                 user_name = urllib.parse.unquote(cookie_value)
                                 logger.info(f"Found user in cookie header: {user_name}")
-                                break
+                            elif cookie.startswith('testus_patronus_instance_id='):
+                                cookie_value = cookie.split('=', 1)[1].strip()
+                                instance_id_from_cookie = urllib.parse.unquote(cookie_value)
+                                logger.info(f"Found instance_id in cookie header: {instance_id_from_cookie}")
                 
                 # Fallback to query param if needed
                 if not user_name:
                     query_params = event.get('queryStringParameters', {}) or {}
                     user_name = query_params.get('user_name')
                 
+                # If we have instance_id from cookie, verify it first before querying DynamoDB
+                if user_name and instance_id_from_cookie:
+                    logger.info(f"Found instance_id {instance_id_from_cookie} in cookie for user {user_name}, verifying instance")
+                    try:
+                        ec2 = boto3.client('ec2', region_name=REGION)
+                        instance_response = ec2.describe_instances(InstanceIds=[instance_id_from_cookie])
+                        
+                        reservations = instance_response.get('Reservations', [])
+                        if reservations and len(reservations) > 0:
+                            instances = reservations[0].get('Instances', [])
+                            if instances and len(instances) > 0:
+                                instance = instances[0]
+                                instance_state = instance['State']['Name']
+                                # Check if instance is assigned to this user
+                                tags = {tag['Key']: tag['Value'] for tag in instance.get('Tags', [])}
+                                student_tag = tags.get('Student', '')
+                                
+                                # Exclude terminated and shutting-down instances
+                                if instance_state not in ['terminated', 'shutting-down'] and instance_state in ['running', 'pending', 'stopped'] and student_tag == user_name:
+                                    logger.info(f"Instance {instance_id_from_cookie} is valid and assigned to {user_name}")
+                                    # Get assignment from DynamoDB or create user_info from instance
+                                    try:
+                                        response = table.get_item(Key={'instance_id': instance_id_from_cookie})
+                                        if 'Item' in response:
+                                            user_info = response['Item']
+                                            user_info['user_name'] = user_info.get('student_name', user_name)
+                                            user_info['instance_id'] = instance_id_from_cookie
+                                            user_info['ec2_ip'] = instance.get('PublicIpAddress')
+                                        else:
+                                            # Instance exists but no DynamoDB record - create one
+                                            logger.warning(f"Instance {instance_id_from_cookie} exists but no DynamoDB record, creating one")
+                                            user_info = {
+                                                'user_name': user_name,
+                                                'instance_id': instance_id_from_cookie,
+                                                'ec2_ip': instance.get('PublicIpAddress'),
+                                                'account_id': ACCOUNT_ID,
+                                                'login_url': f"https://{ACCOUNT_ID}.signin.aws.amazon.com/console"
+                                            }
+                                            # Try to create DynamoDB record
+                                            try:
+                                                table.put_item(Item={
+                                                    'instance_id': instance_id_from_cookie,
+                                                    'student_name': user_name,
+                                                    'assigned_at': datetime.utcnow().isoformat(),
+                                                    'status': 'starting' if instance_state == 'pending' else ('running' if instance_state == 'running' else 'stopped')
+                                                })
+                                            except Exception as db_error:
+                                                logger.warning(f"Could not create DynamoDB record: {str(db_error)}")
+                                    except Exception as db_error:
+                                        logger.error(f"Error getting DynamoDB record: {str(db_error)}")
+                                        # Fallback to instance info
+                                        user_info = {
+                                            'user_name': user_name,
+                                            'instance_id': instance_id_from_cookie,
+                                            'ec2_ip': instance.get('PublicIpAddress'),
+                                            'account_id': ACCOUNT_ID,
+                                            'login_url': f"https://{ACCOUNT_ID}.signin.aws.amazon.com/console"
+                                        }
+                                    
+                                    # Load Azure configs
+                                    try:
+                                        azure_configs = get_secret()
+                                        user_info['azure_configs'] = azure_configs
+                                    except Exception as e:
+                                        logger.error(f"Error loading Azure configurations: {str(e)}")
+                                        user_info['azure_configs'] = []
+                                    
+                                    html_content = generate_html_response(user_info=user_info, error_message=None, status_lambda_url=status_lambda_url)
+                                    headers = {'Content-Type': 'text/html'}
+                                    cookie_headers = create_cookie_headers(user_info)
+                                    response = {
+                                        'statusCode': 200,
+                                        'body': html_content,
+                                        'headers': headers
+                                    }
+                                    if cookie_headers:
+                                        # Lambda Function URLs support multiple Set-Cookie headers via multiValueHeaders
+                                        response['multiValueHeaders'] = {'Set-Cookie': cookie_headers}
+                                    return response
+                                elif instance_state in ['terminated', 'shutting-down']:
+                                    logger.warning(f"Instance {instance_id_from_cookie} is {instance_state}, cannot be reused")
+                                    # Instance is terminated - clear cookie and continue to find/create new assignment
+                                    instance_id_from_cookie = None
+                                else:
+                                    logger.warning(f"Instance {instance_id_from_cookie} state={instance_state}, student_tag={student_tag}, not assigned to {user_name}")
+                                    # Instance exists but not assigned to this user or in wrong state - clear cookie and continue
+                                    instance_id_from_cookie = None
+                            else:
+                                logger.warning(f"Instance {instance_id_from_cookie} not found in reservations")
+                                instance_id_from_cookie = None
+                        else:
+                            logger.warning(f"Instance {instance_id_from_cookie} not found (no reservations)")
+                            instance_id_from_cookie = None
+                    except ClientError as e:
+                        error_code = e.response.get('Error', {}).get('Code', '')
+                        if error_code == 'InvalidInstanceID.NotFound':
+                            logger.warning(f"Instance {instance_id_from_cookie} not found (InvalidInstanceID.NotFound)")
+                            instance_id_from_cookie = None
+                        else:
+                            logger.error(f"Error checking instance {instance_id_from_cookie}: {str(e)}")
+                            instance_id_from_cookie = None
+                    except Exception as e:
+                        logger.error(f"Error verifying instance from cookie: {str(e)}")
+                        instance_id_from_cookie = None
+                
                 if user_name:
                     logger.info(f"[Azure Config] Reload path for user: {user_name}")
-                    # Try to look up the user in DynamoDB
-                    try:
-                        logger.info(f"Querying DynamoDB for user: {user_name}")
-                        response = table.query(
-                            IndexName='student_name-index',
-                            KeyConditionExpression='student_name = :sn',
-                            ExpressionAttributeValues={':sn': user_name}
-                        )
-                        logger.info(f"DynamoDB query response: {len(response.get('Items', []))} items found")
-                    except Exception as e:
-                        logger.error(f"Error querying DynamoDB for user {user_name}: {str(e)}", exc_info=True)
-                        response = {'Items': []}
+                    # Try to look up the user in DynamoDB with retry for eventual consistency
+                    response = {'Items': []}
+                    max_retries = 3
+                    for retry in range(max_retries):
+                        try:
+                            logger.info(f"Querying DynamoDB for user: {user_name} (attempt {retry + 1}/{max_retries})")
+                            response = table.query(
+                                IndexName='student_name-index',
+                                KeyConditionExpression='student_name = :sn',
+                                ExpressionAttributeValues={':sn': user_name}
+                            )
+                            logger.info(f"DynamoDB query response: {len(response.get('Items', []))} items found")
+                            if response.get('Items'):
+                                break  # Found items, no need to retry
+                            elif retry < max_retries - 1:
+                                # Wait a bit for eventual consistency
+                                time.sleep(0.5)
+                        except Exception as e:
+                            logger.error(f"Error querying DynamoDB for user {user_name} (attempt {retry + 1}): {str(e)}", exc_info=True)
+                            if retry < max_retries - 1:
+                                time.sleep(0.5)
+                            else:
+                                response = {'Items': []}
                     
                     if response.get('Items'):
                         # User found in DynamoDB - return existing assignment
@@ -1132,18 +1285,112 @@ def lambda_handler(event, context):
                             user_info['azure_configs'] = []
                         
                         html_content = generate_html_response(user_info=user_info, error_message=None, status_lambda_url=status_lambda_url)
-                        return {
+                        headers = {'Content-Type': 'text/html'}
+                        cookie_headers = create_cookie_headers(user_info)
+                        response = {
                             'statusCode': 200,
                             'body': html_content,
-                            'headers': {'Content-Type': 'text/html'}
+                            'headers': headers
                         }
+                        if cookie_headers:
+                            response['multiValueHeaders'] = {'Set-Cookie': cookie_headers}
+                        return response
                     else:
-                        # User found in cookie but NOT in DynamoDB - check if IAM user exists
-                        logger.info(f"User {user_name} not found in DynamoDB (Items: {response.get('Items', [])}), checking IAM")
+                        # User found in cookie but NOT in DynamoDB - check if IAM user exists and if instance is already assigned
+                        logger.info(f"User {user_name} not found in DynamoDB (Items: {response.get('Items', [])}), checking IAM and EC2")
+                        # Note: 'response' here refers to the DynamoDB query response, not the HTTP response
+                        # Check EC2 for existing instances assigned to this user (regardless of IAM user existence)
+                        # This handles cases where the user was deleted but the instance still exists
+                        logger.info(f"Checking EC2 for instances assigned to {user_name}")
+                        ec2 = boto3.client('ec2', region_name=REGION)
+                        filters = [
+                            {'Name': 'tag:Student', 'Values': [user_name]},
+                            {'Name': 'tag:Type', 'Values': ['pool']},
+                            {'Name': 'instance-state-name', 'Values': ['running', 'pending', 'stopped']}
+                        ]
+                        instance_response = ec2.describe_instances(Filters=filters)
+                        
+                        existing_instance = None
+                        for reservation in instance_response.get('Reservations', []):
+                            for inst in reservation.get('Instances', []):
+                                # Verify the instance is actually assigned to this user and not terminated
+                                instance_state = inst['State']['Name']
+                                if instance_state in ['terminated', 'shutting-down']:
+                                    continue  # Skip terminated instances
+                                tags = {tag['Key']: tag['Value'] for tag in inst.get('Tags', [])}
+                                if tags.get('Student') == user_name:
+                                    existing_instance = inst
+                                    break
+                            if existing_instance:
+                                break
+                        
+                        if existing_instance:
+                            # Found an existing instance assigned to this user - reuse it
+                            instance_id = existing_instance['InstanceId']
+                            instance_state = existing_instance['State']['Name']
+                            logger.info(f"Found existing instance {instance_id} assigned to {user_name} (state: {instance_state})")
+                            
+                            # Check if IAM user exists - if not, we'll need to handle it
+                            iam_user_exists = user_exists(user_name)
+                            if not iam_user_exists:
+                                logger.warning(f"User {user_name} doesn't exist in IAM but has instance {instance_id} assigned - instance will be reused but user needs to be recreated")
+                                # For now, we'll reuse the instance but the user won't have IAM access
+                                # This is a recovery scenario
+                            
+                            # Create or update DynamoDB record
+                            try:
+                                table.put_item(Item={
+                                    'instance_id': instance_id,
+                                    'student_name': user_name,
+                                    'assigned_at': datetime.utcnow().isoformat(),
+                                    'status': 'starting' if instance_state == 'pending' else ('running' if instance_state == 'running' else 'stopped')
+                                })
+                                logger.info(f"Created/updated DynamoDB record for instance {instance_id}")
+                            except Exception as db_error:
+                                logger.warning(f"Could not create DynamoDB record: {str(db_error)}")
+                            
+                            user_info = {
+                                'user_name': user_name,
+                                'instance_id': instance_id,
+                                'ec2_ip': existing_instance.get('PublicIpAddress'),
+                                'account_id': ACCOUNT_ID,
+                                'login_url': f"https://{ACCOUNT_ID}.signin.aws.amazon.com/console"
+                            }
+                            
+                            # Start instance if it's stopped
+                            if instance_state == 'stopped':
+                                try:
+                                    ec2.start_instances(InstanceIds=[instance_id])
+                                    logger.info(f"Started stopped instance {instance_id}")
+                                    user_info['instance_error'] = 'Instance is starting...'
+                                except Exception as start_error:
+                                    logger.error(f"Failed to start instance: {str(start_error)}")
+                                    user_info['instance_error'] = f'Failed to start instance: {str(start_error)}'
+                            
+                            # Load Azure configs
+                            try:
+                                azure_configs = get_secret()
+                                user_info['azure_configs'] = azure_configs
+                            except Exception as e:
+                                logger.error(f"Error loading Azure configurations: {str(e)}")
+                                user_info['azure_configs'] = []
+                            
+                            html_content = generate_html_response(user_info=user_info, error_message=None, status_lambda_url=status_lambda_url)
+                            headers = {'Content-Type': 'text/html'}
+                            cookie_headers = create_cookie_headers(user_info)
+                            response = {
+                                'statusCode': 200,
+                                'body': html_content,
+                                'headers': headers
+                            }
+                            if cookie_headers:
+                                response['multiValueHeaders'] = {'Set-Cookie': cookie_headers}
+                            return response
+                        
+                        # No existing instance found - check if IAM user exists
                         try:
                             if user_exists(user_name):
-                                logger.info(f"User {user_name} exists in IAM but not in DynamoDB - creating assignment")
-                                # User exists in IAM, reuse it and assign instance
+                                logger.info(f"User {user_name} exists in IAM but no EC2 instance found - creating new assignment")
                                 user_info = {
                                     'user_name': user_name,
                                     'account_id': ACCOUNT_ID,
@@ -1169,14 +1416,20 @@ def lambda_handler(event, context):
                                     user_info['azure_configs'] = []
                                 
                                 html_content = generate_html_response(user_info=user_info, error_message=None, status_lambda_url=status_lambda_url)
-                                return {
+                                headers = {'Content-Type': 'text/html'}
+                                cookie_headers = create_cookie_headers(user_info)
+                                response = {
                                     'statusCode': 200,
                                     'body': html_content,
-                                    'headers': {'Content-Type': 'text/html'}
+                                    'headers': headers
                                 }
+                                if cookie_headers:
+                                    response['multiValueHeaders'] = {'Set-Cookie': cookie_headers}
+                                return response
                             else:
-                                # Cookie has invalid user, create new one (this should rarely happen)
-                                logger.warning(f"User {user_name} in cookie doesn't exist in IAM or DynamoDB, creating new user")
+                                # Cookie has invalid user (doesn't exist in IAM and no EC2 instance found)
+                                # This means the user was deleted - clear cookies and create new user
+                                logger.warning(f"User {user_name} in cookie doesn't exist in IAM and no EC2 instance found - user was likely deleted, creating new user")
                                 # Fall through to create new user below
                         except Exception as e:
                             logger.error(f"Error checking IAM user existence: {str(e)}", exc_info=True)
@@ -1197,11 +1450,16 @@ def lambda_handler(event, context):
                     logger.error(f"Error loading Azure configurations: {str(e)}")
                     user_info['azure_configs'] = []
                 html_content = generate_html_response(user_info=user_info, error_message=None, status_lambda_url=status_lambda_url)
-                return {
+                headers = {'Content-Type': 'text/html'}
+                cookie_headers = create_cookie_headers(user_info)
+                response = {
                     'statusCode': 200,
                     'body': html_content,
-                    'headers': {'Content-Type': 'text/html'}
+                    'headers': headers
                 }
+                if cookie_headers:
+                    response['multiValueHeaders'] = {'Set-Cookie': cookie_headers}
+                return response
             else:
                 logger.warning(f"Unknown path requested: {path}")
                 return {
@@ -1529,6 +1787,24 @@ def assign_ec2_instance_to_student(student_name):
                     )
                 except Exception as e:
                     logger.error(f"Failed to update DynamoDB status for instance {instance_id}: {str(e)}")
+                
+                # Ensure DynamoDB record exists before returning
+                # This helps prevent race conditions where the record might not be immediately queryable
+                try:
+                    # Verify the record exists
+                    verify_response = table.get_item(Key={'instance_id': instance_id})
+                    if 'Item' not in verify_response:
+                        logger.warning(f"DynamoDB record for {instance_id} not found after assignment, recreating")
+                        table.put_item(Item={
+                            'instance_id': instance_id,
+                            'student_name': student_name,
+                            'assigned_at': datetime.utcnow().isoformat(),
+                            'status': 'starting'
+                        })
+                    logger.info(f"Verified DynamoDB record exists for instance {instance_id}")
+                except Exception as e:
+                    logger.error(f"Error verifying DynamoDB record for {instance_id}: {str(e)}")
+                
                 return {
                     'instance_id': instance_id,
                     'status': 'starting'

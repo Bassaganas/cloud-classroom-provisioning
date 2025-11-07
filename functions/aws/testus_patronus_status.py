@@ -4,7 +4,7 @@ import os
 import requests
 import logging
 import time
-from botocore.exceptions import WaiterError
+from botocore.exceptions import WaiterError, ClientError
 from boto3.dynamodb.conditions import Key
 
 logger = logging.getLogger()
@@ -36,6 +36,15 @@ def check_instance_status(instance_id):
         instance_status = status['InstanceStatus']['Status']
         
         return system_status == 'ok' and instance_status == 'ok'
+    except ClientError as e:
+        error_code = e.response.get('Error', {}).get('Code', '')
+        if error_code == 'UnauthorizedOperation':
+            logger.warning(f"UnauthorizedOperation for DescribeInstanceStatus - permission may be missing, skipping status check")
+            # If we can't check status, assume it's ready if instance is running
+            # This is a fallback - the permission should be added to IAM
+            return None  # Return None to indicate we can't check, but don't fail
+        logger.error(f"Error checking instance status: {str(e)}")
+        return False
     except Exception as e:
         logger.error(f"Error checking instance status: {str(e)}")
         return False
@@ -244,14 +253,18 @@ def lambda_handler(event, context):
                 'body': json.dumps({'ready': False, 'reason': 'not_running'})
             }
 
-        # Check instance status
-        if not check_instance_status(instance_id):
+        # Check instance status (may return None if permission is missing)
+        status_check_result = check_instance_status(instance_id)
+        if status_check_result is False:
             logger.info(f"Instance {instance_id} status checks not passed yet")
             return {
                 'statusCode': 200,
                 'headers': {'Content-Type': 'application/json'},
                 'body': json.dumps({'ready': False})
             }
+        # If status_check_result is None, we couldn't check but continue anyway
+        if status_check_result is None:
+            logger.info(f"Instance {instance_id} status check unavailable (permission issue), continuing with other checks")
 
         # Check for public IP
         if not instance.public_ip_address:

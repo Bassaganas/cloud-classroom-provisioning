@@ -73,6 +73,7 @@ resource "aws_iam_role_policy" "lambda_iam_policy" {
           "ec2:RunInstances",
           "ec2:TerminateInstances",
           "ec2:DescribeInstances",
+          "ec2:DescribeInstanceStatus",
           "ec2:DescribeImages",
           "ec2:DescribeVpcs",
           "ec2:DescribeSubnets",
