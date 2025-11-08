@@ -155,62 +155,37 @@ class DifyIntegration:
             text_parts.append(f"Summary: {summary}\n\nJira Issue: {key}\nProject: {project}\nType: {issue_type}\nStatus: {status}\nAssignee: {assignee}\nCreated: {created}\nUpdated: {updated}\n\nDescription:\n{description}\n")
             text = "".join(text_parts)
             
-            # Create the document according to Dify 1.9.1 API specification
-            # Based on the working test, the required format is:
+            # Set your desired chunking config
+            # Use "###CHUNK###" as separator - this string doesn't exist in the text,
+            # so Dify won't find it and will keep the entire issue as a single chunk
+            # Dify requires max_tokens to be between 50 and 4000
+            # Since the separator doesn't exist, Dify will treat the entire text as one chunk
+            # even if it exceeds max_tokens (because it can't find the separator to split on)
+            max_tokens = 4000  # Maximum allowed by Dify API
+            chunk_overlap = 800  # Overlap to share context if splitting occurs
+            process_rule = {
+                "mode": "custom",
+                "rules": {
+                    "pre_processing_rules": [
+                        {"id": "remove_extra_spaces", "enabled": True},
+                        {"id": "remove_urls_emails", "enabled": False}
+                    ],
+                    "segmentation": {
+                        "separator": "###CHUNK###",
+                        "max_tokens": max_tokens,
+                        "chunk_overlap": chunk_overlap
+                    }
+                }
+            }
+            logger.info(f"[DIFY] Document '{key}': process_rule sent to Dify: {json.dumps(process_rule)}")
+            
+            # Create the document - keep it simple like the original to ensure single chunk per issue
             doc = {
                 "name": f"Jira Issue {key}",
                 "text": text,
                 "indexing_technique": "high_quality",
-                "doc_form": "text_model",
-                "doc_language": "English",
-                "process_rule": {
-                    "mode": "automatic",
-                    "rules": {
-                        "pre_processing_rules": [
-                            {
-                                "id": "remove_extra_spaces",
-                                "enabled": True
-                            }
-                        ],
-                        "segmentation": {
-                            "separator": "\n\n",
-                            "max_tokens": 2000
-                        },
-                        "parent_mode": "full-doc",
-                        "subchunk_segmentation": {
-                            "separator": "\n\n",
-                            "max_tokens": 2000,
-                            "chunk_overlap": 400
-                        }
-                    }
-                },
-                "retrieval_model": {
-                    "search_method": "hybrid_search",
-                    "reranking_enable": False,
-                    "top_k": 8,
-                    "score_threshold_enabled": True,
-                    "score_threshold": 0.5
-                }
+                "process_rule": process_rule
             }
-            
-            # Override process_rule for advanced_ingestion if needed
-            if advanced_ingestion:
-                # Use custom process rule for advanced ingestion
-                doc["process_rule"] = {
-                    "mode": "custom",
-                    "rules": {
-                        "pre_processing_rules": [
-                            {"id": "remove_extra_spaces", "enabled": True},
-                            {"id": "remove_urls_emails", "enabled": False}
-                        ],
-                        "segmentation": {
-                            "separator": "###CHUNK###",
-                            "max_tokens": 2000,
-                            "chunk_overlap": 400
-                        }
-                    }
-                }
-                logger.info(f"[DIFY] Document '{key}': using custom process_rule for advanced ingestion")
             
             logger.info(f"[DIFY] Full request body: {json.dumps(doc)}")
             return doc
@@ -230,6 +205,48 @@ class DifyIntegration:
             except (AttributeError, KeyError, TypeError):
                 continue
         return default
+
+    def _format_issue_metadata(self, issue: dict, document_id: str, metadata_id: str):
+        """Format metadata payload to attach issue_key to documents"""
+        # Handle both dictionary issues and objects with 'key' attribute
+        issue_key = issue.get('key') if isinstance(issue, dict) else (issue.key if hasattr(issue, 'key') else 'Unknown')
+        return {
+            "operation_data": [{
+                "document_id": document_id,
+                "metadata_list": [{
+                    "id": metadata_id,
+                    "value": issue_key,
+                    "name": "issue_key"
+                }]
+            }]
+        }
+    
+    def _enable_builtin_metadata(self):
+        """Enable built-in metadata (creation date, update date, document type) in Dify dataset"""
+        url = f"{self.base_url}/datasets/{self.dataset_id}/metadata/built-in/enable"
+        try:
+            logger.info(f"[DIFY] Enabling built-in metadata: POST {url}")
+            response = requests.post(url, headers=self.headers)
+            logger.info(f"[DIFY] Response {response.status_code}: {response.text}")
+            response.raise_for_status()
+            return response
+        except Exception as e:
+            logger.error(f"[DIFY] Error enabling built-in metadata: {e}\n{traceback.format_exc()}")
+            raise
+    
+    def _create_knowledge_metadata(self):
+        """Create custom metadata field named 'issue_key' in the dataset"""
+        url = f"{self.base_url}/datasets/{self.dataset_id}/metadata"
+        metadata = {"type": "string", "name": "issue_key"}
+        try:
+            logger.info(f"[DIFY] Creating knowledge metadata: POST {url} {metadata}")
+            response = requests.post(url, headers=self.headers, json=metadata)
+            logger.info(f"[DIFY] Response {response.status_code}: {response.text}")
+            response.raise_for_status()
+            return response
+        except Exception as e:
+            logger.error(f"[DIFY] Error creating knowledge metadata: {e}\n{traceback.format_exc()}")
+            raise
 
     def create_dataset(self, name: str = None, permission: str = "only_me", search_method: str = "hybrid_search", advanced_ingestion: bool = False) -> str:
         if name is None:
@@ -273,6 +290,18 @@ class DifyIntegration:
                 logger.debug(f"[DIFY] Raw JSON content: {content[:500]}...")
                 data = json.loads(content)
             
+            # Check if this is a summary file
+            if json_file_path.endswith('_SUMMARY.json'):
+                logger.info("[DIFY] Detected summary file, processing as multiple documents")
+                # If it's a list, use the first item as the summary dict
+                if isinstance(data, list):
+                    if len(data) == 0:
+                        raise ValueError("Summary file is an empty list!")
+                    summary_data = data[0]
+                else:
+                    summary_data = data
+                return self._ingest_summary_file(summary_data, json_file_path)
+            
             # Handle different data structures
             if isinstance(data, list):
                 logger.info(f"[DIFY] Processing list of {len(data)} items")
@@ -309,6 +338,17 @@ class DifyIntegration:
             logger.info(f"[DIFY] Base URL: {self.base_url}")
             logger.info(f"[DIFY] Headers: {json.dumps(self.headers, indent=2)}")
             logger.info(f"[DIFY] ===== INGESTION CONFIG =====")
+            
+            # Enable built-in metadata and create custom metadata field
+            try:
+                self._enable_builtin_metadata()
+                metadata_response = self._create_knowledge_metadata()
+                metadata_id = metadata_response.json()["id"]
+                logger.info(f"[DIFY] Created metadata with ID: {metadata_id}")
+            except Exception as metadata_error:
+                logger.warning(f"[DIFY] Could not set up metadata (may already exist): {str(metadata_error)}")
+                # Try to continue without metadata - it might already be set up
+                metadata_id = None
             
             for idx, issue in enumerate(issues, 1):
                 try:
@@ -369,6 +409,28 @@ class DifyIntegration:
                     responses.append(response_data)
                     logger.info(f"[DIFY] Successfully created document for issue {idx}")
                     
+                    # Extract document_id and attach metadata
+                    if metadata_id:
+                        try:
+                            document_id = response_data.get("document", {}).get("id")
+                            if not document_id:
+                                logger.warning(f"[DIFY] Could not extract document_id from response for issue {idx}")
+                            else:
+                                logger.info(f"[DIFY] Document created with ID: {document_id}")
+                                
+                                # Format and attach metadata
+                                metadata = self._format_issue_metadata(issue=issue, document_id=document_id, metadata_id=metadata_id)
+                                url_metadata = f"{self.base_url}/datasets/{self.dataset_id}/documents/metadata"
+                                logger.info(f"[DIFY] Attaching metadata: POST {url_metadata}")
+                                metadata_response = requests.post(url_metadata, headers=self.headers, json=metadata)
+                                logger.info(f"[DIFY] Metadata response {metadata_response.status_code}: {metadata_response.text}")
+                                metadata_response.raise_for_status()
+                                responses.append(metadata_response.json())
+                                logger.info(f"[DIFY] Successfully attached metadata for issue {idx}")
+                        except Exception as metadata_error:
+                            logger.warning(f"[DIFY] Could not attach metadata for issue {idx}: {str(metadata_error)}")
+                            # Continue processing even if metadata attachment fails
+                    
                 except requests.exceptions.RequestException as e:
                     error_msg = f"[DIFY] Request error processing issue {idx}: {str(e)}"
                     logger.error(f"{error_msg}")
@@ -383,12 +445,96 @@ class DifyIntegration:
                     
             logger.info(f"[DIFY] ===== INGESTION COMPLETE =====")
             logger.info(f"[DIFY] Total issues processed: {len(issues)}")
-            logger.info(f"[DIFY] Successfully created documents: {len(responses)}")
-            logger.info(f"[DIFY] Failed documents: {len(issues) - len(responses)}")
+            # If metadata is attached, each issue creates 2 responses (document + metadata)
+            # Otherwise, each issue creates 1 response
+            if metadata_id:
+                issues_processed = len(responses) // 2
+                logger.info(f"[DIFY] Successfully created documents: {issues_processed}")
+                logger.info(f"[DIFY] Failed documents: {len(issues) - issues_processed}")
+            else:
+                logger.info(f"[DIFY] Successfully created documents: {len(responses)}")
+                logger.info(f"[DIFY] Failed documents: {len(issues) - len(responses)}")
             logger.info(f"[DIFY] ===== END INGESTION =====")
             return responses
         except Exception as e:
             error_msg = f"[DIFY] Error in ingest_issues: {str(e)}"
+            logger.error(f"{error_msg}\n{traceback.format_exc()}")
+            raise
+
+    def _ingest_summary_file(self, data: dict, file_path: str) -> List[dict]:
+        """
+        Process a summary file as multiple documents, one for each major field
+        Uses the current Dify API contract (process_rule structure)
+        """
+        try:
+            logger.info("[DIFY] Formatting summary fields as separate documents")
+            project_name = Path(file_path).stem.replace('_SUMMARY', '')
+            fields = data.get('fields', {})
+            responses = []
+            url = f"{self.base_url}/datasets/{self.dataset_id}/document/create-by-text"
+            
+            # Define the fields to ingest and their descriptions
+            field_map = [
+                ("summary", f"Summary of the project {project_name} is:", fields.get("summary")),
+                ("contributors", f"Contributors of the project {project_name} are:", ", ".join(fields.get("contributors", []))),
+                ("assignees", f"Assignees of the project {project_name} are:", ", ".join(fields.get("assignees", []))),
+                ("reporters", f"Reporters of the project {project_name} are:", ", ".join(fields.get("reporters", []))),
+                ("issue_count", f"Issue count of the project {project_name} is:", str(fields.get("issue_count")) if fields.get("issue_count") is not None else None),
+                ("type", f"Type of the project {project_name} is:", str(fields.get("type")) if fields.get("type") else None),
+            ]
+            
+            for field, label, value in field_map:
+                if value and value.strip():
+                    text = f"{label}\n{value}"
+                    max_tokens, chunk_overlap = self._get_chunk_params(text)
+                    
+                    # Use the current Dify API contract (same structure as _format_issue_for_text)
+                    process_rule = {
+                        "mode": "automatic",
+                        "rules": {
+                            "pre_processing_rules": [
+                                {
+                                    "id": "remove_extra_spaces",
+                                    "enabled": True
+                                }
+                            ],
+                            "segmentation": {
+                                "separator": "\n\n",
+                                "max_tokens": max_tokens
+                            },
+                            "parent_mode": "full-doc",
+                            "subchunk_segmentation": {
+                                "separator": "\n\n",
+                                "max_tokens": max_tokens,
+                                "chunk_overlap": chunk_overlap
+                            }
+                        }
+                    }
+                    
+                    doc = {
+                        "name": f"{label[:60]}",
+                        "text": text,
+                        "indexing_technique": "high_quality",
+                        "doc_form": "text_model",
+                        "doc_language": "English",
+                        "process_rule": process_rule,
+                        "retrieval_model": {
+                            "search_method": "hybrid_search",
+                            "reranking_enable": False,
+                            "top_k": 8,
+                            "score_threshold_enabled": True,
+                            "score_threshold": 0.5
+                        }
+                    }
+                    logger.info(f"[DIFY] Creating document for field '{field}': POST {url}")
+                    logger.info(f"[DIFY] Full request body: {json.dumps(doc)}")
+                    response = requests.post(url, headers=self.headers, json=doc)
+                    logger.info(f"[DIFY] Create document response {response.status_code}: {response.text}")
+                    response.raise_for_status()
+                    responses.append(response.json())
+            return responses
+        except Exception as e:
+            error_msg = f"[DIFY] Error processing summary file: {str(e)}"
             logger.error(f"{error_msg}\n{traceback.format_exc()}")
             raise
 
@@ -482,10 +628,10 @@ def create_jira_ingestion(
     advanced_ingestion: bool = Query(False, description="Enable advanced ingestion (aliases and queries)?")
 ):
     """POST /jira/ingest - Ingest issues from JSON file into student's Dify instance"""
+    results = []
+    errors = []
     try:
         logger.info(f"Processing JSON file ingestion for Dify instance: {dify_config.dify_base_url}")
-        
-        # Project name is now required in the model, no need to check
         
         # Use student's specific Dify configuration
         dify = DifyIntegration(
@@ -500,25 +646,57 @@ def create_jira_ingestion(
         json_file_path = dataset_dir / f"{request.project}.json"
         
         if not json_file_path.exists():
-            raise HTTPException(status_code=404, detail=f"Project file not found: {request.project}.json")
+            error_msg = f"Project file not found: {request.project}.json"
+            logger.error(error_msg)
+            errors.append({"file": request.project, "error": error_msg})
+            return {
+                "success": False,
+                "dify_instance": dify_config.dify_base_url,
+                "files_processed": len(results),
+                "files_failed": len(errors),
+                "results": results,
+                "errors": errors
+            }
         
         logger.info(f"Starting JSON ingestion for file: {json_file_path}")
         
-        # Ingest the JSON file
-        result = dify.ingest_json_file(str(json_file_path), advanced_ingestion=advanced_ingestion)
-        
-        # Count the number of issues ingested
-        issues_ingested = len(result) if result else 0
+        try:
+            # Ingest the JSON file
+            result = dify.ingest_json_file(str(json_file_path), advanced_ingestion=advanced_ingestion)
+            
+            # Count the number of issues ingested
+            # If metadata is attached, each issue creates 2 responses (document + metadata)
+            # Otherwise, each issue creates 1 response
+            if result:
+                # Try to determine if metadata was attached by checking response count
+                # For now, we'll use a simple heuristic: if responses are even and > 0, assume metadata
+                issues_ingested = len(result) // 2 if len(result) % 2 == 0 and len(result) > 0 else len(result)
+            else:
+                issues_ingested = 0
+            
+            results.append({
+                "file": request.project,
+                "result": result,
+                "issues_ingested": issues_ingested
+            })
+            
+        except json.JSONDecodeError as e:
+            error_msg = f"Invalid JSON format in file {json_file_path}: {str(e)}"
+            logger.error(error_msg)
+            errors.append({"file": request.project, "error": error_msg})
+        except Exception as e:
+            error_msg = f"Error during Dify ingestion: {str(e)}"
+            logger.error(f"{error_msg}\n{traceback.format_exc()}")
+            errors.append({"file": request.project, "error": error_msg})
         
         return {
-            "success": True, 
+            "success": len(errors) == 0,
             "dify_instance": dify_config.dify_base_url,
-            "issues_ingested": issues_ingested,
-            "project": request.project,
-            "message": f"Successfully ingested {issues_ingested} issues from {request.project}.json"
+            "files_processed": len(results),
+            "files_failed": len(errors),
+            "results": results,
+            "errors": errors
         }
-    except HTTPException:
-        raise
     except Exception as e:
         logger.error(f"Error ingesting from JSON file: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

@@ -75,6 +75,15 @@ module "lambda" {
   admin_cleanup_schedule   = var.admin_cleanup_schedule
   functions_path           = "../../functions/packages"
   instance_manager_password_secret_name = module.storage.instance_manager_password_secret_name
+  skip_iam_user_creation   = var.skip_iam_user_creation
+  
+  # Lambda scaling and performance configuration
+  user_management_memory_size              = var.user_management_memory_size
+  user_management_timeout                  = var.user_management_timeout
+  user_management_provisioned_concurrency  = var.user_management_provisioned_concurrency
+  user_management_reserved_concurrency     = var.user_management_reserved_concurrency
+  instance_manager_memory_size            = var.instance_manager_memory_size
+  instance_manager_timeout                = var.instance_manager_timeout
 }
 
 # Monitoring Module - CloudWatch Events

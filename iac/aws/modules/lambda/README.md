@@ -11,6 +11,17 @@ This module manages all Lambda functions for the cloud classroom provisioning sy
 - **admin_cleanup**: Periodically cleans up admin instances based on age
 - **dify_jira_api**: API for Dify and Jira integration
 
+## Scaling and Performance
+
+This module supports several scaling options for Lambda functions:
+
+- **Memory/CPU**: Configurable memory size (more memory = more CPU)
+- **Timeout**: Configurable timeout for long-running operations
+- **Provisioned Concurrency**: Pre-warms execution environments to eliminate cold starts
+- **Reserved Concurrency**: Guarantees capacity and limits scaling
+
+See [LAMBDA_SCALING.md](./LAMBDA_SCALING.md) for detailed documentation on scaling options and recommendations.
+
 ## Dependencies
 
 - Requires `iam-lambda` module for execution role

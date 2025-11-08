@@ -29,6 +29,9 @@ ACCOUNT_ID = os.environ.get('AWS_ACCOUNT_ID', '087559609246')
 # Add this constant at the top of the file
 DESTROY_KEY = os.environ.get('DESTROY_KEY', 'default_destroy_key')
 
+# Skip IAM user creation if set to 'true' (useful for conference scenarios to avoid IAM rate limiting)
+SKIP_IAM_USER_CREATION = os.environ.get('SKIP_IAM_USER_CREATION', 'false').lower() == 'true'
+
 #Status Lambda URL
 status_lambda_url = os.environ.get('STATUS_LAMBDA_URL')
 
@@ -244,7 +247,7 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                     </div>
                     <div class=\"credentials-info\">
                         <div class=\"config-row\">
-                            <span class=\"credential-label\">Username</span>
+                            <span class=\"credential-label\">Username & Email</span>
                             <span class=\"credential-value\">admin@dify.local</span>
                             <button class=\"copy-btn\" onclick=\"copyToClipboard('admin@dify.local')\" title=\"Copy\"><i class=\"fas fa-copy\"></i></button>
                         </div>
@@ -1013,7 +1016,48 @@ def lambda_handler(event, context):
                                 
                                 # Exclude terminated and shutting-down instances
                                 if instance_state not in ['terminated', 'shutting-down'] and instance_state in ['running', 'pending', 'stopped'] and student_tag == user_name:
-                                    logger.info(f"Instance {instance_id_from_cookie} is valid and assigned to {user_name}")
+                                    logger.info(f"Instance {instance_id_from_cookie} is valid and assigned to {user_name} (state: {instance_state})")
+                                    
+                                    # Handle stopped instances - start them automatically
+                                    if instance_state == 'stopped':
+                                        logger.info(f"Instance {instance_id_from_cookie} is stopped, starting it automatically")
+                                        try:
+                                            start_response = ec2.start_instances(InstanceIds=[instance_id_from_cookie])
+                                            logger.info(f"Start instances response: {start_response}")
+                                            # Check if start was successful
+                                            if start_response.get('StartingInstances'):
+                                                starting_info = start_response['StartingInstances'][0]
+                                                logger.info(f"Instance {instance_id_from_cookie} start initiated. Current state: {starting_info.get('CurrentState', {}).get('Name', 'unknown')}")
+                                            
+                                            # Re-fetch instance state after starting (it may have transitioned to 'pending')
+                                            try:
+                                                updated_response = ec2.describe_instances(InstanceIds=[instance_id_from_cookie])
+                                                if updated_response.get('Reservations') and updated_response['Reservations'][0].get('Instances'):
+                                                    instance = updated_response['Reservations'][0]['Instances'][0]
+                                                    instance_state = instance['State']['Name']
+                                                    logger.info(f"Instance state after start command: {instance_state}")
+                                            except Exception as state_error:
+                                                logger.warning(f"Could not re-fetch instance state: {str(state_error)}")
+                                                # Assume it's starting
+                                                instance_state = 'pending'
+                                            
+                                            # Update DynamoDB status to 'starting'
+                                            try:
+                                                table.update_item(
+                                                    Key={'instance_id': instance_id_from_cookie},
+                                                    UpdateExpression='SET #status = :status',
+                                                    ExpressionAttributeNames={'#status': 'status'},
+                                                    ExpressionAttributeValues={':status': 'starting'}
+                                                )
+                                            except Exception as db_error:
+                                                logger.warning(f"Could not update DynamoDB status: {str(db_error)}")
+                                        except ClientError as start_error:
+                                            error_code = start_error.response.get('Error', {}).get('Code', '')
+                                            error_msg = start_error.response.get('Error', {}).get('Message', str(start_error))
+                                            logger.error(f"Failed to start stopped instance {instance_id_from_cookie}: {error_code} - {error_msg}")
+                                        except Exception as start_error:
+                                            logger.error(f"Failed to start stopped instance {instance_id_from_cookie}: {str(start_error)}", exc_info=True)
+                                    
                                     # Get assignment from DynamoDB or create user_info from instance
                                     try:
                                         response = table.get_item(Key={'instance_id': instance_id_from_cookie})
@@ -1021,24 +1065,44 @@ def lambda_handler(event, context):
                                             user_info = response['Item']
                                             user_info['user_name'] = user_info.get('student_name', user_name)
                                             user_info['instance_id'] = instance_id_from_cookie
-                                            user_info['ec2_ip'] = instance.get('PublicIpAddress')
+                                            # Set IP based on current instance state
+                                            if instance_state == 'running':
+                                                user_info['ec2_ip'] = instance.get('PublicIpAddress')
+                                                # Clear any previous error message since instance is now running
+                                                if 'instance_error' in user_info:
+                                                    del user_info['instance_error']
+                                                logger.info(f"Instance {instance_id_from_cookie} is running with IP: {user_info.get('ec2_ip')}")
+                                            elif instance_state == 'pending':
+                                                # Instance is starting (may have been started in previous request)
+                                                user_info['ec2_ip'] = None
+                                                user_info['instance_error'] = 'Instance is starting...'
+                                                logger.info(f"Instance {instance_id_from_cookie} is pending (starting)")
+                                            elif instance_state == 'stopped':
+                                                # Instance is stopped - should have been handled above, but just in case
+                                                user_info['ec2_ip'] = None
+                                                user_info['instance_error'] = 'Instance is starting...'
+                                                logger.warning(f"Instance {instance_id_from_cookie} is still stopped - may need to be started")
+                                            else:
+                                                user_info['ec2_ip'] = instance.get('PublicIpAddress')
                                         else:
                                             # Instance exists but no DynamoDB record - create one
                                             logger.warning(f"Instance {instance_id_from_cookie} exists but no DynamoDB record, creating one")
                                             user_info = {
                                                 'user_name': user_name,
                                                 'instance_id': instance_id_from_cookie,
-                                                'ec2_ip': instance.get('PublicIpAddress'),
+                                                'ec2_ip': instance.get('PublicIpAddress') if instance_state == 'running' else None,
                                                 'account_id': ACCOUNT_ID,
                                                 'login_url': f"https://{ACCOUNT_ID}.signin.aws.amazon.com/console"
                                             }
+                                            if instance_state in ['pending', 'stopped']:
+                                                user_info['instance_error'] = 'Instance is starting...'
                                             # Try to create DynamoDB record
                                             try:
                                                 table.put_item(Item={
                                                     'instance_id': instance_id_from_cookie,
                                                     'student_name': user_name,
                                                     'assigned_at': datetime.utcnow().isoformat(),
-                                                    'status': 'starting' if instance_state == 'pending' else ('running' if instance_state == 'running' else 'stopped')
+                                                    'status': 'starting' if instance_state in ['pending', 'stopped'] else ('running' if instance_state == 'running' else 'stopped')
                                                 })
                                             except Exception as db_error:
                                                 logger.warning(f"Could not create DynamoDB record: {str(db_error)}")
@@ -1048,10 +1112,12 @@ def lambda_handler(event, context):
                                         user_info = {
                                             'user_name': user_name,
                                             'instance_id': instance_id_from_cookie,
-                                            'ec2_ip': instance.get('PublicIpAddress'),
+                                            'ec2_ip': instance.get('PublicIpAddress') if instance_state == 'running' else None,
                                             'account_id': ACCOUNT_ID,
                                             'login_url': f"https://{ACCOUNT_ID}.signin.aws.amazon.com/console"
                                         }
+                                        if instance_state in ['pending', 'stopped']:
+                                            user_info['instance_error'] = 'Instance is starting...'
                                     
                                     # Load Azure configs
                                     try:
@@ -1331,7 +1397,12 @@ def lambda_handler(event, context):
                             logger.info(f"Found existing instance {instance_id} assigned to {user_name} (state: {instance_state})")
                             
                             # Check if IAM user exists - if not, we'll need to handle it
-                            iam_user_exists = user_exists(user_name)
+                            # Skip IAM check if SKIP_IAM_USER_CREATION is enabled
+                            if SKIP_IAM_USER_CREATION:
+                                logger.info(f"Skipping IAM user existence check (SKIP_IAM_USER_CREATION=true)")
+                                iam_user_exists = False  # Assume user doesn't exist in IAM when skipped
+                            else:
+                                iam_user_exists = user_exists(user_name)
                             if not iam_user_exists:
                                 logger.warning(f"User {user_name} doesn't exist in IAM but has instance {instance_id} assigned - instance will be reused but user needs to be recreated")
                                 # For now, we'll reuse the instance but the user won't have IAM access
@@ -1389,7 +1460,56 @@ def lambda_handler(event, context):
                         
                         # No existing instance found - check if IAM user exists
                         try:
-                            if user_exists(user_name):
+                            # Skip IAM check if SKIP_IAM_USER_CREATION is enabled
+                            if SKIP_IAM_USER_CREATION:
+                                logger.info(f"Skipping IAM user existence check (SKIP_IAM_USER_CREATION=true)")
+                                # When IAM is skipped, we should still reuse the user from cookie if they have a valid cookie
+                                # Since we already checked DynamoDB and EC2 above, if we reach here it means:
+                                # - No DynamoDB record found
+                                # - No EC2 instance assigned to this user
+                                # But we should still try to assign a new instance to this user (refresh scenario)
+                                # rather than creating a completely new user
+                                logger.info(f"User {user_name} from cookie - assigning new instance (IAM skipped mode)")
+                                user_info = {
+                                    'user_name': user_name,
+                                    'account_id': ACCOUNT_ID,
+                                    'login_url': f"https://{ACCOUNT_ID}.signin.aws.amazon.com/console",
+                                    'iam_user_skipped': True
+                                }
+                                
+                                # Assign EC2 instance
+                                try:
+                                    assignment_result = assign_ec2_instance_to_student(user_name)
+                                    logger.info(f"Assignment result: {assignment_result}")
+                                    user_info['instance_id'] = assignment_result['instance_id']
+                                    user_info['ec2_ip'] = assignment_result.get('public_ip')
+                                except Exception as e:
+                                    logger.error(f"Failed to assign instance: {str(e)}")
+                                    user_info['instance_error'] = str(e)
+                                
+                                # Load Azure configs
+                                try:
+                                    azure_configs = get_secret()
+                                    user_info['azure_configs'] = azure_configs
+                                except Exception as e:
+                                    logger.error(f"Error loading Azure configurations: {str(e)}")
+                                    user_info['azure_configs'] = []
+                                
+                                html_content = generate_html_response(user_info=user_info, error_message=None, status_lambda_url=status_lambda_url)
+                                headers = {'Content-Type': 'text/html'}
+                                cookie_headers = create_cookie_headers(user_info)
+                                response = {
+                                    'statusCode': 200,
+                                    'body': html_content,
+                                    'headers': headers
+                                }
+                                if cookie_headers:
+                                    response['multiValueHeaders'] = {'Set-Cookie': cookie_headers}
+                                return response
+                            else:
+                                iam_user_exists = user_exists(user_name)
+                            
+                            if iam_user_exists:
                                 logger.info(f"User {user_name} exists in IAM but no EC2 instance found - creating new assignment")
                                 user_info = {
                                     'user_name': user_name,
@@ -1508,9 +1628,12 @@ def create_user():
     suffix = os.urandom(4).hex()
     console_user_name = f"conference-user-{suffix}"
     logger.info(f"Generated user name: {console_user_name}")
-    if user_exists(console_user_name):
-        logger.warning("User already exists. Try again.")
-        raise Exception("User already exists. Try again.")
+    
+    # Only check if user exists if IAM creation is enabled
+    if not SKIP_IAM_USER_CREATION:
+        if user_exists(console_user_name):
+            logger.warning("User already exists. Try again.")
+            raise Exception("User already exists. Try again.")
 
     user = create_console_user(console_user_name, account_id)
 
@@ -1547,6 +1670,22 @@ def user_exists(user_name):
 
 def create_console_user(user_name, account_id):
     """Creates a console user with login profile."""
+    # Skip IAM operations if SKIP_IAM_USER_CREATION is enabled
+    # This avoids IAM rate limiting in conference scenarios
+    if SKIP_IAM_USER_CREATION:
+        logger.info(f"Skipping IAM user creation for {user_name} (SKIP_IAM_USER_CREATION=true)")
+        # Return minimal user info without IAM credentials
+        login_url = f"https://{account_id}.signin.aws.amazon.com/console"
+        account_info = {
+            'account_id': account_id,
+            'user_name': user_name,
+            'password': None,  # No password since IAM user not created
+            'login_url': login_url,
+            'iam_user_skipped': True  # Flag to indicate IAM was skipped
+        }
+        return account_info
+    
+    # Normal IAM user creation flow
     iam.create_user(UserName=user_name)
 
     # Generate a random password for the console user

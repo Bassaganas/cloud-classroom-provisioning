@@ -436,6 +436,73 @@ def list_instances(include_terminated=False):
             'error': str(e)
         }
 
+def stop_instances(instance_ids):
+    """
+    Stop EC2 instances (does not terminate them)
+    
+    Args:
+        instance_ids: List of instance IDs to stop
+    """
+    try:
+        if not instance_ids:
+            return {
+                'success': False,
+                'error': 'instance_ids is required'
+            }
+        
+        stopped = []
+        errors = []
+        
+        for instance_id in instance_ids:
+            try:
+                # Check instance state first
+                response = ec2.describe_instances(InstanceIds=[instance_id])
+                if not response.get('Reservations') or not response['Reservations'][0].get('Instances'):
+                    errors.append(f'{instance_id}: not found')
+                    continue
+                
+                instance = response['Reservations'][0]['Instances'][0]
+                state = instance['State']['Name']
+                
+                if state == 'stopped':
+                    stopped.append(instance_id)
+                    logger.info(f"Instance {instance_id} is already stopped")
+                elif state == 'stopping':
+                    stopped.append(instance_id)
+                    logger.info(f"Instance {instance_id} is already stopping")
+                elif state in ['running', 'pending']:
+                    # Stop the instance
+                    ec2.stop_instances(InstanceIds=[instance_id])
+                    stopped.append(instance_id)
+                    logger.info(f"Initiated stop for instance {instance_id} (state: {state})")
+                elif state in ['terminated', 'shutting-down']:
+                    errors.append(f'{instance_id}: cannot stop {state} instance')
+                else:
+                    errors.append(f'{instance_id}: invalid state {state}')
+                    
+            except ClientError as e:
+                if e.response['Error']['Code'] == 'InvalidInstanceID.NotFound':
+                    errors.append(f'{instance_id}: not found')
+                else:
+                    errors.append(f'{instance_id}: {str(e)}')
+                    logger.error(f"Error stopping instance {instance_id}: {str(e)}")
+            except Exception as e:
+                errors.append(f'{instance_id}: {str(e)}')
+                logger.error(f"Error processing stop for {instance_id}: {str(e)}")
+        
+        return {
+            'success': len(errors) == 0,
+            'stopped': stopped,
+            'errors': errors,
+            'count': len(stopped)
+        }
+    except Exception as e:
+        logger.error(f"Error stopping instances: {str(e)}", exc_info=True)
+        return {
+            'success': False,
+            'error': str(e)
+        }
+
 def delete_instances(instance_ids=None, delete_type='individual'):
     """Delete EC2 instance(s)
     
@@ -938,6 +1005,33 @@ def lambda_handler(event, context):
                     })
                 }
         
+        elif path == '/stop' and http_method == 'POST':
+            instance_ids = body.get('instance_ids') or (query_params.get('instance_ids', '').split(',') if query_params.get('instance_ids') else None)
+            
+            if not instance_ids:
+                instance_id = body.get('instance_id') or query_params.get('instance_id')
+                if instance_id:
+                    instance_ids = [instance_id]
+                else:
+                    return {
+                        'statusCode': 400,
+                        'headers': {'Content-Type': 'application/json'},
+                        'body': json.dumps({
+                            'success': False,
+                            'error': 'instance_id or instance_ids is required'
+                        })
+                    }
+            
+            result = stop_instances(instance_ids=instance_ids)
+            # Add a message indicating the operation is async
+            if result['success']:
+                result['message'] = f"✅ Initiated stop for {result['count']} instance(s). Instances are stopping. Refresh to see updates."
+            return {
+                'statusCode': 200 if result['success'] else 500,
+                'headers': {'Content-Type': 'application/json'},
+                'body': json.dumps(result)
+            }
+        
         elif path == '/delete' and http_method == 'DELETE':
             instance_ids = body.get('instance_ids') or (query_params.get('instance_ids', '').split(',') if query_params.get('instance_ids') else None)
             delete_type = body.get('delete_type', query_params.get('delete_type', 'individual'))
@@ -979,6 +1073,7 @@ def lambda_handler(event, context):
                         'GET /list': 'List all instances',
                         'POST /update_cleanup_days': 'Update cleanup days for admin instance (body: {"instance_id": "...", "cleanup_days": 7})',
                         'POST /assign': 'Manually assign instance to student (body: {"instance_id": "...", "student_name": "..."})',
+                        'POST /stop': 'Stop instances (body: {"instance_id": "..."} or query: ?instance_id=...)',
                         'DELETE /delete': 'Delete instances'
                     }
                 })

@@ -40,20 +40,23 @@ resource "aws_lambda_function_url" "status_url" {
 
 # Lambda Function for User Management (depends on status URL)
 resource "aws_lambda_function" "user_management" {
-  filename         = "${var.functions_path}/testus_patronus_user_management.zip"
-  function_name    = "lambda-${var.classroom_name}-${var.environment}"
-  role             = var.lambda_role_arn
-  handler          = "testus_patronus_user_management.lambda_handler"
-  runtime          = "python3.9"
-  timeout          = 60
-  memory_size      = 256
-  package_type     = "Zip"
-  source_code_hash = filebase64sha256("${var.functions_path}/testus_patronus_user_management.zip")
+  filename                      = "${var.functions_path}/testus_patronus_user_management.zip"
+  function_name                 = "lambda-${var.classroom_name}-${var.environment}"
+  role                          = var.lambda_role_arn
+  handler                       = "testus_patronus_user_management.lambda_handler"
+  runtime                       = "python3.9"
+  timeout                       = var.user_management_timeout
+  memory_size                   = var.user_management_memory_size
+  package_type                  = "Zip"
+  source_code_hash              = filebase64sha256("${var.functions_path}/testus_patronus_user_management.zip")
+  publish                       = var.user_management_provisioned_concurrency > 0 ? true : false  # Publish version if using provisioned concurrency
+  reserved_concurrent_executions = var.user_management_reserved_concurrency > 0 ? var.user_management_reserved_concurrency : null  # Reserved concurrency (null = unlimited)
 
   environment {
     variables = {
       ENVIRONMENT       = var.environment
       STATUS_LAMBDA_URL = var.status_lambda_url != "" ? var.status_lambda_url : aws_lambda_function_url.status_url.function_url
+      SKIP_IAM_USER_CREATION = var.skip_iam_user_creation ? "true" : "false"
     }
   }
 
@@ -64,6 +67,32 @@ resource "aws_lambda_function" "user_management" {
   }
 
   depends_on = [aws_lambda_function_url.status_url]
+}
+
+# Alias for User Management (required for provisioned concurrency)
+# Provisioned concurrency requires a version or alias, not $LATEST
+# The alias points to the published version
+resource "aws_lambda_alias" "user_management" {
+  count            = var.user_management_provisioned_concurrency > 0 ? 1 : 0
+  name             = "live"
+  description      = "Live alias for provisioned concurrency"
+  function_name    = aws_lambda_function.user_management.function_name
+  function_version = aws_lambda_function.user_management.version  # Points to published version
+  
+  # Note: When function code is updated, Terraform will publish a new version
+  # and the alias will need to be updated (or use lifecycle ignore_changes)
+}
+
+# Provisioned Concurrency for User Management (if configured)
+# Pre-warms execution environments to eliminate cold starts
+# This keeps execution environments "warm" and ready to respond immediately
+resource "aws_lambda_provisioned_concurrency_config" "user_management" {
+  count                             = var.user_management_provisioned_concurrency > 0 ? 1 : 0
+  function_name                     = aws_lambda_function.user_management.function_name
+  provisioned_concurrent_executions = var.user_management_provisioned_concurrency
+  qualifier                         = aws_lambda_alias.user_management[0].name
+  
+  depends_on = [aws_lambda_alias.user_management]
 }
 
 # Lambda Function URL for User Management
@@ -114,8 +143,8 @@ resource "aws_lambda_function" "instance_manager" {
   role             = var.lambda_role_arn
   handler          = "testus_patronus_instance_manager.lambda_handler"
   runtime          = "python3.9"
-  timeout          = 300
-  memory_size      = 512
+  timeout          = var.instance_manager_timeout
+  memory_size      = var.instance_manager_memory_size
   package_type     = "Zip"
   source_code_hash = filebase64sha256("${var.functions_path}/testus_patronus_instance_manager.zip")
 

@@ -73,3 +73,46 @@ variable "instance_manager_password_secret_name" {
   default     = ""
 }
 
+variable "skip_iam_user_creation" {
+  description = "Skip IAM user creation to avoid rate limiting (useful for conference scenarios). When true, users will only get EC2 instances, not AWS console access."
+  type        = bool
+  default     = false
+}
+
+# Lambda Scaling and Performance Variables
+variable "user_management_memory_size" {
+  description = "Memory size (MB) for user_management Lambda. More memory = more CPU. Range: 128-10240 MB"
+  type        = number
+  default     = 512  # Increased from 256 for better performance
+}
+
+variable "user_management_timeout" {
+  description = "Timeout (seconds) for user_management Lambda. Range: 1-900 seconds"
+  type        = number
+  default     = 120  # Increased from 60 for conference scenarios
+}
+
+variable "user_management_provisioned_concurrency" {
+  description = "Number of provisioned concurrent executions for user_management Lambda. Eliminates cold starts but costs more. Set to 0 to disable."
+  type        = number
+  default     = 0  # Disabled by default (cost optimization)
+}
+
+variable "user_management_reserved_concurrency" {
+  description = "Reserved concurrency for user_management Lambda. Guarantees capacity but limits scaling. Set to 0 to use unreserved concurrency."
+  type        = number
+  default     = 0  # No reservation by default (allows full scaling)
+}
+
+variable "instance_manager_memory_size" {
+  description = "Memory size (MB) for instance_manager Lambda"
+  type        = number
+  default     = 512
+}
+
+variable "instance_manager_timeout" {
+  description = "Timeout (seconds) for instance_manager Lambda"
+  type        = number
+  default     = 300
+}
+
