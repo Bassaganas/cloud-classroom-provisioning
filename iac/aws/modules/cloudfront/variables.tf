@@ -21,7 +21,7 @@ variable "lambda_function_url" {
 variable "wait_for_certificate_validation" {
   description = "Whether to wait for certificate validation to complete (set to false if DNS records not added yet)"
   type        = bool
-  default      = false
+  default      = true
 }
 
 

@@ -99,9 +99,8 @@ module "cloudfront_instance_manager" {
   owner            = var.owner
   domain_name      = "ec2-management.testingfantasy.com"
   lambda_function_url = module.lambda.instance_manager_url
-  # Set to true only after DNS validation records are added to GoDaddy
+  # Set to true only after DNS validation records are added to Route 53
   # After adding the DNS record, wait 5-10 minutes, then set this to true and run terraform apply
-  # ⚠️  Temporarily set to false to avoid CNAME conflict - update DNS first, then set to true
   wait_for_certificate_validation = true
 }
 
@@ -117,7 +116,7 @@ module "cloudfront_user_management" {
   owner            = var.owner
   domain_name      = "testus-patronus.testingfantasy.com"
   lambda_function_url = module.lambda.user_management_url
-  # Set to true only after DNS validation records are added to GoDaddy
+  # Set to true only after DNS validation records are added to Route 53
   # After adding the DNS record, wait 5-10 minutes, then set this to true and run terraform apply
   wait_for_certificate_validation = false
 }
@@ -134,7 +133,32 @@ module "cloudfront_dify_jira" {
   owner            = var.owner
   domain_name      = "dify-jira.testingfantasy.com"
   lambda_function_url = module.lambda.dify_jira_api_url
-  # Set to true only after DNS validation records are added to GoDaddy
+  # Set to true only after DNS validation records are added to Route 53
   # After adding the DNS record, wait 5-10 minutes, then set this to true and run terraform apply
   wait_for_certificate_validation = true
 }
+
+# Static Website Module - Root Domain (testingfantasy.com)
+# DISABLED: The testing_fantasy application is now deployed with AWS Amplify
+# 
+# Why this is disabled:
+# - Amplify automatically creates and manages its own ACM certificate for custom domains
+# - Amplify handles SSL/TLS certificates, so Terraform-managed certificate is not needed
+# - Route 53 DNS records for Amplify are configured in the Amplify console, not Terraform
+# - This avoids duplicate certificates and conflicts
+#
+# If you need to manage the root domain with Terraform CloudFront instead of Amplify,
+# uncomment this module and ensure Amplify custom domain is removed first.
+#
+# module "static_website" {
+#   source = "./modules/static-website"
+#
+#   providers = {
+#     aws.us_east_1 = aws.us_east_1
+#   }
+#
+#   environment      = var.environment
+#   owner            = var.owner
+#   domain_name      = "testingfantasy.com"
+#   wait_for_certificate_validation = false
+# }

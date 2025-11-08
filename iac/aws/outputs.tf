@@ -31,12 +31,12 @@ output "instance_manager_custom_url" {
 }
 
 output "instance_manager_cloudfront_domain" {
-  description = "CloudFront distribution domain name for instance manager (use this for DNS CNAME record in GoDaddy)"
+  description = "CloudFront distribution domain name for instance manager (use this for DNS CNAME record in Route 53)"
   value       = module.cloudfront_instance_manager.cloudfront_domain
 }
 
 output "instance_manager_acm_certificate_validation_records" {
-  description = "DNS validation records for instance manager ACM certificate (add these to GoDaddy DNS)"
+  description = "DNS validation records for instance manager ACM certificate (add these to Route 53)"
   value       = module.cloudfront_instance_manager.certificate_validation_records
 }
 
@@ -47,12 +47,12 @@ output "user_management_custom_url" {
 }
 
 output "user_management_cloudfront_domain" {
-  description = "CloudFront distribution domain name for user management (use this for DNS CNAME record in GoDaddy)"
+  description = "CloudFront distribution domain name for user management (use this for DNS CNAME record in Route 53)"
   value       = module.cloudfront_user_management.cloudfront_domain
 }
 
 output "user_management_acm_certificate_validation_records" {
-  description = "DNS validation records for user management ACM certificate (add these to GoDaddy DNS)"
+  description = "DNS validation records for user management ACM certificate (add these to Route 53)"
   value       = module.cloudfront_user_management.certificate_validation_records
 }
 
@@ -63,12 +63,12 @@ output "dify_jira_custom_url" {
 }
 
 output "dify_jira_cloudfront_domain" {
-  description = "CloudFront distribution domain name for Dify Jira API (use this for DNS CNAME record in GoDaddy)"
+  description = "CloudFront distribution domain name for Dify Jira API (use this for DNS CNAME record in Route 53)"
   value       = module.cloudfront_dify_jira.cloudfront_domain
 }
 
 output "dify_jira_acm_certificate_validation_records" {
-  description = "DNS validation records for Dify Jira API ACM certificate (add these to GoDaddy DNS)"
+  description = "DNS validation records for Dify Jira API ACM certificate (add these to Route 53)"
   value       = module.cloudfront_dify_jira.certificate_validation_records
 }
 
@@ -103,3 +103,42 @@ output "pool_instance_private_ips" {
   description = "Private IPs of the EC2 instances in the pool (emergency option only)"
   value       = module.compute.pool_instance_private_ips
 }
+
+# Static Website Outputs - Root Domain
+# DISABLED: The testing_fantasy application is now deployed with AWS Amplify
+# 
+# Important: You do NOT need the Terraform-managed certificate validation records
+# because Amplify automatically creates and manages its own ACM certificate.
+# 
+# When you add a custom domain in Amplify Console:
+# 1. Amplify creates its own ACM certificate automatically
+# 2. Amplify provides its own certificate validation records (if needed)
+# 3. Amplify manages the SSL/TLS configuration
+# 
+# The certificate validation records shown in terraform plan/apply output
+# (for testingfantasy.com and www.testingfantasy.com) are NOT needed and can be ignored.
+#
+# output "static_website_s3_bucket" {
+#   description = "S3 bucket name for the static website"
+#   value       = module.static_website.s3_bucket_name
+# }
+#
+# output "static_website_cloudfront_domain" {
+#   description = "CloudFront distribution domain name for root domain (use this for Route 53 A record)"
+#   value       = module.static_website.cloudfront_domain
+# }
+#
+# output "static_website_cloudfront_distribution_id" {
+#   description = "CloudFront distribution ID for cache invalidation"
+#   value       = module.static_website.cloudfront_distribution_id
+# }
+#
+# output "static_website_custom_url" {
+#   description = "Custom domain URL for root domain (https://testingfantasy.com)"
+#   value       = module.static_website.custom_url
+# }
+#
+# output "static_website_acm_certificate_validation_records" {
+#   description = "DNS validation records for root domain ACM certificate (add these to Route 53)"
+#   value       = module.static_website.certificate_validation_records
+# }
