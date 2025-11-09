@@ -309,14 +309,49 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                 position: relative;
                 transition: max-width 0.3s;
             }}
+            .header-row {{
+                display: flex;
+                align-items: center;
+                justify-content: space-around;
+                gap: 24px;
+                margin-bottom: 24px;
+                flex-wrap: wrap;
+            }}
             .logo {{
-                display: block;
-                margin: 0 auto 24px auto;
                 max-width: 300px;
                 border-radius: 12px;
                 background: var(--white);
                 box-shadow: 0 2px 8px rgba(30,52,178,0.08);
                 object-fit: contain;
+                flex-shrink: 0;
+                order: 2;
+            }}
+            .header-link {{
+                color: var(--blue);
+                text-decoration: none;
+                font-weight: 600;
+                font-size: 1rem;
+                padding: 10px 20px;
+                background: var(--white);
+                border-radius: 8px;
+                border: 2px solid var(--blue);
+                transition: all 0.3s ease;
+                display: inline-block;
+                box-shadow: 0 2px 8px rgba(30,52,178,0.15);
+                flex: 0 1 auto;
+            }}
+            .header-link:first-child {{
+                order: 1;
+            }}
+            .header-link:last-child {{
+                order: 3;
+            }}
+            .header-link:hover {{
+                background: var(--pink);
+                color: var(--white);
+                border-color: var(--pink);
+                transform: translateY(-2px);
+                box-shadow: 0 4px 12px rgba(30,52,178,0.25);
             }}
             .main-title {{
                 color: var(--blue);
@@ -574,6 +609,24 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
             
             /* Responsive design */
             @media (max-width: 768px) {{
+                .header-row {{
+                    flex-direction: column;
+                    gap: 16px;
+                }}
+                .header-link {{
+                    width: 100%;
+                    text-align: center;
+                    max-width: 300px;
+                }}
+                .logo {{
+                    order: 1;
+                }}
+                .header-link:first-child {{
+                    order: 2;
+                }}
+                .header-link:last-child {{
+                    order: 3;
+                }}
                 .container {{
                     margin: 20px auto;
                     padding: 20px 16px;
@@ -765,7 +818,11 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
     </head>
     <body>
         <div class="container">
-            <img src="https://automation.eurostarsoftwaretesting.com/wp-content/uploads/2025/04/AS2025-Amsterdam-Header-Graphic-1.webp" alt="AutomationSTAR 2025 Amsterdam Logo" class="logo">
+            <div class="header-row">
+                <a href="https://testingfantasy.com" class="header-link" target="_blank" rel="noopener noreferrer">Visit Testing Fantasy</a>
+                <img src="https://automation.eurostarsoftwaretesting.com/wp-content/uploads/2025/04/AS2025-Amsterdam-Header-Graphic-1.webp" alt="AutomationSTAR 2025 Amsterdam Logo" class="logo">
+                <a href="https://docs-tp.testingfantasy.com" class="header-link" target="_blank" rel="noopener noreferrer">Visit Testus Patronus Documentation</a>
+            </div>
             <div class="main-title">Testus Patronus</div>
             <div class="subtitle">No magic, just AI with your company context</div>
             <h2>Welcome! Here are your Azure LLM credentials and your Dify instance. This is your user: {user_info['user_name']}</h2>
