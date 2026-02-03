@@ -84,7 +84,18 @@ class DifyIntegration:
             project = self._get_nested_value(issue, ['project.key', 'fields.project.key'], 'Unknown Project')
             issue_type = self._get_nested_value(issue, ['issuetype.name', 'fields.issuetype.name'], 'Unknown Type')
             status = self._get_nested_value(issue, ['status.name', 'fields.status.name'], 'Unknown Status')
-            assignee = self._get_nested_value(issue, ['assignee.name', 'fields.assignee.name'], 'Unassigned')
+            assignee = self._get_nested_value(issue, [
+                'assignee.displayName',
+                'fields.assignee.displayName',
+                'assignee.name',
+                'fields.assignee.name'
+            ], 'Unassigned')
+            reporter = self._get_nested_value(issue, [
+                'reporter.displayName',
+                'fields.reporter.displayName',
+                'reporter.name',
+                'fields.reporter.name'
+            ], 'Unknown Reporter')
             created = self._get_nested_value(issue, ['created', 'fields.created'], 'Unknown')
             updated = self._get_nested_value(issue, ['updated', 'fields.updated'], 'Unknown')
             summary = self._get_nested_value(issue, ['summary', 'fields.summary'], 'No summary provided')
@@ -152,7 +163,7 @@ class DifyIntegration:
                 example_queries_line = "Example queries:\n- " + "\n- ".join(example_queries) + "\n"
                 text_parts.append(aliases_line)
                 text_parts.append(example_queries_line)
-            text_parts.append(f"Summary: {summary}\n\nJira Issue: {key}\nProject: {project}\nType: {issue_type}\nStatus: {status}\nAssignee: {assignee}\nCreated: {created}\nUpdated: {updated}\n\nDescription:\n{description}\n")
+            text_parts.append(f"Summary: {summary}\n\nJira Issue: {key}\nProject: {project}\nType: {issue_type}\nStatus: {status}\nAssignee: {assignee}\nReporter: {reporter}\nCreated: {created}\nUpdated: {updated}\n\nDescription:\n{description}\n")
             text = "".join(text_parts)
             
             # Set your desired chunking config
@@ -200,7 +211,16 @@ class DifyIntegration:
                 value = data
                 for key in path.split('.'):
                     value = value.get(key, {})
-                if value and value != {}:
+                # Check if value exists and is not empty dict/None/empty string
+                if value and value != {} and value is not None:
+                    # If it's a dict, try to get displayName or name
+                    if isinstance(value, dict):
+                        if 'displayName' in value:
+                            return str(value['displayName'])
+                        elif 'name' in value:
+                            return str(value['name'])
+                        else:
+                            continue  # Empty dict or dict without name/displayName
                     return str(value)
             except (AttributeError, KeyError, TypeError):
                 continue
