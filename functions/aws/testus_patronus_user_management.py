@@ -283,6 +283,16 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
         <subtitle>No magic, just AI with your company context</subtitle>
         <link rel=\"icon\" href=\"https://automation.eurostarsoftwaretesting.com/wp-content/uploads/2025/04/AS2025-Amsterdam-Header-Graphic-1.webp">
         <link rel=\"stylesheet\" href=\"https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css\">
+        
+        <!-- Google tag (gtag.js) -->
+        <script async src=\"https://www.googletagmanager.com/gtag/js?id=G-6XDLRWMPH2\"></script>
+        <script>
+          window.dataLayer = window.dataLayer || [];
+          function gtag(){{dataLayer.push(arguments);}}
+          gtag('js', new Date());
+          gtag('config', 'G-6XDLRWMPH2');
+        </script>
+        
         <style>
             :root {{
                 --blue: #1B1464;
