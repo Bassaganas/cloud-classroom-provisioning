@@ -76,7 +76,7 @@ variable "instance_manager_password_secret_name" {
 variable "skip_iam_user_creation" {
   description = "Skip IAM user creation to avoid rate limiting (useful for conference scenarios). When true, users will only get EC2 instances, not AWS console access."
   type        = bool
-  default     = false
+  default     = true
 }
 
 # Lambda Scaling and Performance Variables

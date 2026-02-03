@@ -25,6 +25,7 @@ module "iam_lambda" {
   environment              = var.environment
   owner                    = var.owner
   account_id               = data.aws_caller_identity.current.account_id
+  region                   = var.region
   # Allow access to both Azure LLM configs and instance manager password secrets
   secrets_manager_secret_arn = "arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:azure/llm/configs*"
   instance_manager_password_secret_arn = module.storage.instance_manager_password_secret_arn

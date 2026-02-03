@@ -13,6 +13,11 @@ variable "account_id" {
   type        = string
 }
 
+variable "region" {
+  description = "AWS region"
+  type        = string
+}
+
 variable "secrets_manager_secret_arn" {
   description = "ARN of the Secrets Manager secret for Azure LLM configs (optional)"
   type        = string

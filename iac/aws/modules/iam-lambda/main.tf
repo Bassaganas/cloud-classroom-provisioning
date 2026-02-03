@@ -88,6 +88,23 @@ resource "aws_iam_role_policy" "lambda_iam_policy" {
         Effect   = "Allow"
         Action   = "iam:PassRole"
         Resource = "arn:aws:iam::${var.account_id}:role/*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "ssm:GetParameter",
+          "ssm:GetParameters"
+        ]
+        Resource = "arn:aws:ssm:${var.region}:${var.account_id}:parameter/classroom/${var.environment}/*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "ssm:DescribeInstanceInformation",
+          "ssm:SendCommand",
+          "ssm:GetCommandInvocation"
+        ]
+        Resource = "*"
       }
     ]
   })
