@@ -1,0 +1,594 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sauron Eye - Solar Filaments</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: url("sky.png") center center / cover no-repeat;
+    }
+    #tower-image { z-index: 10; }
+    #gl { z-index: 5; }
+    #tower-image, #gl {
+    transition: opacity 0.9s ease-in-out;
+    }
+    #scene-container {
+      width: 1920px;
+      height: 1080px;
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%) scale(1);
+      transform-origin: center center;
+      background: transparent;
+    }
+
+    @keyframes sky-pulse {
+      0%, 92%, 100% { opacity: 1; }
+      94% { opacity: 0.88; }
+      96% { opacity: 1; }
+      98% { opacity: 0.9; }
+    }
+
+    #sky-layer {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 0;
+      background: url("sky.png") center center / cover no-repeat;
+      filter: brightness(1.2) contrast(1.05) saturate(1.05);
+    }
+
+    #sky-overlay { display: none; }
+
+    #tower-image {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      pointer-events: none;
+      z-index: 15;
+      display: block;
+      transition: all 1.5s ease-out;
+      transform-origin: center bottom;
+      mix-blend-mode: lighten;
+    }
+
+    canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      display: block;
+      z-index: 10;
+    }
+
+    #lightning-canvas {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 12;
+      pointer-events: none;
+      mix-blend-mode: screen;
+    }
+  </style>
+</head>
+<body>
+  <div id="scene-container">
+    <div id="sky-layer"></div>
+    <div id="sky-overlay"></div>
+    <img id="tower-image" src="Tower.png" alt="Tower" />
+    <canvas id="gl"></canvas>
+    <canvas id="lightning-canvas"></canvas>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.159.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.159.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module">
+    import * as THREE from "three";
+    import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+    import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+    import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+
+    const DESIGN_WIDTH = 1920;
+    const DESIGN_HEIGHT = 1080;
+    const sceneContainer = document.getElementById("scene-container");
+    const canvas = document.getElementById("gl");
+    const towerImage = document.getElementById("tower-image");
+    const lightningCanvas = document.getElementById("lightning-canvas");
+    const lightningCtx = lightningCanvas.getContext("2d");
+
+    const scene = new THREE.Scene();
+    scene.background = null;
+
+    const camera = new THREE.PerspectiveCamera(46, DESIGN_WIDTH / DESIGN_HEIGHT, 0.1, 100);
+    camera.position.set(0, 0, 7.0);
+
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(DESIGN_WIDTH, DESIGN_HEIGHT, false);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.1;
+    renderer.setClearColor(0x000000, 0);
+    renderer.setClearAlpha(0);
+
+    const composer = new EffectComposer(renderer);
+    const renderPass = new RenderPass(scene, camera);
+    renderPass.clearColor = new THREE.Color(0x000000);
+    renderPass.clearAlpha = 0;
+    composer.addPass(renderPass);
+    const bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(DESIGN_WIDTH, DESIGN_HEIGHT),
+      1.4,
+      0.65,
+      0.55
+    );
+    composer.addPass(bloomPass);
+
+    const eyeGroup = new THREE.Group();
+    eyeGroup.position.y = 0.8;
+    scene.add(eyeGroup);
+
+    const geometry = new THREE.SphereGeometry(1.4, 256, 256);
+
+    const uniforms = {
+      uTime: { value: 0 },
+      uPupilWidth: { value: 0.08 },
+      uFocus: { value: 0 }
+    };
+
+    const vertexShader = `
+      varying vec2 vUv;
+      varying vec3 vNormalW;
+
+      void main() {
+        vUv = uv;
+        vNormalW = normalize(normalMatrix * normal);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `;
+
+    const fragmentShader = `
+      varying vec2 vUv;
+      varying vec3 vNormalW;
+
+      uniform float uTime;
+      uniform float uPupilWidth;
+      uniform float uFocus;
+
+      vec2 mod289(vec2 x){return x - floor(x * (1.0 / 289.0)) * 289.0;}
+      vec3 mod289(vec3 x){return x - floor(x * (1.0 / 289.0)) * 289.0;}
+      vec4 mod289(vec4 x){return x - floor(x * (1.0 / 289.0)) * 289.0;}
+      vec4 permute(vec4 x){return mod289(((x*34.0)+1.0)*x);}
+      vec4 taylorInvSqrt(vec4 r){return 1.79284291400159 - 0.85373472095314 * r;}
+
+      float snoise(vec3 v){
+        const vec2  C = vec2(1.0/6.0, 1.0/3.0);
+        const vec4  D = vec4(0.0, 0.5, 1.0, 2.0);
+        vec3 i  = floor(v + dot(v, C.yyy));
+        vec3 x0 = v - i + dot(i, C.xxx);
+        vec3 g = step(x0.yzx, x0.xyz);
+        vec3 l = 1.0 - g;
+        vec3 i1 = min(g.xyz, l.zxy);
+        vec3 i2 = max(g.xyz, l.zxy);
+        vec3 x1 = x0 - i1 + C.xxx;
+        vec3 x2 = x0 - i2 + C.yyy;
+        vec3 x3 = x0 - D.yyy;
+        i = mod289(i);
+        vec4 p = permute(permute(permute(
+                i.z + vec4(0.0, i1.z, i2.z, 1.0))
+              + i.y + vec4(0.0, i1.y, i2.y, 1.0))
+              + i.x + vec4(0.0, i1.x, i2.x, 1.0));
+        float n_ = 0.142857142857;
+        vec3  ns = n_ * D.wyz - D.xzx;
+        vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+        vec4 x_ = floor(j * ns.z);
+        vec4 y_ = floor(j - 7.0 * x_);
+        vec4 x = x_ * ns.x + ns.yyyy;
+        vec4 y = y_ * ns.x + ns.yyyy;
+        vec4 h = 1.0 - abs(x) - abs(y);
+        vec4 b0 = vec4(x.xy, y.xy);
+        vec4 b1 = vec4(x.zw, y.zw);
+        vec4 s0 = floor(b0) * 2.0 + 1.0;
+        vec4 s1 = floor(b1) * 2.0 + 1.0;
+        vec4 sh = -step(h, vec4(0.0));
+        vec4 a0 = b0.xzyw + s0.xzyw * sh.xxyy;
+        vec4 a1 = b1.xzyw + s1.xzyw * sh.zzww;
+        vec3 p0 = vec3(a0.xy, h.x);
+        vec3 p1 = vec3(a0.zw, h.y);
+        vec3 p2 = vec3(a1.xy, h.z);
+        vec3 p3 = vec3(a1.zw, h.w);
+        vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3)));
+        p0 *= norm.x;
+        p1 *= norm.y;
+        p2 *= norm.z;
+        p3 *= norm.w;
+        vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
+        m = m * m;
+        return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
+      }
+
+      float fbm(vec3 p){
+        float f = 0.0;
+        float a = 0.6;
+        for (int i = 0; i < 5; i++) {
+          f += a * snoise(p);
+          p *= 2.0;
+          a *= 0.5;
+        }
+        return f;
+      }
+
+      float hash(vec2 p) {
+        p = fract(p * vec2(123.34, 456.21));
+        p += dot(p, p + 45.32);
+        return fract(p.x * p.y);
+      }
+
+      void main() {
+        vec2 centered = vUv - 0.5;
+        centered.x = abs(centered.x);
+        float angle = atan(centered.y, centered.x);
+        float dist = length(centered);
+
+        float rayFlow = dist * 4.0 - uTime * 0.9;
+        float rayNoise = fbm(vec3(angle * 20.0, dist * 6.0, rayFlow));
+        float rayStrands = fbm(vec3(angle * 40.0 + rayNoise * 0.4, dist * 10.0, rayFlow * 1.5));
+        float radialNoise = smoothstep(0.2, 0.9, rayNoise + rayStrands * 1.1);
+        float flare = pow(radialNoise, 1.35);
+
+        float sparkle = smoothstep(0.8, 1.0, hash(centered * 120.0 + uTime * 0.3));
+        float embers = smoothstep(0.5, 1.0, fbm(vec3(centered * 18.0, uTime * 1.2)));
+        float sparkles = step(0.9, hash(vUv * 80.0 + uTime));
+
+        vec2 ellipse = vec2(centered.x * 0.5, centered.y * 1.9);
+        float ellipseDist = length(ellipse);
+        float hornDir = pow(abs(cos(angle)), 6.0);
+        float sparkFlow = fbm(vec3(angle * 80.0, ellipseDist * 18.0, uTime * 2.2));
+        float sparks = smoothstep(0.6, 1.0, sparkFlow) * (1.0 - smoothstep(0.18, 0.75, ellipseDist)) * hornDir;
+
+        vec3 pupilRim = vec3(3.0, 1.2, 0.2);
+        vec3 midRays = vec3(1.5, 0.4, 0.05);
+        vec3 edgeChar = vec3(0.04, 0.01, 0.01);
+
+        float edgeFade = smoothstep(0.55, 0.92, dist);
+        vec3 filamentColor = mix(midRays, pupilRim, flare);
+        filamentColor = mix(filamentColor, pupilRim, sparkle * 0.35);
+        filamentColor = mix(filamentColor, vec3(1.6, 0.5, 0.08), embers * 0.25);
+        filamentColor = mix(filamentColor, vec3(1.8, 0.7, 0.12), sparks * 0.45);
+        filamentColor = mix(filamentColor, vec3(1.0, 0.8, 0.2), sparkles * 0.35);
+        vec3 surfaceColor = mix(filamentColor, edgeChar, edgeFade);
+
+        float slit = smoothstep(uPupilWidth, uPupilWidth - 0.012, abs(centered.x));
+        float verticalClamp = smoothstep(0.5, 0.15, abs(centered.y));
+        float pupilMask = slit * verticalClamp;
+        float pupilFacing = smoothstep(0.2, 0.7, vNormalW.z);
+        pupilMask *= pupilFacing;
+        pupilMask = 1.0 - pupilMask;
+
+        float rimNoise = fbm(vec3(angle * 8.0, dist * 6.0, uTime * 0.6)) * 0.04;
+        float rimGlow = pow(
+          smoothstep(0.02 + rimNoise, 0.08 + rimNoise, abs(abs(centered.x) - uPupilWidth)),
+          2.0
+        );
+        vec3 color = surfaceColor;
+        color = mix(color, pupilRim, rimGlow * (1.0 - edgeFade));
+        float facing = smoothstep(-0.2, 0.8, vNormalW.z);
+        color *= mix(0.85, 1.0, facing);
+        color *= pupilMask;
+
+        gl_FragColor = vec4(color, 1.0);
+      }
+    `;
+
+    const material = new THREE.ShaderMaterial({
+      uniforms,
+      vertexShader,
+      fragmentShader,
+      side: THREE.DoubleSide
+    });
+
+    const eyeMesh = new THREE.Mesh(geometry, material);
+    eyeMesh.scale.set(1.90, 0.77, 1.0);
+    const baseRotation = new THREE.Euler(0, -Math.PI / 2, 0);
+    eyeMesh.rotation.copy(baseRotation);
+    eyeGroup.add(eyeMesh);
+
+    let isFocused = false;
+    let rotationVelocity = new THREE.Vector2(0, 0);
+    let rotationTarget = new THREE.Euler(0, 0, 0);
+    let rotationOffset = new THREE.Euler(0, 0, 0);
+    let nextIdleShift = 0;
+    let lastManualRotation = 0;
+    let currentZ = 0;
+    let targetZ = 0;
+    let currentY = 0.8;
+    let targetY = 0.8;
+    let targetBloom = 2.6;
+    let pupilWidthTarget = 0.8;
+
+    window.addEventListener("keydown", (event) => {
+      switch (event.key) {
+        case "ArrowUp":
+          rotationVelocity.y -= 0.02;
+          lastManualRotation = performance.now();
+          rotationTarget.x = rotationOffset.x;
+          rotationTarget.y = rotationOffset.y;
+          break;
+        case "ArrowDown":
+          rotationVelocity.y += 0.02;
+          lastManualRotation = performance.now();
+          rotationTarget.x = rotationOffset.x;
+          rotationTarget.y = rotationOffset.y;
+          break;
+        case "ArrowLeft":
+          rotationVelocity.x -= 0.02;
+          lastManualRotation = performance.now();
+          rotationTarget.x = rotationOffset.x;
+          rotationTarget.y = rotationOffset.y;
+          break;
+        case "ArrowRight":
+          rotationVelocity.x += 0.02;
+          lastManualRotation = performance.now();
+          rotationTarget.x = rotationOffset.x;
+          rotationTarget.y = rotationOffset.y;
+          break;
+        case " ":
+          isFocused = true;
+          break;
+      }
+    });
+
+    window.addEventListener("keyup", (event) => {
+      if (event.key === " ") {
+        isFocused = false;
+      }
+    });
+
+    const clock = new THREE.Clock();
+    let lastLightning = 0;
+
+    class LightningBolt {
+      constructor(source, target) {
+        this.source = source;
+        this.target = target;
+        this.life = 0.28;
+        this.age = 0;
+        this.points = this.buildPoints();
+        this.branches = this.buildBranches();
+      }
+
+      buildPoints() {
+        const points = [this.source];
+        const segments = 14;
+        for (let i = 1; i < segments; i++) {
+          const t = i / segments;
+          const x = this.source.x + (this.target.x - this.source.x) * t;
+          const y = this.source.y + (this.target.y - this.source.y) * t;
+          const jitter = (1.0 - t) * 70.0 * (Math.random() - 0.5);
+          points.push({ x: x + jitter, y: y + jitter * 0.6 });
+        }
+        points.push(this.target);
+        return points;
+      }
+
+      buildBranches() {
+        const branches = [];
+        const branchCount = 1 + Math.floor(Math.random() * 2);
+        for (let i = 0; i < branchCount; i++) {
+          const startIndex = 4 + Math.floor(Math.random() * 6);
+          const start = this.points[startIndex];
+          const angle = Math.random() * Math.PI * 2.0;
+          const length = 80 + Math.random() * 80;
+          const end = {
+            x: start.x + Math.cos(angle) * length,
+            y: start.y + Math.sin(angle) * length
+          };
+          branches.push({ start, end });
+        }
+        return branches;
+      }
+
+      update(dt) {
+        this.age += dt;
+        return this.age < this.life;
+      }
+
+      draw(ctx, intensity) {
+        const alpha = Math.max(0, 1.0 - this.age / this.life) * intensity;
+        const outerAlpha = alpha * 0.75;
+        const innerAlpha = alpha;
+
+        ctx.beginPath();
+        ctx.moveTo(this.points[0].x, this.points[0].y);
+        for (let i = 1; i < this.points.length; i++) {
+          ctx.lineTo(this.points[i].x, this.points[i].y);
+        }
+        ctx.strokeStyle = `rgba(255, 130, 30, ${outerAlpha})`;
+        ctx.lineWidth = 9.0;
+        ctx.shadowColor = "rgba(255, 68, 0, 0.95)";
+        ctx.shadowBlur = 34;
+        ctx.stroke();
+
+        ctx.strokeStyle = `rgba(255, 170, 51, ${innerAlpha})`;
+        ctx.lineWidth = 5.5;
+        ctx.shadowColor = "rgba(255, 120, 40, 0.9)";
+        ctx.shadowBlur = 22;
+        ctx.stroke();
+
+        for (const branch of this.branches) {
+          ctx.beginPath();
+          ctx.moveTo(branch.start.x, branch.start.y);
+          ctx.lineTo(branch.end.x, branch.end.y);
+          ctx.strokeStyle = `rgba(255, 150, 40, ${alpha * 0.6})`;
+          ctx.lineWidth = 3.0;
+          ctx.shadowColor = "rgba(255, 90, 20, 0.8)";
+          ctx.shadowBlur = 18;
+          ctx.stroke();
+        }
+      }
+    }
+
+    const bolts = [];
+
+    function updateState(delta, elapsed) {
+        if (isFocused) {
+  targetZ = 2.1;
+  targetY = 0.0;
+  pupilWidthTarget = 0.05;
+  targetBloom = 2.6;
+  uniforms.uFocus.value = 1;
+
+  // keep tower visible but fade the eye over it
+  canvas.style.opacity = "1";
+  towerImage.style.opacity = "1";
+  canvas.style.zIndex = "15";
+  towerImage.style.zIndex = "10";
+} else {
+  targetZ = 0.0;
+  targetY = 0.8;
+  pupilWidthTarget = 0.05 + Math.sin(elapsed * 1.1) * 0.01;
+  targetBloom = 1.4;
+  uniforms.uFocus.value = 0;
+
+  // fade eye behind tower smoothly
+  canvas.style.opacity = "0.92";
+  towerImage.style.opacity = "1";
+  canvas.style.zIndex = "5";
+  towerImage.style.zIndex = "10";
+}
+
+const idleAllowed = !isFocused && performance.now() - lastManualRotation > 6000;
+
+if (idleAllowed && elapsed > nextIdleShift) {
+  // slight downward bias (positive pitch) and gentle lateral sweep
+  rotationTarget.x = 0.14 + (Math.random() - 0.5) * 0.10; // 0.05..0.15
+  rotationTarget.y = (Math.random() - 0.5) * 0.35;        // left/right
+  nextIdleShift = elapsed + 2.0 + Math.random() * 2.0;
+}
+
+      const damp = 1.0 - Math.exp(-delta * 2.5);
+      currentZ += (targetZ - currentZ) * damp;
+      currentY += (targetY - currentY) * damp;
+      eyeGroup.position.z = currentZ;
+      eyeGroup.position.y = currentY;
+
+      rotationVelocity.multiplyScalar(0.85);
+      rotationOffset.x += rotationVelocity.y;
+      rotationOffset.y += rotationVelocity.x;
+
+      rotationOffset.x += (rotationTarget.x - rotationOffset.x) * damp * 0.8;
+      rotationOffset.y += (rotationTarget.y - rotationOffset.y) * damp * 0.8;
+
+      eyeMesh.rotation.x = baseRotation.x + rotationOffset.x;
+      eyeMesh.rotation.y = baseRotation.y + rotationOffset.y;
+
+      pupilWidthTarget = Math.max(0.03, pupilWidthTarget);
+      uniforms.uPupilWidth.value += (pupilWidthTarget - uniforms.uPupilWidth.value) * 0.2;
+      bloomPass.strength += (targetBloom - bloomPass.strength) * 0.08;
+
+
+    }
+
+    function updateLightning(delta, elapsed) {
+      lightningCtx.clearRect(0, 0, lightningCanvas.width, lightningCanvas.height);
+
+      const source = { x: DESIGN_WIDTH * 0.5, y: DESIGN_HEIGHT * 0.5 };
+      const leftTarget = {
+  x: DESIGN_WIDTH * (0.05 + Math.random() * 0.15),
+  y: DESIGN_HEIGHT * (0.05 + Math.random() * 0.35)
+};
+const rightTarget = {
+  x: DESIGN_WIDTH * (0.80 + Math.random() * 0.15),
+  y: DESIGN_HEIGHT * (0.05 + Math.random() * 0.35)
+};
+      const focus = isFocused;
+const interval = focus ? 0.12 : 0.45;
+
+if (elapsed - lastLightning > interval) {
+  if (Math.random() > (focus ? 0.15 : 0.45)) {
+    const target = Math.random() > 0.5 ? leftTarget : rightTarget;
+
+    // angle from center to target
+    const angle = Math.atan2(target.y - source.y, target.x - source.x);
+
+    // ellipse radii (tweak to match your eye size in 1920x1080 space)
+    const radiusX = 260;
+    const radiusY = 140;
+
+    const start = {
+      x: source.x + Math.cos(angle) * radiusX,
+      y: source.y + Math.sin(angle) * radiusY
+    };
+
+    bolts.push(new LightningBolt(start, target));
+    lastLightning = elapsed;
+  }
+}
+      for (let i = bolts.length - 1; i >= 0; i--) {
+        const alive = bolts[i].update(delta);
+        bolts[i].draw(lightningCtx, focus ? 1.35 : 0.95);
+        if (!alive) {
+          bolts.splice(i, 1);
+        }
+      }
+    }
+
+    function animate() {
+      const delta = clock.getDelta();
+      const elapsed = clock.elapsedTime;
+
+      uniforms.uTime.value = elapsed;
+      updateState(delta, elapsed);
+      updateLightning(delta, elapsed);
+
+      if (isFocused) {
+        camera.position.x = (Math.random() - 0.5) * 0.002;
+        camera.position.y = (Math.random() - 0.5) * 0.002;
+        camera.position.z = 6.2;
+      } else {
+        camera.position.x += (0 - camera.position.x) * 0.1;
+        camera.position.y += (0 - camera.position.y) * 0.1;
+        camera.position.z += (6.2 - camera.position.z) * 0.1;
+      }
+
+      composer.render();
+      requestAnimationFrame(animate);
+    }
+
+    animate();
+
+    function updateSceneScale() {
+      const scale = Math.min(window.innerWidth / DESIGN_WIDTH, window.innerHeight / DESIGN_HEIGHT);
+      sceneContainer.style.transform = `translate(-50%, -50%) scale(${scale})`;
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setSize(DESIGN_WIDTH, DESIGN_HEIGHT, false);
+      composer.setSize(DESIGN_WIDTH, DESIGN_HEIGHT);
+      bloomPass.setSize(DESIGN_WIDTH, DESIGN_HEIGHT);
+      camera.aspect = DESIGN_WIDTH / DESIGN_HEIGHT;
+      camera.updateProjectionMatrix();
+      lightningCanvas.width = DESIGN_WIDTH;
+      lightningCanvas.height = DESIGN_HEIGHT;
+    }
+
+    updateSceneScale();
+    window.addEventListener("resize", updateSceneScale);
+  </script>
+</body>
+</html>
