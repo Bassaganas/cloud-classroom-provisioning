@@ -14,9 +14,14 @@ output "status_lambda_url" {
   value       = module.lambda.status_url
 }
 
+output "dynamodb_table_name" {
+  description = "DynamoDB table name for instance assignments"
+  value       = module.storage.dynamodb_table_name
+}
+
 output "instance_manager_url" {
   description = "URL for the EC2 instance pool management Lambda (frontend at /ui)"
-  value       = module.lambda.instance_manager_url
+  value       = try(data.terraform_remote_state.common.outputs.instance_manager_url, null)
 }
 
 output "dify_jira_api_url" {
@@ -27,17 +32,17 @@ output "dify_jira_api_url" {
 # CloudFront Outputs - Instance Manager
 output "instance_manager_custom_url" {
   description = "Custom domain URL for EC2 instance manager (https://ec2-management.testingfantasy.com)"
-  value       = module.cloudfront_instance_manager.custom_url
+  value       = try(data.terraform_remote_state.common.outputs.instance_manager_custom_url, null)
 }
 
 output "instance_manager_cloudfront_domain" {
   description = "CloudFront distribution domain name for instance manager (use this for DNS CNAME record in Route 53)"
-  value       = module.cloudfront_instance_manager.cloudfront_domain
+  value       = try(data.terraform_remote_state.common.outputs.instance_manager_cloudfront_domain, null)
 }
 
 output "instance_manager_acm_certificate_validation_records" {
   description = "DNS validation records for instance manager ACM certificate (add these to Route 53)"
-  value       = module.cloudfront_instance_manager.certificate_validation_records
+  value       = try(data.terraform_remote_state.common.outputs.instance_manager_acm_certificate_validation_records, null)
 }
 
 # CloudFront Outputs - User Management
@@ -74,35 +79,10 @@ output "dify_jira_acm_certificate_validation_records" {
 
 output "instance_manager_password_secret_name" {
   description = "Name of the Secrets Manager secret containing the instance manager password"
-  value       = module.storage.instance_manager_password_secret_name
+  value       = try(data.terraform_remote_state.common.outputs.instance_manager_password_secret_name, null)
   sensitive   = true
 }
 
-# Compute Outputs
-output "vpc_id" {
-  description = "ID of the default VPC being used"
-  value       = module.compute.vpc_id
-}
-
-output "subnet_id" {
-  description = "ID of the default subnet being used"
-  value       = module.compute.subnet_id
-}
-
-output "security_group_id" {
-  description = "ID of the classroom security group"
-  value       = module.compute.security_group_id
-}
-
-output "pool_instance_ids" {
-  description = "IDs of the EC2 instances in the pool (emergency option only)"
-  value       = module.compute.pool_instance_ids
-}
-
-output "pool_instance_private_ips" {
-  description = "Private IPs of the EC2 instances in the pool (emergency option only)"
-  value       = module.compute.pool_instance_private_ips
-}
 
 # Static Website Outputs - Root Domain
 # DISABLED: The testing_fantasy application is now deployed with AWS Amplify

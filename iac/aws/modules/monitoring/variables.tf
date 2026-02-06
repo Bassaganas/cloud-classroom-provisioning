@@ -3,6 +3,16 @@ variable "environment" {
   type        = string
 }
 
+variable "owner" {
+  description = "The owner of the resources"
+  type        = string
+}
+
+variable "workshop_name" {
+  description = "Workshop identifier for tagging"
+  type        = string
+}
+
 variable "stop_old_instances_lambda_arn" {
   description = "ARN of the stop old instances Lambda function"
   type        = string

@@ -210,6 +210,11 @@ terraform version
   --region eu-west-3
 ```
 
+**Note:** Each workshop deployment creates its own DynamoDB table
+`instance-assignments-<workshop>-<env>` and SSM parameters under
+`/classroom/<workshop>/<env>/...`. If these are missing, the Lambdas
+cannot assign instances.
+
 #### 3. What Gets Created
 
 **Terraform Backend (Automatic):**
@@ -254,7 +259,7 @@ The Instance Manager is available via a custom domain `ec2-management.testingfan
 
 1. **After first `terraform apply`, get the DNS validation records:**
    ```bash
-   cd iac/aws
+   cd iac/aws/workshops/testus_patronus
    terraform output acm_certificate_validation_records
    ```
 
@@ -338,8 +343,11 @@ This is the **main entry point** that orchestrates the entire deployment process
 
 **AWS Options:**
 - `--region`: AWS region (default: `eu-west-1`)
+- `--environment`: Environment name (`dev`, `staging`, `prod`, default: `dev`)
 - `--with-pool`: Create EC2 instance pool for students
 - `--pool-size`: Number of EC2 instances (default: 40)
+- `--only-common`: Apply/destroy only the common stack
+- `--only-workshop`: Apply/destroy only the workshop stack
 
 **Common Options:**
 - `--destroy`: Destroy infrastructure instead of creating
@@ -353,6 +361,9 @@ This is the **main entry point** that orchestrates the entire deployment process
 
 # Lambda-only deployment (no EC2 costs)
 ./scripts/setup_classroom.sh --name dev-test --cloud aws --region eu-west-3
+
+# Staging environment (separate state)
+./scripts/setup_classroom.sh --name dev-test --cloud aws --region eu-west-3 --environment staging
 
 # Destroy everything
 ./scripts/setup_classroom.sh --name spring-2024 --cloud aws --destroy
@@ -376,7 +387,9 @@ Handles AWS-specific deployment including automated Terraform backend setup.
 1. **🏗️ Backend Setup** (First Time):
    ```bash
    # Creates in iac/backend/aws/
-   - S3 Bucket: terraform-state-{classroom}-{timestamp}
+   - S3 Bucket: terraform-state-classroom-shared
+   - DynamoDB Table: terraform-locks-classroom-shared
+   - S3 Bucket: terraform-state-{classroom}
    - DynamoDB Table: terraform-locks-{classroom}
    - Encryption and versioning enabled
    ```
@@ -384,36 +397,42 @@ Handles AWS-specific deployment including automated Terraform backend setup.
 2. **📦 Lambda Packaging**:
    ```bash
    # Creates in functions/packages/
-   - testus_patronus_user_management.zip
+   - classroom_user_management.zip
    - testus_patronus_status.zip  
-   - testus_patronus_stop_old_instances.zip
+   - classroom_stop_old_instances.zip
    ```
 
 3. **🔧 Backend Configuration**:
    ```bash
-   # Auto-generates iac/aws/backend.tf
+   # Auto-generates iac/aws/workshops/<workshop>/backend.tf
    terraform {
      backend "s3" {
        bucket         = "terraform-state-classroom-123456"
-       key            = "classroom/my-class/terraform.tfstate"
+      key            = "classroom/my-class/terraform.tfstate"  # dev (default)
        region         = "eu-west-3"
        dynamodb_table = "terraform-locks-my-class"
        encrypt        = true
      }
    }
    ```
+   For non-dev environments, the key becomes `classroom/my-class/<env>/terraform.tfstate`.
 
 4. **🚀 Infrastructure Deployment**:
    ```bash
-   # Deploys all resources in iac/aws/
+   # Deploys resources for the selected workshop
+   cd iac/aws/workshops/testus_patronus
    terraform init
    terraform apply -auto-approve
    ```
 
 **Options:**
+- `--environment <dev|staging|prod>`: Environment name (default: `dev`)
+- `--only-common`: Apply/destroy only the common stack
+- `--only-workshop`: Apply/destroy only the workshop stack
 - `--with-pool`: Include EC2 instance pool
 - `--pool-size <number>`: Number of EC2 instances (default: 4)
 - `--skip-packaging`: Skip Lambda function packaging (use existing packages)
+- `--workshop <name>`: Workshop root under `iac/aws/workshops` (default: `testus_patronus`)
 
 **Direct Usage Examples:**
 ```bash
@@ -422,6 +441,9 @@ Handles AWS-specific deployment including automated Terraform backend setup.
 
 # Lambda-only deployment
 ./scripts/setup_aws.sh my-class eu-west-3 create
+
+# Staging environment (separate state)
+./scripts/setup_aws.sh my-class eu-west-3 create --environment staging
 
 # Destroy infrastructure (preserves backend for reuse)
 ./scripts/setup_aws.sh my-class eu-west-3 destroy
@@ -450,9 +472,9 @@ Packages Python Lambda functions with their dependencies into deployment-ready Z
 **Output Files:**
 ```bash
 functions/packages/
-├── testus_patronus_user_management.zip    # Student account creation
+├── classroom_user_management.zip    # Student account creation
 ├── testus_patronus_status.zip             # Instance status checking  
-└── testus_patronus_stop_old_instances.zip # Cleanup automation
+└── classroom_stop_old_instances.zip # Cleanup automation
 ```
 
 **When to run manually:**
@@ -479,7 +501,7 @@ graph TD
     I --> J[functions/packages/*.zip]
     
     C --> K[Infrastructure Deploy]
-    K --> L[iac/aws/main.tf]
+    K --> L[iac/aws/workshops/testus_patronus/main.tf]
     L --> M[Lambda + EC2 + IAM]
     
     style A fill:#e1f5fe
@@ -518,18 +540,30 @@ terraform init && terraform apply -auto-approve
 
 **5. Main Infrastructure (Automatic)**
 ```bash
-cd iac/aws
+cd iac/aws/workshops/testus_patronus
 terraform init && terraform apply -auto-approve
-# Creates: Lambda functions, EC2 instances, IAM roles
+# Creates: Lambda functions, EC2 instances, IAM roles for the workshop
 ```
+
+**Shared/Common Infrastructure (Optional, once per account)**
+```bash
+cd iac/aws/common
+terraform init && terraform apply -auto-approve
+# Creates: EC2 manager control plane and shared EC2 IAM/SG
+```
+
+**Resource Grouping**
+- All workshop resources are tagged with `WorkshopID=<workshop_name>` and grouped via `aws_resourcegroups_group`.
+- Common resources use `WorkshopID=shared` (EC2 manager control plane).
 
 ### File Dependencies
 
 **Configuration Files Created:**
 ```bash
-iac/backend/aws/terraform.tfvars     # Backend configuration
-iac/aws/backend.tf                   # Points to backend resources
-iac/aws/terraform.tfvars             # Main infrastructure config
+iac/backend/aws/terraform.tfvars                 # Backend configuration
+iac/aws/common/backend.tf                         # Shared infrastructure backend
+iac/aws/workshops/testus_patronus/backend.tf      # Workshop backend
+iac/aws/workshops/testus_patronus/terraform.tfvars # Workshop config
 functions/packages/*.zip             # Lambda deployment packages
 ```
 
@@ -543,10 +577,16 @@ scripts/                    # All automation scripts
 
 iac/                       # Infrastructure as Code
 ├── backend/aws/          # Terraform backend (S3 + DynamoDB)
-└── aws/                  # Main AWS resources
+└── aws/                  # AWS IaC (common + workshops)
+
+iac/aws/                   # AWS Terraform roots
+├── common/               # Shared infrastructure
+└── workshops/            # Per-workshop infrastructure
 
 functions/                 # Lambda function code
+├── common/               # Shared EC2 manager functions
 ├── aws/                  # Python source code
+│   └── testus_patronus/  # Workshop-specific functions
 └── packages/             # Compiled ZIP packages (auto-generated)
 ```
 
@@ -579,7 +619,7 @@ Removes specific student resources.
 - **DynamoDB Table**: Provides state locking mechanism
 - **KMS Key**: Encrypts state files
 
-#### Main Infrastructure (`iac/aws/`)
+#### Main Infrastructure (`iac/aws/workshops/<workshop>/`)
 - **Lambda Functions**: User management, status checking, instance cleanup
 - **IAM Roles & Policies**: Secure permissions for Lambda functions
 - **EC2 Instance Pool** (optional): Pre-configured instances with Dify
@@ -643,9 +683,9 @@ Backend created successfully:
   DynamoDB Table: terraform-locks-ai-workshop-2024
 
 Packaging Lambda function...
-✓ testus_patronus_user_management.zip created
+✓ classroom_user_management.zip created
 ✓ testus_patronus_status.zip created  
-✓ testus_patronus_stop_old_instances.zip created
+✓ classroom_stop_old_instances.zip created
 
 Configuring main Terraform with remote backend...
 terraform init
@@ -756,7 +796,7 @@ terraform apply -auto-approve
 
 **Step 2: Configure Main Infrastructure**
 ```bash
-cd iac/aws
+cd iac/aws/workshops/testus_patronus
 # Auto-generates backend.tf pointing to Step 1 resources
 terraform {
   backend "s3" {
@@ -831,20 +871,23 @@ terraform destroy
 .
 ├── iac/                           # Infrastructure as Code
 │   ├── aws/                      # AWS infrastructure
-│   │   ├── main.tf              # Main AWS resources
-│   │   ├── variables.tf         # Input variables
-│   │   ├── outputs.tf           # Output values
-│   │   ├── user_data.sh         # EC2 initialization script
+│   │   ├── common/              # Shared/common resources
+│   │   ├── workshops/           # Per-workshop roots
+│   │   │   ├── testus_patronus/ # Testus Patronus workshop
+│   │   │   └── fellowship/      # Fellowship of the Build workshop
+│   │   ├── modules/             # Reusable AWS modules
 │   │   └── iam/                 # IAM policies and roles
 │   ├── backend/                 # Terraform backend setup
 │   │   ├── aws/                 # AWS backend (S3 + DynamoDB)
 │   │   └── azure/               # Azure backend (Storage Account)
 │   └── azure/                   # Azure infrastructure
 ├── functions/                    # Cloud functions
+│   ├── common/                  # Shared EC2 manager functions
 │   ├── aws/                     # AWS Lambda functions
-│   │   ├── testus_patronus_user_management.py
-│   │   ├── testus_patronus_status.py
-│   │   └── testus_patronus_stop_old_instances.py
+│   │   └── testus_patronus/     # Workshop-specific functions
+│   │       ├── classroom_user_management.py
+│   │       ├── testus_patronus_status.py
+│   │       └── dify_jira_api.py
 │   ├── azure/                   # Azure Functions
 │   └── packages/                # Packaged functions (auto-generated)
 ├── scripts/                     # Deployment and utility scripts
@@ -888,7 +931,7 @@ terraform destroy
    
    **Option A: Manual Force Unlock (Quick Fix)**
    ```bash
-   cd iac/aws  # or iac/azure depending on your cloud provider
+   cd iac/aws/workshops/testus_patronus  # or iac/azure depending on your cloud provider
    terraform force-unlock <LOCK_ID>
    # Use the lock ID shown in the error message
    # Example: terraform force-unlock 2f359820-eb1b-6f33-0411-8ae0f94d6152

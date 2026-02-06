@@ -48,9 +48,9 @@ source "$TEMP_DIR/venv/bin/activate"
 if [ "$CLOUD_PROVIDER" == "aws" ]; then
     # Package user management Lambda function
     echo "Packaging AWS Lambda user management function..."
-    PACKAGE_PATH="$PROJECT_ROOT/functions/packages/testus_patronus_user_management.zip"
+    PACKAGE_PATH="$PROJECT_ROOT/functions/packages/classroom_user_management.zip"
     pip install -r "$PROJECT_ROOT/functions/aws/requirements.txt"
-    cp "$PROJECT_ROOT/functions/aws/testus_patronus_user_management.py" "$TEMP_DIR/"
+    cp "$PROJECT_ROOT/functions/aws/testus_patronus/classroom_user_management.py" "$TEMP_DIR/"
     cd "$TEMP_DIR"
     zip -r9 "$PACKAGE_PATH" .
     cd "$PROJECT_ROOT"
@@ -58,7 +58,7 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
     # Package status Lambda function
     echo "Packaging AWS Lambda status function..."
     TEMP_DIR2=$(mktemp -d)
-    cp "$PROJECT_ROOT/functions/aws/testus_patronus_status.py" "$TEMP_DIR2/"
+    cp "$PROJECT_ROOT/functions/aws/testus_patronus/testus_patronus_status.py" "$TEMP_DIR2/"
     pip install -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR2/"
     cd "$TEMP_DIR2"
     zip -r9 "$PROJECT_ROOT/functions/packages/testus_patronus_status.zip" .
@@ -68,20 +68,20 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
     # Package stop_old_instances Lambda function
     echo "Packaging AWS Lambda stop_old_instances function..."
     TEMP_DIR3=$(mktemp -d)
-    cp "$PROJECT_ROOT/functions/aws/testus_patronus_stop_old_instances.py" "$TEMP_DIR3/"
+    cp "$PROJECT_ROOT/functions/common/classroom_stop_old_instances.py" "$TEMP_DIR3/"
     pip install -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR3/"
     cd "$TEMP_DIR3"
-    zip -r9 "$PROJECT_ROOT/functions/packages/testus_patronus_stop_old_instances.zip" .
+    zip -r9 "$PROJECT_ROOT/functions/packages/classroom_stop_old_instances.zip" .
     cd "$PROJECT_ROOT"
     rm -rf "$TEMP_DIR3"
 
     # Package admin cleanup Lambda function
     echo "Packaging AWS Lambda admin cleanup function..."
     TEMP_DIR6=$(mktemp -d)
-    cp "$PROJECT_ROOT/functions/aws/testus_patronus_admin_cleanup.py" "$TEMP_DIR6/"
+    cp "$PROJECT_ROOT/functions/common/classroom_admin_cleanup.py" "$TEMP_DIR6/"
     pip install -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR6/"
     cd "$TEMP_DIR6"
-    zip -r9 "$PROJECT_ROOT/functions/packages/testus_patronus_admin_cleanup.zip" .
+    zip -r9 "$PROJECT_ROOT/functions/packages/classroom_admin_cleanup.zip" .
     cd "$PROJECT_ROOT"
     rm -rf "$TEMP_DIR6"
 
@@ -90,12 +90,12 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
     TEMP_DIR5=$(mktemp -d)
     
     # Verify source file exists and has content
-    if [ ! -f "$PROJECT_ROOT/functions/aws/testus_patronus_instance_manager.py" ]; then
-        echo "ERROR: Source file not found: $PROJECT_ROOT/functions/aws/testus_patronus_instance_manager.py"
+    if [ ! -f "$PROJECT_ROOT/functions/common/classroom_instance_manager.py" ]; then
+        echo "ERROR: Source file not found: $PROJECT_ROOT/functions/common/classroom_instance_manager.py"
         exit 1
     fi
     
-    SOURCE_SIZE=$(wc -c < "$PROJECT_ROOT/functions/aws/testus_patronus_instance_manager.py")
+    SOURCE_SIZE=$(wc -c < "$PROJECT_ROOT/functions/common/classroom_instance_manager.py")
     echo "Source file size: $SOURCE_SIZE bytes"
     
     if [ "$SOURCE_SIZE" -lt 100 ]; then
@@ -104,10 +104,10 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
     fi
     
     # Copy the file
-    cp "$PROJECT_ROOT/functions/aws/testus_patronus_instance_manager.py" "$TEMP_DIR5/"
+    cp "$PROJECT_ROOT/functions/common/classroom_instance_manager.py" "$TEMP_DIR5/"
     
     # Verify copy succeeded
-    COPIED_SIZE=$(wc -c < "$TEMP_DIR5/testus_patronus_instance_manager.py")
+    COPIED_SIZE=$(wc -c < "$TEMP_DIR5/classroom_instance_manager.py")
     if [ "$SOURCE_SIZE" -ne "$COPIED_SIZE" ]; then
         echo "ERROR: File copy failed. Source: $SOURCE_SIZE bytes, Copied: $COPIED_SIZE bytes"
         exit 1
@@ -119,28 +119,28 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
     
     # Create zip
     cd "$TEMP_DIR5"
-    zip -r9 "$PROJECT_ROOT/functions/packages/testus_patronus_instance_manager.zip" .
+    zip -r9 "$PROJECT_ROOT/functions/packages/classroom_instance_manager.zip" .
     cd "$PROJECT_ROOT"
     
     # Verify the package was created and contains the file
-    if [ ! -f "$PROJECT_ROOT/functions/packages/testus_patronus_instance_manager.zip" ]; then
+    if [ ! -f "$PROJECT_ROOT/functions/packages/classroom_instance_manager.zip" ]; then
         echo "ERROR: Package file was not created"
         exit 1
     fi
     
     # Check if lambda_handler is in the package
-    if ! unzip -l "$PROJECT_ROOT/functions/packages/testus_patronus_instance_manager.zip" | grep -q "testus_patronus_instance_manager.py"; then
-        echo "ERROR: Package does not contain testus_patronus_instance_manager.py"
+    if ! unzip -l "$PROJECT_ROOT/functions/packages/classroom_instance_manager.zip" | grep -q "classroom_instance_manager.py"; then
+        echo "ERROR: Package does not contain classroom_instance_manager.py"
         exit 1
     fi
     
     # Verify lambda_handler function exists in the package
-    if ! unzip -p "$PROJECT_ROOT/functions/packages/testus_patronus_instance_manager.zip" testus_patronus_instance_manager.py | grep -q "def lambda_handler"; then
+    if ! unzip -p "$PROJECT_ROOT/functions/packages/classroom_instance_manager.zip" classroom_instance_manager.py | grep -q "def lambda_handler"; then
         echo "ERROR: lambda_handler function not found in packaged file"
         exit 1
     fi
     
-    PACKAGE_SIZE=$(unzip -l "$PROJECT_ROOT/functions/packages/testus_patronus_instance_manager.zip" | grep "testus_patronus_instance_manager.py" | awk '{print $1}')
+    PACKAGE_SIZE=$(unzip -l "$PROJECT_ROOT/functions/packages/classroom_instance_manager.zip" | grep "classroom_instance_manager.py" | awk '{print $1}')
     echo "Package created successfully. File size in package: $PACKAGE_SIZE bytes"
     
     rm -rf "$TEMP_DIR5"
@@ -150,7 +150,7 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
     TEMP_DIR4=$(mktemp -d)
 
     # Copy the dify_jira API Lambda function
-    cp "$PROJECT_ROOT/functions/aws/dify_jira_api.py" "$TEMP_DIR4/"
+    cp "$PROJECT_ROOT/functions/aws/testus_patronus/dify_jira_api.py" "$TEMP_DIR4/"
 
     # Copy the dataset directory with JSON files (make it optional)
     echo "Copying dataset directory..."

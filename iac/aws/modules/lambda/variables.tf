@@ -8,9 +8,50 @@ variable "owner" {
   type        = string
 }
 
+variable "workshop_name" {
+  description = "Workshop identifier for tagging"
+  type        = string
+}
+
 variable "classroom_name" {
   description = "The name of the classroom"
   type        = string
+}
+
+variable "enable_status" {
+  description = "Whether to create the status Lambda"
+  type        = bool
+  default     = true
+}
+
+variable "enable_user_management" {
+  description = "Whether to create the user management Lambda"
+  type        = bool
+  default     = true
+}
+
+variable "enable_instance_manager" {
+  description = "Whether to create the instance manager Lambda"
+  type        = bool
+  default     = true
+}
+
+variable "enable_stop_old_instances" {
+  description = "Whether to create the stop old instances Lambda"
+  type        = bool
+  default     = true
+}
+
+variable "enable_admin_cleanup" {
+  description = "Whether to create the admin cleanup Lambda"
+  type        = bool
+  default     = true
+}
+
+variable "enable_dify_jira_api" {
+  description = "Whether to create the Dify Jira API Lambda"
+  type        = bool
+  default     = true
 }
 
 variable "region" {

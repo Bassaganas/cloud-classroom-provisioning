@@ -16,10 +16,40 @@ variable "region" {
   default     = "eu-west-1"
 }
 
+variable "common_state_bucket" {
+  description = "S3 bucket for the common Terraform state"
+  type        = string
+  default     = "terraform-state-classroom-shared"
+}
+
+variable "common_state_key" {
+  description = "State key for the common Terraform state"
+  type        = string
+  default     = "classroom/shared/terraform.tfstate"
+}
+
+variable "common_state_region" {
+  description = "Region for the common Terraform state"
+  type        = string
+  default     = "eu-west-3"
+}
+
+variable "common_state_dynamodb_table" {
+  description = "DynamoDB table for the common Terraform state lock"
+  type        = string
+  default     = "terraform-locks-classroom-shared"
+}
+
 variable "classroom_name" {
   description = "The name of the classroom"
   type        = string
   default     = "testus-patronus"
+}
+
+variable "workshop_name" {
+  description = "Workshop identifier for tagging and naming"
+  type        = string
+  default     = "testus_patronus"
 }
 
 # --- EC2 Pool for Classroom Assignment ---

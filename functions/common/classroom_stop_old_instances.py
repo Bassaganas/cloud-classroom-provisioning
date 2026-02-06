@@ -14,15 +14,16 @@ logger.setLevel(logging.INFO)
 
 # Initialize clients with region from environment
 region = os.environ.get('CLASSROOM_REGION', 'eu-west-3')
+WORKSHOP_NAME = os.environ.get('WORKSHOP_NAME', 'classroom')
+ENVIRONMENT = os.environ.get('ENVIRONMENT', 'dev')
 ssm = boto3.client('ssm', region_name=region)
 dynamodb = boto3.resource('dynamodb', region_name=region)
-environment = os.environ.get('ENVIRONMENT', 'testus-patronus')
-table = dynamodb.Table(f'instance-assignments-{environment}')
+table = dynamodb.Table(f'instance-assignments-{WORKSHOP_NAME}-{ENVIRONMENT}')
 
 def get_timeout_parameters():
     """Get timeout parameters from Parameter Store"""
     try:
-        parameter_prefix = os.environ.get('PARAMETER_PREFIX', '/classroom/dev')
+        parameter_prefix = os.environ.get('PARAMETER_PREFIX', f'/classroom/{WORKSHOP_NAME}/{ENVIRONMENT}')
         response = ssm.get_parameters(
             Names=[
                 f"{parameter_prefix}/instance_stop_timeout_minutes",
@@ -115,7 +116,8 @@ def process_instance(instance_id, ec2_client, ssm_client, table):
                     Resources=[instance_id],
                     Tags=[
                         {'Key': 'Status', 'Value': 'available'},
-                        {'Key': 'Student', 'Value': ''}
+                        {'Key': 'Student', 'Value': ''},
+                        {'Key': 'Company', 'Value': 'TestingFantasy'}
                     ]
                 )
                 
@@ -282,7 +284,8 @@ def process_instance(instance_id, ec2_client, ssm_client, table):
                                         Resources=[instance_id],
                                         Tags=[
                                             {'Key': 'Status', 'Value': 'available'},
-                                            {'Key': 'Student', 'Value': ''}
+                                            {'Key': 'Student', 'Value': ''},
+                                            {'Key': 'Company', 'Value': 'TestingFantasy'}
                                         ]
                                     )
                                     logger.info(f"Tags reset for instance {instance_id}")
@@ -405,8 +408,9 @@ def lambda_handler(event, context):
     ec2_client = boto3.client('ec2', region_name=region)
     ssm_client = boto3.client('ssm', region_name=region)
     dynamodb = boto3.resource('dynamodb', region_name=region)
-    environment = os.environ.get('ENVIRONMENT', 'testus-patronus')
-    table = dynamodb.Table(f'instance-assignments-{environment}')
+    workshop_name = os.environ.get('WORKSHOP_NAME', 'classroom')
+    environment = os.environ.get('ENVIRONMENT', 'dev')
+    table = dynamodb.Table(f'instance-assignments-{workshop_name}-{environment}')
     try:
         # Get all pool instances
         pool_response = ec2_client.describe_instances(

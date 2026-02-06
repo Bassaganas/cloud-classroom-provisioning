@@ -8,6 +8,11 @@ variable "owner" {
   type        = string
 }
 
+variable "workshop_name" {
+  description = "Workshop identifier for tagging"
+  type        = string
+}
+
 variable "domain_name" {
   description = "Root domain name for the static website"
   type        = string

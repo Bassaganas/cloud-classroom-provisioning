@@ -8,6 +8,11 @@ variable "owner" {
   type        = string
 }
 
+variable "workshop_name" {
+  description = "Workshop identifier for tagging"
+  type        = string
+}
+
 variable "domain_name" {
   description = "Custom domain name for CloudFront distribution"
   type        = string

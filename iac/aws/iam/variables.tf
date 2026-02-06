@@ -9,6 +9,11 @@ variable "owner" {
   type        = string
 }
 
+variable "workshop_name" {
+  description = "Workshop identifier for tagging"
+  type        = string
+}
+
 variable "region" {
   description = "The AWS region to deploy to"
   type        = string

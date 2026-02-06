@@ -1,6 +1,6 @@
 # IAM Role for Lambda execution
 resource "aws_iam_role" "lambda_role" {
-  name = "classroom-lambda-execution-role-${var.environment}"
+  name = "classroom-lambda-execution-role-${var.workshop_name}-${var.environment}"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -19,12 +19,14 @@ resource "aws_iam_role" "lambda_role" {
     Environment = var.environment
     Owner       = var.owner
     Project     = "classroom"
+    WorkshopID  = var.workshop_name
+    Company     = "TestingFantasy"
   }
 }
 
 # IAM Policy for Lambda to manage EC2, DynamoDB, IAM, etc.
 resource "aws_iam_role_policy" "lambda_iam_policy" {
-  name = "LambdaIAMManagementPolicy-${var.environment}"
+  name = "LambdaIAMManagementPolicy-${var.workshop_name}-${var.environment}"
   role = aws_iam_role.lambda_role.id
 
   policy = jsonencode({
@@ -95,7 +97,7 @@ resource "aws_iam_role_policy" "lambda_iam_policy" {
           "ssm:GetParameter",
           "ssm:GetParameters"
         ]
-        Resource = "arn:aws:ssm:${var.region}:${var.account_id}:parameter/classroom/${var.environment}/*"
+        Resource = "arn:aws:ssm:${var.region}:${var.account_id}:parameter/classroom/${var.workshop_name}/${var.environment}/*"
       },
       {
         Effect = "Allow"
@@ -121,7 +123,7 @@ resource "aws_iam_role_policy_attachment" "lambda_basic" {
 resource "aws_iam_policy" "lambda_secretsmanager_policy" {
   count = (var.secrets_manager_secret_arn != "" || var.instance_manager_password_secret_name != "") ? 1 : 0
 
-  name        = "lambda-secretsmanager-policy-${var.environment}"
+  name        = "lambda-secretsmanager-policy-${var.workshop_name}-${var.environment}"
   description = "Allow Lambda to get secrets from Secrets Manager"
   policy = jsonencode({
     Version = "2012-10-17"

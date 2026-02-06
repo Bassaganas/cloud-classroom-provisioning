@@ -8,6 +8,11 @@ variable "owner" {
   type        = string
 }
 
+variable "workshop_name" {
+  description = "Workshop identifier for tagging"
+  type        = string
+}
+
 variable "instance_stop_timeout_minutes" {
   description = "Timeout in minutes before stopping unassigned running instances"
   type        = number

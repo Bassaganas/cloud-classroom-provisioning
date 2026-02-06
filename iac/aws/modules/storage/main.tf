@@ -1,6 +1,6 @@
 # DynamoDB table for instance assignments
 resource "aws_dynamodb_table" "instance_assignments" {
-  name         = "instance-assignments-${var.environment}"
+  name         = "instance-assignments-${var.workshop_name}-${var.environment}"
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "instance_id"
 
@@ -24,12 +24,14 @@ resource "aws_dynamodb_table" "instance_assignments" {
     Environment = var.environment
     Owner       = var.owner
     Project     = "classroom"
+    WorkshopID  = var.workshop_name
+    Company     = "TestingFantasy"
   }
 }
 
 # Parameter Store parameters for instance timeouts
 resource "aws_ssm_parameter" "instance_stop_timeout" {
-  name        = "/classroom/${var.environment}/instance_stop_timeout_minutes"
+  name        = "/classroom/${var.workshop_name}/${var.environment}/instance_stop_timeout_minutes"
   description = "Timeout in minutes before stopping unassigned running instances"
   type        = "String"
   value       = tostring(var.instance_stop_timeout_minutes)
@@ -38,11 +40,13 @@ resource "aws_ssm_parameter" "instance_stop_timeout" {
     Environment = var.environment
     Owner       = var.owner
     Project     = "classroom"
+    WorkshopID  = var.workshop_name
+    Company     = "TestingFantasy"
   }
 }
 
 resource "aws_ssm_parameter" "instance_terminate_timeout" {
-  name        = "/classroom/${var.environment}/instance_terminate_timeout_minutes"
+  name        = "/classroom/${var.workshop_name}/${var.environment}/instance_terminate_timeout_minutes"
   description = "Timeout in minutes before terminating stopped instances"
   type        = "String"
   value       = tostring(var.instance_terminate_timeout_minutes)
@@ -51,11 +55,13 @@ resource "aws_ssm_parameter" "instance_terminate_timeout" {
     Environment = var.environment
     Owner       = var.owner
     Project     = "classroom"
+    WorkshopID  = var.workshop_name
+    Company     = "TestingFantasy"
   }
 }
 
 resource "aws_ssm_parameter" "instance_hard_terminate_timeout" {
-  name        = "/classroom/${var.environment}/instance_hard_terminate_timeout_minutes"
+  name        = "/classroom/${var.workshop_name}/${var.environment}/instance_hard_terminate_timeout_minutes"
   description = "Timeout in minutes before hard terminating any instance"
   type        = "String"
   value       = tostring(var.instance_hard_terminate_timeout_minutes)
@@ -64,18 +70,22 @@ resource "aws_ssm_parameter" "instance_hard_terminate_timeout" {
     Environment = var.environment
     Owner       = var.owner
     Project     = "classroom"
+    WorkshopID  = var.workshop_name
+    Company     = "TestingFantasy"
   }
 }
 
 # Secrets Manager secret for instance manager password
 resource "aws_secretsmanager_secret" "instance_manager_password" {
-  name        = "classroom/${var.environment}/instance-manager/password"
+  name        = "classroom/${var.workshop_name}/${var.environment}/instance-manager/password"
   description = "Password for EC2 Instance Manager authentication"
 
   tags = {
     Environment = var.environment
     Owner       = var.owner
     Project     = "classroom"
+    WorkshopID  = var.workshop_name
+    Company     = "TestingFantasy"
   }
 }
 

@@ -13,15 +13,18 @@ import logging
 import threading
 from datetime import datetime, timedelta
 import random
+import time as _debug_time
 
-# Get region from environment variable
+# Get region and workshop context from environment variables
 REGION = os.environ.get('AWS_DEFAULT_REGION', os.environ.get('AWS_REGION', 'eu-west-3'))
+WORKSHOP_NAME = os.environ.get('WORKSHOP_NAME', 'testus_patronus')
+ENVIRONMENT = os.environ.get('ENVIRONMENT', 'dev')
 
 # Initialize AWS clients
 iam = boto3.client('iam')
 secretsmanager = boto3.client('secretsmanager', region_name=REGION)
 dynamodb = boto3.resource('dynamodb', region_name=REGION)
-table = dynamodb.Table(f"instance-assignments-{os.environ.get('ENVIRONMENT', 'dev')}")
+table = dynamodb.Table(f"instance-assignments-{WORKSHOP_NAME}-{ENVIRONMENT}")
 
 # Get account ID from environment variable
 ACCOUNT_ID = os.environ.get('AWS_ACCOUNT_ID', '087559609246')
@@ -37,6 +40,25 @@ status_lambda_url = os.environ.get('STATUS_LAMBDA_URL')
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
+
+# region agent debug log
+def _debug_log(hypothesis_id, location, message, data=None):
+    try:
+        payload = {
+            "sessionId": "debug-session",
+            "runId": "run1",
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data or {},
+            "timestamp": int(_debug_time.time() * 1000)
+        }
+        with open("/Users/paula.bassaganas/Repositories/Bassagan/cloud-classroom-provisioning/.cursor/debug.log", "a") as log_file:
+            log_file.write(json.dumps(payload) + "\n")
+        logger.info("DEBUG_NDJSON %s", json.dumps(payload))
+    except Exception:
+        pass
+# endregion agent debug log
 
 def create_cookie_headers(user_info):
     """Create Set-Cookie headers for user session information"""
@@ -942,7 +964,8 @@ def destroy_users():
                                 Resources=[instance_id],
                                 Tags=[
                                     {'Key': 'Status', 'Value': 'available'},
-                                    {'Key': 'Student', 'Value': ''}
+                                    {'Key': 'Student', 'Value': ''},
+                                    {'Key': 'Company', 'Value': 'TestingFantasy'}
                                 ]
                             )
                     
@@ -978,6 +1001,20 @@ def lambda_handler(event, context):
             }
         
         logger.info(f"Lambda handler invoked. Event: {json.dumps(event)}")
+        # region agent debug log
+        _debug_log(
+            "H1",
+            "classroom_user_management.py:lambda_handler:entry",
+            "Lambda handler entry",
+            {
+                "method": event.get("requestContext", {}).get("http", {}).get("method"),
+                "path": event.get("requestContext", {}).get("http", {}).get("path"),
+                "host": (event.get("headers") or {}).get("host"),
+                "has_cookies_list": bool(event.get("cookies")),
+                "has_cookie_header": bool((event.get("headers") or {}).get("cookie"))
+            }
+        )
+        # endregion agent debug log
         # Check if it's a GET request
         if event['requestContext']['http']['method'] == 'GET':
             # Normalize path - handle empty paths and trailing slashes
@@ -1203,8 +1240,8 @@ def lambda_handler(event, context):
                                         'headers': headers
                                     }
                                     if cookie_headers:
-                                        # Lambda Function URLs support multiple Set-Cookie headers via multiValueHeaders
-                                        response['multiValueHeaders'] = {'Set-Cookie': cookie_headers}
+                                        # Lambda Function URLs (payload v2) use the "cookies" array
+                                        response['cookies'] = cookie_headers
                                     return response
                                 elif instance_state in ['terminated', 'shutting-down']:
                                     logger.warning(f"Instance {instance_id_from_cookie} is {instance_state}, cannot be reused")
@@ -1426,7 +1463,7 @@ def lambda_handler(event, context):
                             'headers': headers
                         }
                         if cookie_headers:
-                            response['multiValueHeaders'] = {'Set-Cookie': cookie_headers}
+                            response['cookies'] = cookie_headers
                         return response
                     else:
                         # User found in cookie but NOT in DynamoDB - check if IAM user exists and if instance is already assigned
@@ -1522,7 +1559,7 @@ def lambda_handler(event, context):
                                 'headers': headers
                             }
                             if cookie_headers:
-                                response['multiValueHeaders'] = {'Set-Cookie': cookie_headers}
+                                response['cookies'] = cookie_headers
                             return response
                         
                         # No existing instance found - check if IAM user exists
@@ -1571,7 +1608,7 @@ def lambda_handler(event, context):
                                     'headers': headers
                                 }
                                 if cookie_headers:
-                                    response['multiValueHeaders'] = {'Set-Cookie': cookie_headers}
+                                    response['cookies'] = cookie_headers
                                 return response
                             else:
                                 iam_user_exists = user_exists(user_name)
@@ -1611,7 +1648,7 @@ def lambda_handler(event, context):
                                     'headers': headers
                                 }
                                 if cookie_headers:
-                                    response['multiValueHeaders'] = {'Set-Cookie': cookie_headers}
+                                    response['cookies'] = cookie_headers
                                 return response
                             else:
                                 # Cookie has invalid user (doesn't exist in IAM and no EC2 instance found)
@@ -1626,6 +1663,18 @@ def lambda_handler(event, context):
                 # No user_name in cookie or cookie user invalid: create a new user
                 logger.info(f"[Azure Config] New user path")
                 user_info = create_user()
+                # region agent debug log
+                _debug_log(
+                    "H2",
+                    "classroom_user_management.py:lambda_handler:new_user",
+                    "Created user info for new user path",
+                    {
+                        "has_instance_id": bool(user_info.get("instance_id")),
+                        "has_instance_error": bool(user_info.get("instance_error")),
+                        "has_azure_configs": bool(user_info.get("azure_configs"))
+                    }
+                )
+                # endregion agent debug log
                 # Always load Azure LLM configurations for new users as well
                 try:
                     azure_configs = get_secret()
@@ -1645,7 +1694,20 @@ def lambda_handler(event, context):
                     'headers': headers
                 }
                 if cookie_headers:
-                    response['multiValueHeaders'] = {'Set-Cookie': cookie_headers}
+                    response['cookies'] = cookie_headers
+                # region agent debug log
+                _debug_log(
+                    "H1",
+                    "classroom_user_management.py:lambda_handler:new_user_response",
+                    "Built response for new user path",
+                    {
+                        "statusCode": response.get("statusCode"),
+                        "response_keys": sorted(list(response.keys())),
+                        "cookie_count": len(cookie_headers) if cookie_headers else 0,
+                        "has_multi_value_headers": "multiValueHeaders" in response
+                    }
+                )
+                # endregion agent debug log
                 return response
             else:
                 logger.warning(f"Unknown path requested: {path}")
@@ -1678,6 +1740,17 @@ def lambda_handler(event, context):
             }
     except Exception as e:
         logger.error(f"Error in lambda_handler: {str(e)}")
+        # region agent debug log
+        _debug_log(
+            "H3",
+            "classroom_user_management.py:lambda_handler:exception",
+            "Unhandled exception in lambda_handler",
+            {
+                "error_type": type(e).__name__,
+                "error_message": str(e)
+            }
+        )
+        # endregion agent debug log
         return {
             'statusCode': 500,
             'body': json.dumps({
@@ -1819,7 +1892,8 @@ def cleanup_expired_assignments():
                     Resources=[instance_id],
                     Tags=[
                         {'Key': 'Status', 'Value': 'available'},
-                        {'Key': 'Student', 'Value': ''}
+                        {'Key': 'Student', 'Value': ''},
+                        {'Key': 'Company', 'Value': 'TestingFantasy'}
                     ]
                 )
                 
@@ -1956,7 +2030,8 @@ def assign_ec2_instance_to_student(student_name):
                         Resources=[instance_id],
                         Tags=[
                             {'Key': 'Status', 'Value': 'starting'},
-                            {'Key': 'Student', 'Value': student_name}
+                            {'Key': 'Student', 'Value': student_name},
+                            {'Key': 'Company', 'Value': 'TestingFantasy'}
                         ]
                     )
                     
@@ -1969,7 +2044,8 @@ def assign_ec2_instance_to_student(student_name):
                         Resources=[instance_id],
                         Tags=[
                             {'Key': 'Status', 'Value': 'assigned'},
-                            {'Key': 'Student', 'Value': student_name}
+                            {'Key': 'Student', 'Value': student_name},
+                            {'Key': 'Company', 'Value': 'TestingFantasy'}
                         ]
                     )
                 except Exception as e:
@@ -2070,7 +2146,8 @@ def cleanup_failed_assignment(instance_id, student_name):
             Resources=[instance_id],
             Tags=[
                 {'Key': 'Status', 'Value': 'available'},
-                {'Key': 'Student', 'Value': ''}
+                {'Key': 'Student', 'Value': ''},
+                {'Key': 'Company', 'Value': 'TestingFantasy'}
             ]
         )
         

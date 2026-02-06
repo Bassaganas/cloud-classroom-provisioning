@@ -8,6 +8,11 @@ variable "owner" {
   type        = string
 }
 
+variable "workshop_name" {
+  description = "Workshop identifier for tagging"
+  type        = string
+}
+
 variable "account_id" {
   description = "AWS account ID"
   type        = string

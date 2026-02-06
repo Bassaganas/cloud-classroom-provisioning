@@ -1,8 +1,16 @@
 # CloudWatch Event Rule for Stopping Old Instances
 resource "aws_cloudwatch_event_rule" "stop_old_instances_schedule" {
-  name                = "stop-old-instances-schedule-${var.environment}"
+  name                = "stop-old-instances-schedule-${var.workshop_name}-${var.environment}"
   schedule_expression = "rate(10 minutes)"
   description         = "Stop EC2 instances running for more than configured timeout"
+
+  tags = {
+    Environment = var.environment
+    Owner       = var.owner
+    Project     = "classroom"
+    WorkshopID  = var.workshop_name
+    Company     = "TestingFantasy"
+  }
 }
 
 resource "aws_cloudwatch_event_target" "stop_old_instances_target" {
@@ -21,9 +29,17 @@ resource "aws_lambda_permission" "allow_eventbridge_stop_old_instances" {
 
 # CloudWatch Event Rule for Admin Instance Cleanup
 resource "aws_cloudwatch_event_rule" "admin_cleanup_schedule" {
-  name                = "admin-cleanup-schedule-${var.environment}"
+  name                = "admin-cleanup-schedule-${var.workshop_name}-${var.environment}"
   schedule_expression = var.admin_cleanup_schedule
   description         = "Clean up admin instances based on age"
+
+  tags = {
+    Environment = var.environment
+    Owner       = var.owner
+    Project     = "classroom"
+    WorkshopID  = var.workshop_name
+    Company     = "TestingFantasy"
+  }
 }
 
 resource "aws_cloudwatch_event_target" "admin_cleanup_target" {

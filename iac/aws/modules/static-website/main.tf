@@ -6,6 +6,8 @@ resource "aws_s3_bucket" "website" {
     Environment = var.environment
     Owner       = var.owner
     Project     = "testing-fantasy"
+    WorkshopID  = var.workshop_name
+    Company     = "TestingFantasy"
   }
 }
 
@@ -60,6 +62,8 @@ resource "aws_acm_certificate" "cert" {
     Environment = var.environment
     Owner       = var.owner
     Project     = "testing-fantasy"
+    WorkshopID  = var.workshop_name
+    Company     = "TestingFantasy"
   }
 
   lifecycle {
@@ -151,6 +155,8 @@ resource "aws_cloudfront_distribution" "website" {
     Environment = var.environment
     Owner       = var.owner
     Project     = "testing-fantasy"
+    WorkshopID  = var.workshop_name
+    Company     = "TestingFantasy"
   }
 
   depends_on = [aws_s3_bucket_policy.website]

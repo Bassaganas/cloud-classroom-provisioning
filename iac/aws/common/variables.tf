@@ -1,0 +1,102 @@
+variable "environment" {
+  description = "The environment name"
+  type        = string
+  default     = "dev"
+}
+
+variable "owner" {
+  description = "The owner of the resources"
+  type        = string
+  default     = "admin"
+}
+
+variable "region" {
+  description = "The AWS region to deploy to"
+  type        = string
+  default     = "eu-west-3"
+}
+
+variable "workshop_name" {
+  description = "Workshop identifier for shared EC2 manager resources"
+  type        = string
+  default     = "shared"
+}
+
+variable "classroom_name" {
+  description = "Classroom name used for Lambda naming"
+  type        = string
+  default     = "common"
+}
+
+variable "ec2_pool_size" {
+  description = "Emergency option: Number of EC2 instances to create via Terraform"
+  type        = number
+  default     = 0
+}
+
+variable "ec2_ami_id" {
+  description = "AMI ID for classroom EC2 instances"
+  type        = string
+  default     = "ami-0746ed6b6c0683e67"
+}
+
+variable "ec2_instance_type" {
+  description = "Instance type for classroom EC2 instances"
+  type        = string
+  default     = "t3.medium"
+}
+
+variable "ec2_subnet_id" {
+  description = "Subnet ID for classroom EC2 instances"
+  type        = string
+  default     = ""
+}
+
+variable "instance_stop_timeout_minutes" {
+  description = "Number of minutes before an instance is considered idle and should be stopped"
+  type        = number
+  default     = 4
+}
+
+variable "instance_terminate_timeout_minutes" {
+  description = "Number of minutes before a stopped instance should be terminated"
+  type        = number
+  default     = 20
+}
+
+variable "hard_terminate_timeout_minutes" {
+  description = "Number of minutes before a stopped instance should be hard terminated"
+  type        = number
+  default     = 45
+}
+
+variable "admin_cleanup_interval_days" {
+  description = "Number of days after which admin instances should be automatically deleted"
+  type        = number
+  default     = 7
+}
+
+variable "admin_cleanup_schedule" {
+  description = "Schedule expression for admin instance cleanup"
+  type        = string
+  default     = "cron(0 2 ? * SUN *)"
+}
+
+variable "instance_manager_password" {
+  description = "Password for instance manager authentication (leave empty to auto-generate)"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "instance_manager_memory_size" {
+  description = "Memory size (MB) for instance_manager Lambda"
+  type        = number
+  default     = 512
+}
+
+variable "instance_manager_timeout" {
+  description = "Timeout (seconds) for instance_manager Lambda"
+  type        = number
+  default     = 300
+}

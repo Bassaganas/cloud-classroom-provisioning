@@ -16,7 +16,7 @@ data "aws_ami" "amazon_linux_2" {
 
 # IAM Role for EC2 instances
 resource "aws_iam_role" "ec2_ssm_role" {
-  name = "ec2-ssm-role-${var.environment}"
+  name = "ec2-ssm-role-${var.workshop_name}-${var.environment}"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -35,6 +35,8 @@ resource "aws_iam_role" "ec2_ssm_role" {
     Environment = var.environment
     Owner       = var.owner
     Project     = "classroom"
+    WorkshopID  = var.workshop_name
+    Company     = "TestingFantasy"
   }
 }
 
@@ -46,7 +48,7 @@ resource "aws_iam_role_policy_attachment" "ssm_policy" {
 
 # Create instance profile
 resource "aws_iam_instance_profile" "ec2_ssm_profile" {
-  name = "ec2-ssm-profile-${var.environment}"
+  name = "ec2-ssm-profile-${var.workshop_name}-${var.environment}"
   role = aws_iam_role.ec2_ssm_role.name
 }
 
@@ -68,7 +70,7 @@ data "aws_subnet" "default" {
 
 # Security Group for Classroom EC2 Instances
 resource "aws_security_group" "classroom_sg" {
-  name_prefix = "classroom-sg-${var.environment}-"
+  name_prefix = "classroom-sg-${var.workshop_name}-${var.environment}-"
   vpc_id      = data.aws_vpc.default.id
   description = "Minimal security group for classroom EC2 instances"
 
@@ -109,10 +111,12 @@ resource "aws_security_group" "classroom_sg" {
   }
 
   tags = {
-    Name        = "classroom-sg-${var.environment}"
+    Name        = "classroom-sg-${var.workshop_name}-${var.environment}"
     Environment = var.environment
     Owner       = var.owner
     Project     = "classroom"
+    WorkshopID  = var.workshop_name
+    Company     = "TestingFantasy"
   }
 }
 
@@ -142,13 +146,15 @@ resource "aws_instance" "classroom_pool" {
   }
 
   tags = {
-    Name        = "classroom-pool-${count.index}"
+    Name        = "classroom-pool-${var.workshop_name}-${count.index}"
     Status      = "available"
     Project     = "classroom"
     Environment = var.environment
     Owner       = var.owner
     Type        = "pool"
     CreatedBy   = "terraform-emergency"
+    WorkshopID  = var.workshop_name
+    Company     = "TestingFantasy"
   }
 
   lifecycle {

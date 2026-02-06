@@ -16,16 +16,18 @@ logger.setLevel(logging.INFO)
 
 # Log module initialization
 logger.info("=" * 60)
-logger.info("Module testus_patronus_instance_manager.py loaded")
+logger.info("Module classroom_instance_manager.py loaded")
 logger.info(f"Python version: {sys.version}")
 logger.info(f"Current directory: {os.getcwd()}")
 logger.info(f"File location: {__file__}")
 
 # Get region from environment variable (Lambda automatically sets AWS_REGION)
 REGION = os.environ.get('CLASSROOM_REGION', os.environ.get('AWS_REGION', 'eu-west-3'))
+WORKSHOP_NAME = os.environ.get('WORKSHOP_NAME', 'classroom')
 ENVIRONMENT = os.environ.get('ENVIRONMENT', 'dev')
 
 logger.info(f"REGION: {REGION}")
+logger.info(f"WORKSHOP_NAME: {WORKSHOP_NAME}")
 logger.info(f"ENVIRONMENT: {ENVIRONMENT}")
 logger.info("=" * 60)
 
@@ -34,8 +36,8 @@ try:
     logger.info("Initializing AWS clients...")
     ec2 = boto3.client('ec2', region_name=REGION)
     dynamodb = boto3.resource('dynamodb', region_name=REGION)
-    table = dynamodb.Table(f"instance-assignments-{ENVIRONMENT}")
-    logger.info(f"AWS clients initialized. Table: instance-assignments-{ENVIRONMENT}")
+    table = dynamodb.Table(f"instance-assignments-{WORKSHOP_NAME}-{ENVIRONMENT}")
+    logger.info(f"AWS clients initialized. Table: instance-assignments-{WORKSHOP_NAME}-{ENVIRONMENT}")
 except Exception as e:
     logger.error(f"Error initializing AWS clients: {str(e)}", exc_info=True)
     raise
@@ -44,7 +46,7 @@ except Exception as e:
 INSTANCE_TYPE = os.environ.get('EC2_INSTANCE_TYPE', 't3.medium')
 SUBNET_ID = os.environ.get('EC2_SUBNET_ID')
 SECURITY_GROUP_IDS = os.environ.get('EC2_SECURITY_GROUP_IDS', '').split(',') if os.environ.get('EC2_SECURITY_GROUP_IDS') else []
-IAM_INSTANCE_PROFILE = os.environ.get('EC2_IAM_INSTANCE_PROFILE', f'ec2-ssm-profile-{ENVIRONMENT}')
+IAM_INSTANCE_PROFILE = os.environ.get('EC2_IAM_INSTANCE_PROFILE', f'ec2-ssm-profile-{WORKSHOP_NAME}-{ENVIRONMENT}')
 
 # Initialize Secrets Manager client for password authentication
 secretsmanager = boto3.client('secretsmanager', region_name=REGION)
@@ -231,7 +233,8 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None):
                     {'Key': 'Isolated', 'Value': 'true'},
                     {'Key': 'CreatedBy', 'Value': 'lambda-manager'},
                     {'Key': 'CreatedAt', 'Value': datetime.utcnow().isoformat()},
-                    {'Key': 'CleanupDays', 'Value': cleanup_days_value}  # Days until cleanup
+                    {'Key': 'CleanupDays', 'Value': cleanup_days_value},  # Days until cleanup
+                    {'Key': 'Company', 'Value': 'TestingFantasy'}
                 ]
             else:  # pool
                 name = f'classroom-pool-{i}'
@@ -242,7 +245,8 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None):
                     {'Key': 'Environment', 'Value': ENVIRONMENT},
                     {'Key': 'Type', 'Value': 'pool'},
                     {'Key': 'CreatedBy', 'Value': 'lambda-manager'},
-                    {'Key': 'CreatedAt', 'Value': datetime.utcnow().isoformat()}
+                    {'Key': 'CreatedAt', 'Value': datetime.utcnow().isoformat()},
+                    {'Key': 'Company', 'Value': 'TestingFantasy'}
                 ]
             
             response = ec2.run_instances(
@@ -938,7 +942,8 @@ def lambda_handler(event, context):
                     Resources=[instance_id],
                     Tags=[
                         {'Key': 'Status', 'Value': 'starting'},
-                        {'Key': 'Student', 'Value': student_name}
+                        {'Key': 'Student', 'Value': student_name},
+                        {'Key': 'Company', 'Value': 'TestingFantasy'}
                     ]
                 )
                 
@@ -959,7 +964,8 @@ def lambda_handler(event, context):
                     Resources=[instance_id],
                     Tags=[
                         {'Key': 'Status', 'Value': 'assigned'},
-                        {'Key': 'Student', 'Value': student_name}
+                        {'Key': 'Student', 'Value': student_name},
+                        {'Key': 'Company', 'Value': 'TestingFantasy'}
                     ]
                 )
                 

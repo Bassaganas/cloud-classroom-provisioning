@@ -9,6 +9,8 @@ resource "aws_acm_certificate" "cert" {
     Environment = var.environment
     Owner       = var.owner
     Project     = "classroom"
+    WorkshopID  = var.workshop_name
+    Company     = "TestingFantasy"
   }
 
   lifecycle {
@@ -20,7 +22,7 @@ resource "aws_acm_certificate" "cert" {
 # This is optional - set wait_for_certificate_validation = true only after DNS records are added
 # Using for_each instead of count to avoid Terraform evaluation issues
 resource "aws_acm_certificate_validation" "cert" {
-  for_each = { create = true }
+  for_each = var.wait_for_certificate_validation ? { create = true } : {}
 
   provider = aws.us_east_1
 
@@ -37,7 +39,7 @@ resource "aws_acm_certificate_validation" "cert" {
 # CloudFront requires a validated certificate to work with custom domains
 # Using for_each instead of count to avoid Terraform evaluation issues
 resource "aws_cloudfront_distribution" "distribution" {
-  for_each = { create = true }
+  for_each = var.wait_for_certificate_validation ? { create = true } : {}
 
   enabled             = true
   is_ipv6_enabled      = true
@@ -101,6 +103,8 @@ resource "aws_cloudfront_distribution" "distribution" {
     Environment = var.environment
     Owner       = var.owner
     Project     = "classroom"
+    WorkshopID  = var.workshop_name
+    Company     = "TestingFantasy"
   }
 
   # CloudFront will only be created when certificate validation is enabled

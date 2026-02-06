@@ -8,6 +8,11 @@ variable "owner" {
   type        = string
 }
 
+variable "workshop_name" {
+  description = "Workshop identifier for tagging"
+  type        = string
+}
+
 variable "ec2_pool_size" {
   description = "Emergency option: Number of EC2 instances to create via Terraform (default: 0)"
   type        = number

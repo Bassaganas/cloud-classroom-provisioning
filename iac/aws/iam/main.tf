@@ -1,5 +1,5 @@
 resource "aws_iam_policy" "user_restricted_policy_lambda" {
-  name        = "UserRestrictedPolicyLambda-${var.environment}"
+  name        = "UserRestrictedPolicyLambda-${var.workshop_name}-${var.environment}"
   description = "Policy to restrict users to their own resources"
 
   policy = jsonencode({
@@ -38,11 +38,13 @@ resource "aws_iam_policy" "user_restricted_policy_lambda" {
     Environment = var.environment
     Owner       = var.owner
     Project     = "classroom"
+    WorkshopID  = var.workshop_name
+    Company     = "TestingFantasy"
   }
 }
 
 resource "aws_iam_policy" "user_restricted_policy_athena" {
-  name        = "UserRestrictedPolicyAthena-${var.environment}"
+  name        = "UserRestrictedPolicyAthena-${var.workshop_name}-${var.environment}"
   description = "Policy to restrict users to their own resources on Athena"
 
   policy = jsonencode({
@@ -79,11 +81,13 @@ resource "aws_iam_policy" "user_restricted_policy_athena" {
     Environment = var.environment
     Owner       = var.owner
     Project     = "classroom"
+    WorkshopID  = var.workshop_name
+    Company     = "TestingFantasy"
   }
 }
 
 resource "aws_iam_policy" "user_restricted_policy_s3" {
-  name        = "UserRestrictedPolicyS3-${var.environment}"
+  name        = "UserRestrictedPolicyS3-${var.workshop_name}-${var.environment}"
   description = "Policy to restrict users to their own resources on S3"
 
   policy = jsonencode({
@@ -120,11 +124,13 @@ resource "aws_iam_policy" "user_restricted_policy_s3" {
     Environment = var.environment
     Owner       = var.owner
     Project     = "classroom"
+    WorkshopID  = var.workshop_name
+    Company     = "TestingFantasy"
   }
 }
 
 resource "aws_iam_policy" "user_restricted_policy_eventbridge" {
-  name        = "UserRestrictedPolicyEventbridge-${var.environment}"
+  name        = "UserRestrictedPolicyEventbridge-${var.workshop_name}-${var.environment}"
   description = "Policy to restrict users to their own resources on Eventbridge"
 
   policy = jsonencode({
@@ -155,11 +161,13 @@ resource "aws_iam_policy" "user_restricted_policy_eventbridge" {
     Environment = var.environment
     Owner       = var.owner
     Project     = "classroom"
+    WorkshopID  = var.workshop_name
+    Company     = "TestingFantasy"
   }
 }
 
 resource "aws_iam_policy" "user_restricted_policy_dynamodb" {
-  name        = "UserRestrictedPolicyDynamoDB-${var.environment}"
+  name        = "UserRestrictedPolicyDynamoDB-${var.workshop_name}-${var.environment}"
   description = "Policy to restrict users to their own resources on DynamoDB"
 
   policy = jsonencode({
@@ -197,11 +205,13 @@ resource "aws_iam_policy" "user_restricted_policy_dynamodb" {
     Environment = var.environment
     Owner       = var.owner
     Project     = "classroom"
+    WorkshopID  = var.workshop_name
+    Company     = "TestingFantasy"
   }
 }
 
 resource "aws_iam_policy" "user_restricted_policy_cicd" {
-  name        = "UserRestrictedPolicyCICD-${var.environment}"
+  name        = "UserRestrictedPolicyCICD-${var.workshop_name}-${var.environment}"
   description = "Policy to restrict users to their own CICD resources"
 
   policy = jsonencode({
@@ -247,11 +257,13 @@ resource "aws_iam_policy" "user_restricted_policy_cicd" {
     Environment = var.environment
     Owner       = var.owner
     Project     = "classroom"
+    WorkshopID  = var.workshop_name
+    Company     = "TestingFantasy"
   }
 }
 
 resource "aws_iam_policy" "user_restricted_policy_resource_groups" {
-  name        = "UserRestrictedPolicyResourceGroups-${var.environment}"
+  name        = "UserRestrictedPolicyResourceGroups-${var.workshop_name}-${var.environment}"
   description = "Policy to allow resource groups and related actions"
 
   policy = jsonencode({
@@ -274,11 +286,13 @@ resource "aws_iam_policy" "user_restricted_policy_resource_groups" {
     Environment = var.environment
     Owner       = var.owner
     Project     = "classroom"
+    WorkshopID  = var.workshop_name
+    Company     = "TestingFantasy"
   }
 }
 
 resource "aws_iam_policy" "user_restricted_policy_tagging" {
-  name        = "UserRestrictedPolicyTagging-${var.environment}"
+  name        = "UserRestrictedPolicyTagging-${var.workshop_name}-${var.environment}"
   description = "Policy to allow users to manage tags on their resources"
 
   policy = jsonencode({
@@ -302,11 +316,13 @@ resource "aws_iam_policy" "user_restricted_policy_tagging" {
     Environment = var.environment
     Owner       = var.owner
     Project     = "classroom"
+    WorkshopID  = var.workshop_name
+    Company     = "TestingFantasy"
   }
 }
 
 resource "aws_iam_role" "restricted_user_role" {
-  name = "restricted-user-role-${var.environment}"
+  name = "restricted-user-role-${var.workshop_name}-${var.environment}"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -330,6 +346,8 @@ resource "aws_iam_role" "restricted_user_role" {
     Environment = var.environment
     Owner       = var.owner
     Project     = "classroom"
+    WorkshopID  = var.workshop_name
+    Company     = "TestingFantasy"
   }
 }
 
