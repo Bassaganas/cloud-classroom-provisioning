@@ -1,0 +1,297 @@
+.landing-container {
+  min-height: 100vh;
+  padding: 40px 20px;
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.landing-header {
+  text-align: center;
+  margin-bottom: 40px;
+  position: relative;
+  padding: 20px 0;
+}
+
+.header-content {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.header-title-wrapper {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.rocket-icon {
+  color: white;
+  flex-shrink: 0;
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.2));
+}
+
+.landing-header h1 {
+  color: white;
+  font-size: 2.5em;
+  margin: 0;
+  font-weight: 700;
+  text-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  line-height: 1.2;
+}
+
+.subtitle {
+  color: rgba(255, 255, 255, 0.95);
+  font-size: 1.2em;
+  margin: 0;
+  font-weight: 300;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.1);
+}
+
+.logout-btn {
+  position: absolute;
+  top: 20px;
+  right: 0;
+  padding: 10px 18px;
+  background: rgba(255, 255, 255, 0.15);
+  color: white;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 500;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: all 0.2s ease;
+  backdrop-filter: blur(10px);
+}
+
+.logout-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.logout-btn:hover {
+  background: rgba(255, 255, 255, 0.25);
+  border-color: rgba(255, 255, 255, 0.4);
+  transform: translateY(-1px);
+}
+
+.workshops-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 20px;
+}
+
+.workshop-card {
+  background: white;
+  border-radius: 12px;
+  padding: 24px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+  transition: transform 0.2s, box-shadow 0.2s;
+  display: flex;
+  flex-direction: column;
+}
+
+.workshop-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.15);
+}
+
+.workshop-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.workshop-card-header h2 {
+  color: #667eea;
+  margin: 0;
+  text-transform: capitalize;
+  font-size: 1.5em;
+}
+
+.workshop-card-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.icon-btn {
+  background: #f5f5f5;
+  border: 1px solid #e0e0e0;
+  border-radius: 8px;
+  width: 40px;
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  padding: 0;
+  color: #666;
+}
+
+.icon-btn svg {
+  width: 18px;
+  height: 18px;
+  transition: transform 0.2s ease;
+}
+
+.icon-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.icon-btn:hover svg {
+  transform: scale(1.1);
+}
+
+.settings-btn {
+  color: #667eea;
+}
+
+.settings-btn:hover {
+  background: #667eea;
+  border-color: #667eea;
+  color: white;
+}
+
+.start-tutorial-btn {
+  color: #4caf50;
+}
+
+.start-tutorial-btn:hover {
+  background: #4caf50;
+  border-color: #4caf50;
+  color: white;
+}
+
+.workshop-card-content {
+  flex: 1;
+}
+
+.tutorial-sessions-list {
+  margin-top: 16px;
+}
+
+.tutorial-sessions-list h3 {
+  font-size: 14px;
+  color: #666;
+  margin-bottom: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.tutorial-sessions-list ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.tutorial-session-item {
+  padding: 12px;
+  background: #f8f9fa;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  cursor: pointer;
+  transition: all 0.2s;
+  border: 1px solid transparent;
+}
+
+.tutorial-session-item:hover {
+  background: #e9ecef;
+  border-color: #667eea;
+  transform: translateX(4px);
+}
+
+.session-info {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.session-name {
+  font-weight: 600;
+  color: #333;
+  font-size: 14px;
+}
+
+.session-stats {
+  font-size: 12px;
+  color: #666;
+  background: white;
+  padding: 2px 8px;
+  border-radius: 12px;
+}
+
+.session-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+}
+
+.session-date {
+  color: #999;
+}
+
+.session-status {
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.session-status-active {
+  background: #d4edda;
+  color: #155724;
+}
+
+.session-status-creating {
+  background: #fff3cd;
+  color: #856404;
+}
+
+.session-status-partial {
+  background: #f8d7da;
+  color: #721c24;
+}
+
+.no-sessions {
+  color: #999;
+  font-size: 14px;
+  text-align: center;
+  padding: 20px;
+  font-style: italic;
+}
+
+.plus-hint {
+  font-weight: 600;
+  color: #4caf50;
+  font-size: 16px;
+  font-style: normal;
+}
+
+.workshop-description {
+  color: #666;
+  font-size: 0.9em;
+}
+
+.loading, .error, .no-workshops {
+  text-align: center;
+  padding: 40px;
+  color: white;
+  font-size: 1.2em;
+}
+
+.error {
+  background: rgba(255, 0, 0, 0.1);
+  border-radius: 8px;
+  margin-bottom: 20px;
+}
