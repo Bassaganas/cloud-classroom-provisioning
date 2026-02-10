@@ -80,14 +80,21 @@ def wait_for_command(ssm_client, command_id: str, instance_id: str, timeout: int
 def process_instance(instance_id, ec2_client, ssm_client, table):
     """Process a single instance based on its state and assignment status"""
     try:
-        # Get timeout parameters
-        timeouts = get_timeout_parameters()
-        STOP_TIMEOUT_MINUTES = timeouts['stop_timeout']
-        TERMINATE_TIMEOUT_MINUTES = timeouts['terminate_timeout']
-        HARD_TERMINATE_TIMEOUT_MINUTES = timeouts['hard_terminate_timeout']
-        
-        # Get instance state and launch time
+        # Get instance state and launch time first (need tags from instance)
         instance = ec2_client.describe_instances(InstanceIds=[instance_id])['Reservations'][0]['Instances'][0]
+        tags = {tag['Key']: tag['Value'] for tag in instance.get('Tags', [])}
+        
+        # Get SSM default timeout parameters (fallback if instance tags not set)
+        ssm_defaults = get_timeout_parameters()
+        
+        # Check instance tags first, then fall back to SSM defaults
+        STOP_TIMEOUT_MINUTES = int(tags.get('StopTimeout')) if tags.get('StopTimeout') else ssm_defaults['stop_timeout']
+        TERMINATE_TIMEOUT_MINUTES = int(tags.get('TerminateTimeout')) if tags.get('TerminateTimeout') else ssm_defaults['terminate_timeout']
+        HARD_TERMINATE_TIMEOUT_MINUTES = int(tags.get('HardTerminateTimeout')) if tags.get('HardTerminateTimeout') else ssm_defaults['hard_terminate_timeout']
+        
+        timeout_source = 'tags' if tags.get('StopTimeout') else 'SSM defaults'
+        logger.info(f"Instance {instance_id} timeouts - Stop: {STOP_TIMEOUT_MINUTES}min, Terminate: {TERMINATE_TIMEOUT_MINUTES}min, Hard: {HARD_TERMINATE_TIMEOUT_MINUTES}min (from {timeout_source})")
+        
         current_state = instance['State']['Name']
         launch_time = instance['LaunchTime']
         now = datetime.now(timezone.utc)

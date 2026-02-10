@@ -7,9 +7,6 @@ import time
 from botocore.exceptions import ClientError
 from datetime import datetime, timezone
 import base64
-import hashlib
-import hmac
-import urllib.parse
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -35,12 +32,20 @@ logger.info("=" * 60)
 try:
     logger.info("Initializing AWS clients...")
     ec2 = boto3.client('ec2', region_name=REGION)
+    elbv2 = boto3.client('elbv2', region_name=REGION)
     dynamodb = boto3.resource('dynamodb', region_name=REGION)
+    dynamodb_client = boto3.client('dynamodb', region_name=REGION)
     table = dynamodb.Table(f"instance-assignments-{WORKSHOP_NAME}-{ENVIRONMENT}")
+    # Tutorial sessions table - note: table name will be determined per workshop
     logger.info(f"AWS clients initialized. Table: instance-assignments-{WORKSHOP_NAME}-{ENVIRONMENT}")
 except Exception as e:
     logger.error(f"Error initializing AWS clients: {str(e)}", exc_info=True)
     raise
+
+def get_tutorial_sessions_table(workshop_name=None):
+    """Get the tutorial sessions DynamoDB table for a workshop"""
+    workshop = workshop_name or WORKSHOP_NAME
+    return dynamodb.Table(f"tutorial-sessions-{workshop}-{ENVIRONMENT}")
 
 # Get configuration from environment variables
 INSTANCE_TYPE = os.environ.get('EC2_INSTANCE_TYPE', 't3.medium')
@@ -50,10 +55,24 @@ IAM_INSTANCE_PROFILE = os.environ.get('EC2_IAM_INSTANCE_PROFILE', f'ec2-ssm-prof
 
 # Initialize Secrets Manager client for password authentication
 secretsmanager = boto3.client('secretsmanager', region_name=REGION)
+ssm = boto3.client('ssm', region_name=REGION)
 PASSWORD_SECRET_NAME = os.environ.get('INSTANCE_MANAGER_PASSWORD_SECRET', '')
+TEMPLATE_MAP_PARAMETER = os.environ.get(
+    'INSTANCE_MANAGER_TEMPLATE_MAP_PARAMETER',
+    f'/classroom/templates/{ENVIRONMENT}'
+)
+HTTPS_BASE_DOMAIN = os.environ.get('INSTANCE_MANAGER_BASE_DOMAIN', '')
+HTTPS_HOSTED_ZONE_ID = os.environ.get('INSTANCE_MANAGER_HOSTED_ZONE_ID', '')
+HTTPS_CERT_ARN = os.environ.get('INSTANCE_MANAGER_HTTPS_CERT_ARN', '')
+HTTPS_ALB_NAME = f"classroom-https-{ENVIRONMENT}"
+HTTPS_ALB_SG_NAME = f"classroom-https-sg-{ENVIRONMENT}"
 
 # Cache for password (to avoid repeated Secrets Manager calls)
 _password_cache = None
+_template_map_cache = None
+_template_map_cache_time = None
+# Cache TTL: 5 minutes (300 seconds) - refresh template map periodically
+TEMPLATE_MAP_CACHE_TTL = 300
 
 def get_password_from_secret():
     """Get the instance manager password from AWS Secrets Manager"""
@@ -78,69 +97,452 @@ def get_password_from_secret():
         logger.error(f"Unexpected error retrieving password: {str(e)}")
         return None
 
-def parse_cookies(headers):
-    """Parse cookies from HTTP headers"""
-    cookies = {}
-    cookie_header = headers.get('cookie') or headers.get('Cookie') or ''
+def get_timeout_parameters(workshop_name=None):
+    """Get timeout parameters from SSM Parameter Store for a workshop, with defaults as fallback
     
-    for cookie in cookie_header.split(';'):
-        cookie = cookie.strip()
-        if '=' in cookie:
-            key, value = cookie.split('=', 1)
-            cookies[key.strip()] = urllib.parse.unquote(value.strip())
+    Args:
+        workshop_name: Workshop identifier (defaults to WORKSHOP_NAME)
     
-    return cookies
+    Returns:
+        dict with keys: stop_timeout, terminate_timeout, hard_terminate_timeout, admin_cleanup_days
+    """
+    workshop_name = workshop_name or WORKSHOP_NAME
+    parameter_prefix = f'/classroom/{workshop_name}/{ENVIRONMENT}'
+    
+    defaults = {
+        'stop_timeout': 4,  # minutes
+        'terminate_timeout': 20,  # minutes
+        'hard_terminate_timeout': 45,  # minutes
+        'admin_cleanup_days': 7  # days
+    }
+    
+    try:
+        response = ssm.get_parameters(
+            Names=[
+                f"{parameter_prefix}/instance_stop_timeout_minutes",
+                f"{parameter_prefix}/instance_terminate_timeout_minutes",
+                f"{parameter_prefix}/instance_hard_terminate_timeout_minutes",
+                f"{parameter_prefix}/admin_cleanup_interval_days"
+            ],
+            WithDecryption=False
+        )
+        
+        # Create a dictionary of parameters
+        parameters = {}
+        for param in response.get('Parameters', []):
+            param_name = param['Name'].split('/')[-1]
+            if 'stop_timeout' in param_name:
+                parameters['stop_timeout'] = int(param['Value'])
+            elif 'terminate_timeout' in param_name:
+                parameters['terminate_timeout'] = int(param['Value'])
+            elif 'hard_terminate_timeout' in param_name:
+                parameters['hard_terminate_timeout'] = int(param['Value'])
+            elif 'admin_cleanup' in param_name:
+                parameters['admin_cleanup_days'] = int(param['Value'])
+        
+        # Use defaults for missing parameters
+        result = {**defaults, **parameters}
+        logger.info(f"Loaded timeout parameters for {workshop_name}: {result}")
+        return result
+        
+    except ClientError as e:
+        if e.response['Error']['Code'] == 'ParameterNotFound':
+            logger.info(f"Timeout parameters not found for {workshop_name}, using defaults")
+            return defaults
+        logger.warning(f"Error retrieving timeout parameters: {str(e)}, using defaults")
+        return defaults
+    except Exception as e:
+        logger.error(f"Unexpected error retrieving timeout parameters: {str(e)}, using defaults")
+        return defaults
 
-def check_authentication(event):
-    """Check if the request is authenticated"""
-    headers = event.get('headers', {}) or {}
-    cookies = parse_cookies(headers)
+def update_timeout_parameters(workshop_name, stop_timeout=None, terminate_timeout=None, 
+                              hard_terminate_timeout=None, admin_cleanup_days=None):
+    """Update timeout parameters in SSM Parameter Store for a workshop
     
-    # Check for authentication cookie
-    auth_token = cookies.get('instance_manager_auth')
-    if not auth_token:
-        return False
+    Args:
+        workshop_name: Workshop identifier
+        stop_timeout: Minutes before stopping unassigned running instances
+        terminate_timeout: Minutes before terminating stopped instances
+        hard_terminate_timeout: Minutes before hard terminating any instance
+        admin_cleanup_days: Days before admin instances are deleted
     
-    # Get password from secret
+    Returns:
+        dict with success status and updated parameters
+    """
+    parameter_prefix = f'/classroom/{workshop_name}/{ENVIRONMENT}'
+    updated = {}
+    
+    try:
+        if stop_timeout is not None:
+            ssm.put_parameter(
+                Name=f"{parameter_prefix}/instance_stop_timeout_minutes",
+                Value=str(int(stop_timeout)),
+                Type='String',
+                Overwrite=True,
+                Description=f"Timeout in minutes before stopping unassigned running instances for {workshop_name}"
+            )
+            updated['stop_timeout'] = int(stop_timeout)
+        
+        if terminate_timeout is not None:
+            ssm.put_parameter(
+                Name=f"{parameter_prefix}/instance_terminate_timeout_minutes",
+                Value=str(int(terminate_timeout)),
+                Type='String',
+                Overwrite=True,
+                Description=f"Timeout in minutes before terminating stopped instances for {workshop_name}"
+            )
+            updated['terminate_timeout'] = int(terminate_timeout)
+        
+        if hard_terminate_timeout is not None:
+            ssm.put_parameter(
+                Name=f"{parameter_prefix}/instance_hard_terminate_timeout_minutes",
+                Value=str(int(hard_terminate_timeout)),
+                Type='String',
+                Overwrite=True,
+                Description=f"Timeout in minutes before hard terminating any instance for {workshop_name}"
+            )
+            updated['hard_terminate_timeout'] = int(hard_terminate_timeout)
+        
+        if admin_cleanup_days is not None:
+            ssm.put_parameter(
+                Name=f"{parameter_prefix}/admin_cleanup_interval_days",
+                Value=str(int(admin_cleanup_days)),
+                Type='String',
+                Overwrite=True,
+                Description=f"Days before admin instances are automatically deleted for {workshop_name}"
+            )
+            updated['admin_cleanup_days'] = int(admin_cleanup_days)
+        
+        logger.info(f"Updated timeout parameters for {workshop_name}: {updated}")
+        return {'success': True, 'updated': updated}
+        
+    except Exception as e:
+        logger.error(f"Error updating timeout parameters: {str(e)}")
+        return {'success': False, 'error': str(e)}
+
+def get_template_map():
+    """Load workshop template map from SSM Parameter Store"""
+    global _template_map_cache
+
+    if _template_map_cache is not None:
+        return _template_map_cache
+
+    if not TEMPLATE_MAP_PARAMETER:
+        logger.warning("INSTANCE_MANAGER_TEMPLATE_MAP_PARAMETER not set, workshop selection disabled")
+        _template_map_cache = {}
+        return _template_map_cache
+
+    try:
+        response = ssm.get_parameter(Name=TEMPLATE_MAP_PARAMETER)
+        template_map = json.loads(response['Parameter']['Value'])
+        _template_map_cache = template_map if isinstance(template_map, dict) else {}
+        logger.info(f"Loaded workshop template map with {len(_template_map_cache)} entries")
+        return _template_map_cache
+    except ClientError as e:
+        logger.error(f"Error retrieving template map from SSM: {str(e)}")
+        _template_map_cache = {}
+        return _template_map_cache
+    except json.JSONDecodeError as e:
+        logger.error(f"Invalid template map JSON in SSM: {str(e)}")
+        _template_map_cache = {}
+        return _template_map_cache
+    except Exception as e:
+        logger.error(f"Unexpected error retrieving template map: {str(e)}")
+        _template_map_cache = {}
+        return _template_map_cache
+
+def get_template_for_workshop(workshop_name):
+    """Get the template config for a given workshop"""
+    template_map = get_template_map()
+    if not template_map:
+        return None
+    return template_map.get(workshop_name)
+
+def get_default_vpc_id():
+    response = ec2.describe_vpcs(Filters=[{'Name': 'isDefault', 'Values': ['true']}])
+    vpcs = response.get('Vpcs', [])
+    if not vpcs:
+        raise RuntimeError("No default VPC found for HTTPS ALB")
+    return vpcs[0]['VpcId']
+
+def get_default_subnet_ids(vpc_id):
+    response = ec2.describe_subnets(Filters=[
+        {'Name': 'vpc-id', 'Values': [vpc_id]},
+        {'Name': 'default-for-az', 'Values': ['true']}
+    ])
+    subnets = response.get('Subnets', [])
+    if len(subnets) < 2:
+        raise RuntimeError("Need at least two default subnets for ALB")
+    return [subnet['SubnetId'] for subnet in subnets]
+
+def ensure_https_security_group(vpc_id):
+    response = ec2.describe_security_groups(Filters=[
+        {'Name': 'group-name', 'Values': [HTTPS_ALB_SG_NAME]},
+        {'Name': 'vpc-id', 'Values': [vpc_id]}
+    ])
+    groups = response.get('SecurityGroups', [])
+    if groups:
+        return groups[0]['GroupId']
+
+    sg = ec2.create_security_group(
+        GroupName=HTTPS_ALB_SG_NAME,
+        Description=f"ALB security group for HTTPS instances ({ENVIRONMENT})",
+        VpcId=vpc_id,
+        TagSpecifications=[{
+            'ResourceType': 'security-group',
+            'Tags': [
+                {'Key': 'Project', 'Value': 'classroom'},
+                {'Key': 'Environment', 'Value': ENVIRONMENT},
+                {'Key': 'Company', 'Value': 'TestingFantasy'}
+            ]
+        }]
+    )
+    sg_id = sg['GroupId']
+    ec2.authorize_security_group_ingress(
+        GroupId=sg_id,
+        IpPermissions=[{
+            'IpProtocol': 'tcp',
+            'FromPort': 443,
+            'ToPort': 443,
+            'IpRanges': [{'CidrIp': '0.0.0.0/0', 'Description': 'HTTPS'}]
+        }]
+    )
+    return sg_id
+
+def ensure_https_alb():
+    try:
+        response = elbv2.describe_load_balancers(Names=[HTTPS_ALB_NAME])
+        lbs = response.get('LoadBalancers', [])
+        if lbs:
+            return lbs[0]
+    except ClientError as e:
+        if e.response['Error']['Code'] != 'LoadBalancerNotFound':
+            raise
+
+    vpc_id = get_default_vpc_id()
+    subnet_ids = get_default_subnet_ids(vpc_id)
+    sg_id = ensure_https_security_group(vpc_id)
+
+    lb = elbv2.create_load_balancer(
+        Name=HTTPS_ALB_NAME,
+        Subnets=subnet_ids,
+        SecurityGroups=[sg_id],
+        Scheme='internet-facing',
+        Type='application',
+        IpAddressType='ipv4',
+        Tags=[
+            {'Key': 'Project', 'Value': 'classroom'},
+            {'Key': 'Environment', 'Value': ENVIRONMENT},
+            {'Key': 'Company', 'Value': 'TestingFantasy'}
+        ]
+    )
+    return lb['LoadBalancers'][0]
+
+def ensure_https_listener(load_balancer_arn):
+    listeners = elbv2.describe_listeners(LoadBalancerArn=load_balancer_arn).get('Listeners', [])
+    for listener in listeners:
+        if listener.get('Port') == 443:
+            return listener
+
+    listener = elbv2.create_listener(
+        LoadBalancerArn=load_balancer_arn,
+        Protocol='HTTPS',
+        Port=443,
+        Certificates=[{'CertificateArn': HTTPS_CERT_ARN}],
+        DefaultActions=[{
+            'Type': 'fixed-response',
+            'FixedResponseConfig': {
+                'StatusCode': '404',
+                'ContentType': 'text/plain',
+                'MessageBody': 'Not found'
+            }
+        }]
+    )
+    return listener['Listeners'][0]
+
+def get_next_rule_priority(listener_arn):
+    rules = elbv2.describe_rules(ListenerArn=listener_arn).get('Rules', [])
+    priorities = [int(r['Priority']) for r in rules if r.get('Priority') not in ['default', None]]
+    return max(priorities, default=0) + 1
+
+def create_route53_alias(record_name, lb_dns, lb_zone_id):
+    if not HTTPS_HOSTED_ZONE_ID:
+        raise RuntimeError("INSTANCE_MANAGER_HOSTED_ZONE_ID is not configured")
+
+    route53 = boto3.client('route53')
+    route53.change_resource_record_sets(
+        HostedZoneId=HTTPS_HOSTED_ZONE_ID,
+        ChangeBatch={
+            'Changes': [{
+                'Action': 'UPSERT',
+                'ResourceRecordSet': {
+                    'Name': record_name,
+                    'Type': 'A',
+                    'AliasTarget': {
+                        'HostedZoneId': lb_zone_id,
+                        'DNSName': lb_dns,
+                        'EvaluateTargetHealth': False
+                    }
+                }
+            }]
+        }
+    )
+
+def delete_route53_alias(record_name, lb_dns, lb_zone_id):
+    if not HTTPS_HOSTED_ZONE_ID:
+        return
+    route53 = boto3.client('route53')
+    route53.change_resource_record_sets(
+        HostedZoneId=HTTPS_HOSTED_ZONE_ID,
+        ChangeBatch={
+            'Changes': [{
+                'Action': 'DELETE',
+                'ResourceRecordSet': {
+                    'Name': record_name,
+                    'Type': 'A',
+                    'AliasTarget': {
+                        'HostedZoneId': lb_zone_id,
+                        'DNSName': lb_dns,
+                        'EvaluateTargetHealth': False
+                    }
+                }
+            }]
+        }
+    )
+
+def enable_https_for_instance(instance_id, workshop_name, app_port):
+    if not HTTPS_CERT_ARN or not HTTPS_BASE_DOMAIN:
+        raise RuntimeError("HTTPS certificate or base domain is not configured")
+
+    lb = ensure_https_alb()
+    listener = ensure_https_listener(lb['LoadBalancerArn'])
+
+    vpc_id = get_default_vpc_id()
+    target_group_name = f"cls-https-{ENVIRONMENT}-{instance_id[-8:]}"[:32]
+    target_group = elbv2.create_target_group(
+        Name=target_group_name,
+        Protocol='HTTP',
+        Port=app_port,
+        VpcId=vpc_id,
+        TargetType='instance',
+        HealthCheckProtocol='HTTP',
+        HealthCheckPort=str(app_port),
+        HealthCheckPath='/'
+    )
+    target_group_arn = target_group['TargetGroups'][0]['TargetGroupArn']
+    elbv2.register_targets(TargetGroupArn=target_group_arn, Targets=[{'Id': instance_id, 'Port': app_port}])
+
+    if SECURITY_GROUP_IDS:
+        try:
+            ec2.authorize_security_group_ingress(
+                GroupId=SECURITY_GROUP_IDS[0],
+                IpPermissions=[{
+                    'IpProtocol': 'tcp',
+                    'FromPort': app_port,
+                    'ToPort': app_port,
+                    'UserIdGroupPairs': [{'GroupId': lb['SecurityGroups'][0]}]
+                }]
+            )
+        except ClientError as e:
+            if e.response['Error']['Code'] != 'InvalidPermission.Duplicate':
+                raise
+
+    record_name = f"{instance_id}.{workshop_name}.{HTTPS_BASE_DOMAIN}"
+    rule_priority = get_next_rule_priority(listener['ListenerArn'])
+    rule = elbv2.create_rule(
+        ListenerArn=listener['ListenerArn'],
+        Priority=rule_priority,
+        Conditions=[{
+            'Field': 'host-header',
+            'HostHeaderConfig': {'Values': [record_name]}
+        }],
+        Actions=[{
+            'Type': 'forward',
+            'TargetGroupArn': target_group_arn
+        }]
+    )
+    rule_arn = rule['Rules'][0]['RuleArn']
+
+    create_route53_alias(record_name, lb['DNSName'], lb['CanonicalHostedZoneId'])
+
+    # Tag instance for traceability
+    ec2.create_tags(
+        Resources=[instance_id],
+        Tags=[
+            {'Key': 'HttpsEnabled', 'Value': 'true'},
+            {'Key': 'HttpsDomain', 'Value': record_name},
+            {'Key': 'HttpsTargetGroupArn', 'Value': target_group_arn},
+            {'Key': 'HttpsListenerRuleArn', 'Value': rule_arn},
+            {'Key': 'AppPort', 'Value': str(app_port)}
+        ]
+    )
+
+    return {
+        'domain': f"https://{record_name}",
+        'target_group_arn': target_group_arn,
+        'rule_arn': rule_arn
+    }
+
+def disable_https_for_instance(instance_id, workshop_name, tags):
+    lb = ensure_https_alb()
+    record_name = tags.get('HttpsDomain') or f"{instance_id}.{workshop_name}.{HTTPS_BASE_DOMAIN}"
+    target_group_arn = tags.get('HttpsTargetGroupArn')
+    rule_arn = tags.get('HttpsListenerRuleArn')
+
+    if rule_arn:
+        try:
+            elbv2.delete_rule(RuleArn=rule_arn)
+        except Exception as e:
+            logger.warning(f"Failed to delete listener rule: {str(e)}")
+
+    if target_group_arn:
+        try:
+            elbv2.delete_target_group(TargetGroupArn=target_group_arn)
+        except Exception as e:
+            logger.warning(f"Failed to delete target group: {str(e)}")
+
+    try:
+        delete_route53_alias(record_name, lb['DNSName'], lb['CanonicalHostedZoneId'])
+    except Exception as e:
+        logger.warning(f"Failed to delete Route53 record: {str(e)}")
+
+    # Remove HTTPS tags
+    ec2.create_tags(
+        Resources=[instance_id],
+        Tags=[
+            {'Key': 'HttpsEnabled', 'Value': 'false'}
+        ]
+    )
+
+    return {'domain': record_name}
+
+def check_password_auth(body, query_params):
+    """Check if the provided password matches the secret (simplified auth for single-user)"""
     password = get_password_from_secret()
     if not password:
         # If no password is configured, allow access (backward compatibility)
         return True
     
-    # Create expected token (simple hash of password)
-    expected_token = hashlib.sha256(f"instance_manager_{password}".encode()).hexdigest()
+    # Get password from body or query params
+    provided_password = body.get('password') or query_params.get('password', '')
+    if not provided_password:
+        return False
     
-    # Constant-time comparison to prevent timing attacks
-    return hmac.compare_digest(auth_token, expected_token)
+    # Simple password comparison
+    return provided_password == password
 
-def create_auth_response(password):
-    """Create authentication cookie response"""
-    auth_token = hashlib.sha256(f"instance_manager_{password}".encode()).hexdigest()
-    
-    # Cookie expires in 7 days
-    max_age = 7 * 24 * 60 * 60
-    
-    return {
-        'statusCode': 200,
-        'headers': {
-            'Content-Type': 'application/json',
-            'Set-Cookie': f'instance_manager_auth={auth_token}; Path=/; Max-Age={max_age}; HttpOnly; Secure; SameSite=Lax'
-        },
-        'body': json.dumps({
-            'success': True,
-            'message': 'Authentication successful'
-        })
-    }
+def get_user_data_script(template_config=None):
+    """Get the user_data script content"""
+    if template_config:
+        user_data_base64 = template_config.get('user_data_base64')
+        if user_data_base64:
+            try:
+                return base64.b64decode(user_data_base64).decode('utf-8')
+            except Exception as e:
+                logger.warning(f"Failed to decode user_data_base64: {str(e)}")
 
-def get_user_data_script():
-    """Get the user_data.sh script content"""
-    user_data_path = os.path.join(os.path.dirname(__file__), '..', '..', 'iac', 'aws', 'user_data.sh')
-    try:
-        with open(user_data_path, 'r') as f:
-            return f.read()
-    except FileNotFoundError:
-        # Fallback to inline script if file not found
-        return """#!/bin/bash
+    # Fallback to inline script if template data is missing
+    return """#!/bin/bash
 set -e
 
 # Function to wait for yum lock
@@ -205,23 +607,44 @@ def get_latest_ami():
         logger.error(f"Error getting AMI: {str(e)}")
         return 'ami-0746ed6b6c0683e67'  # Fallback AMI
 
-def create_instance(count=1, instance_type='pool', cleanup_days=None):
-    """Create EC2 instance(s) with Dify
+def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_name=None,
+                    stop_timeout=None, terminate_timeout=None, hard_terminate_timeout=None,
+                    tutorial_session_id=None):
+    """Create EC2 instance(s) for a workshop template
     
     Args:
         count: Number of instances to create
         instance_type: 'pool' for pool instances or 'admin' for admin instances
         cleanup_days: Number of days before admin instances are deleted (only for admin instances, default: 7)
+        workshop_name: Workshop identifier used to select template
+        stop_timeout: Minutes before stopping unassigned running instances (optional, uses SSM default if not provided)
+        terminate_timeout: Minutes before terminating stopped instances (optional, uses SSM default if not provided)
+        hard_terminate_timeout: Minutes before hard terminating any instance (optional, uses SSM default if not provided)
+        tutorial_session_id: Tutorial session ID to tag instances with (optional)
     """
     try:
-        ami_id = get_latest_ami()
-        user_data = get_user_data_script()
+        workshop_name = workshop_name or WORKSHOP_NAME
+        template_config = get_template_for_workshop(workshop_name)
+        ami_id = template_config.get('ami_id') if template_config else None
+        if not ami_id:
+            ami_id = get_latest_ami()
+        instance_type_override = template_config.get('instance_type') if template_config else None
+        selected_instance_type = instance_type_override or INSTANCE_TYPE
+        user_data = get_user_data_script(template_config)
+        
+        # Get timeout parameters - use provided values or fall back to SSM defaults
+        timeouts = get_timeout_parameters(workshop_name)
+        final_stop_timeout = stop_timeout if stop_timeout is not None else timeouts.get('stop_timeout', 4)
+        final_terminate_timeout = terminate_timeout if terminate_timeout is not None else timeouts.get('terminate_timeout', 20)
+        final_hard_terminate_timeout = hard_terminate_timeout if hard_terminate_timeout is not None else timeouts.get('hard_terminate_timeout', 45)
         
         instances = []
         for i in range(count):
             # Determine naming and tags based on type
             if instance_type == 'admin':
-                name = f'classroom-admin-{i}'
+                name = f'{workshop_name}-admin-{i}'
+                if tutorial_session_id:
+                    name = f'{workshop_name}-{tutorial_session_id}-admin-{i}'
                 # Default cleanup days to 7 if not specified
                 cleanup_days_value = str(cleanup_days if cleanup_days is not None else 7)
                 tags = [
@@ -234,10 +657,18 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None):
                     {'Key': 'CreatedBy', 'Value': 'lambda-manager'},
                     {'Key': 'CreatedAt', 'Value': datetime.utcnow().isoformat()},
                     {'Key': 'CleanupDays', 'Value': cleanup_days_value},  # Days until cleanup
-                    {'Key': 'Company', 'Value': 'TestingFantasy'}
+                    {'Key': 'WorkshopID', 'Value': workshop_name},
+                    {'Key': 'Template', 'Value': workshop_name},
+                    {'Key': 'AppPort', 'Value': str(template_config.get('app_port', 80)) if template_config else '80'},
+                    {'Key': 'Company', 'Value': 'TestingFantasy'},
+                    {'Key': 'StopTimeout', 'Value': str(final_stop_timeout)},
+                    {'Key': 'TerminateTimeout', 'Value': str(final_terminate_timeout)},
+                    {'Key': 'HardTerminateTimeout', 'Value': str(final_hard_terminate_timeout)}
                 ]
             else:  # pool
-                name = f'classroom-pool-{i}'
+                name = f'{workshop_name}-pool-{i}'
+                if tutorial_session_id:
+                    name = f'{workshop_name}-{tutorial_session_id}-pool-{i}'
                 tags = [
                     {'Key': 'Name', 'Value': name},
                     {'Key': 'Status', 'Value': 'available'},
@@ -246,12 +677,22 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None):
                     {'Key': 'Type', 'Value': 'pool'},
                     {'Key': 'CreatedBy', 'Value': 'lambda-manager'},
                     {'Key': 'CreatedAt', 'Value': datetime.utcnow().isoformat()},
-                    {'Key': 'Company', 'Value': 'TestingFantasy'}
+                    {'Key': 'WorkshopID', 'Value': workshop_name},
+                    {'Key': 'Template', 'Value': workshop_name},
+                    {'Key': 'AppPort', 'Value': str(template_config.get('app_port', 80)) if template_config else '80'},
+                    {'Key': 'Company', 'Value': 'TestingFantasy'},
+                    {'Key': 'StopTimeout', 'Value': str(final_stop_timeout)},
+                    {'Key': 'TerminateTimeout', 'Value': str(final_terminate_timeout)},
+                    {'Key': 'HardTerminateTimeout', 'Value': str(final_hard_terminate_timeout)}
                 ]
+            
+            # Add TutorialSessionID tag if provided
+            if tutorial_session_id:
+                tags.append({'Key': 'TutorialSessionID', 'Value': tutorial_session_id})
             
             response = ec2.run_instances(
                 ImageId=ami_id,
-                InstanceType=INSTANCE_TYPE,
+                InstanceType=selected_instance_type,
                 MinCount=1,
                 MaxCount=1,
                 UserData=user_data,
@@ -296,7 +737,8 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None):
                 'instance_id': instance_id,
                 'state': initial_state,  # Current state (pending -> running -> stopping -> stopped)
                 'launch_time': response['Instances'][0]['LaunchTime'].isoformat(),
-                'type': instance_type
+                'type': instance_type,
+                'workshop': workshop_name
             })
             
             logger.info(f"Created {instance_type} instance {instance_id} ({i+1}/{count}) - will be stopped automatically once running")
@@ -305,7 +747,8 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None):
             'success': True,
             'instances': instances,
             'count': len(instances),
-            'type': instance_type
+            'type': instance_type,
+            'workshop': workshop_name
         }
     except Exception as e:
         logger.error(f"Error creating instances: {str(e)}", exc_info=True)
@@ -314,11 +757,12 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None):
             'error': str(e)
         }
 
-def list_instances(include_terminated=False):
+def list_instances(include_terminated=False, tutorial_session_id=None):
     """List all EC2 instances with their assignments and IPs
     
     Args:
         include_terminated: If True, include terminated instances in the results
+        tutorial_session_id: If provided, filter instances by this tutorial session ID
     """
     try:
         # Get all instances (both pool and admin)
@@ -326,6 +770,10 @@ def list_instances(include_terminated=False):
         filters = [
             {'Name': 'tag:Project', 'Values': ['classroom']}
         ]
+        
+        # Filter by tutorial session if provided
+        if tutorial_session_id:
+            filters.append({'Name': 'tag:TutorialSessionID', 'Values': [tutorial_session_id]})
         
         # If we want to include terminated, we need to get all states
         # Otherwise, exclude terminated and shutting-down
@@ -385,6 +833,8 @@ def list_instances(include_terminated=False):
                     'launch_time': instance.get('LaunchTime').isoformat() if instance.get('LaunchTime') else None,
                     'tags': tags,
                     'type': instance_type,
+                    'workshop': tags.get('WorkshopID', tags.get('Template', 'unknown')),
+                    'tutorial_session_id': tags.get('TutorialSessionID'),
                     'assigned_to': assignment.get('student_name'),
                     'assignment_status': assignment.get('status'),
                     'assigned_at': assignment.get('assigned_at'),
@@ -608,8 +1058,333 @@ def delete_instances(instance_ids=None, delete_type='individual'):
             'error': str(e)
         }
 
+def get_cors_headers():
+    """Get CORS headers for API responses"""
+    return {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    }
+
+def get_swagger_spec():
+    """Generate OpenAPI/Swagger specification for the API"""
+    base_url = os.environ.get('API_GATEWAY_URL', '')
+    if base_url and not base_url.endswith('/'):
+        base_url += '/'
+    
+    swagger_spec = {
+        'openapi': '3.0.0',
+        'info': {
+            'title': 'EC2 Instance Manager API',
+            'description': 'REST API for managing EC2 classroom instances',
+            'version': '1.0.0'
+        },
+        'servers': [
+            {
+                'url': base_url if base_url else 'https://api.example.com',
+                'description': 'API Gateway endpoint'
+            }
+        ],
+        'paths': {
+            '/api/health': {
+                'get': {
+                    'summary': 'Health check',
+                    'description': 'Check if the API is healthy',
+                    'responses': {
+                        '200': {
+                            'description': 'API is healthy',
+                            'content': {
+                                'application/json': {
+                                    'schema': {
+                                        'type': 'object',
+                                        'properties': {
+                                            'status': {'type': 'string'},
+                                            'timestamp': {'type': 'string'},
+                                            'environment': {'type': 'string'},
+                                            'workshop_name': {'type': 'string'},
+                                            'region': {'type': 'string'}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            '/api/login': {
+                'post': {
+                    'summary': 'Login',
+                    'description': 'Authenticate with password',
+                    'requestBody': {
+                        'required': True,
+                        'content': {
+                            'application/json': {
+                                'schema': {
+                                    'type': 'object',
+                                    'properties': {
+                                        'password': {'type': 'string'}
+                                    },
+                                    'required': ['password']
+                                }
+                            }
+                        }
+                    },
+                    'responses': {
+                        '200': {'description': 'Authentication successful'},
+                        '401': {'description': 'Invalid password'}
+                    }
+                }
+            },
+            '/api/templates': {
+                'get': {
+                    'summary': 'Get workshop templates',
+                    'description': 'Get available workshop templates',
+                    'responses': {
+                        '200': {
+                            'description': 'List of templates',
+                            'content': {
+                                'application/json': {
+                                    'schema': {
+                                        'type': 'object',
+                                        'properties': {
+                                            'success': {'type': 'boolean'},
+                                            'templates': {'type': 'object'}
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            },
+            '/api/list': {
+                'get': {
+                    'summary': 'List instances',
+                    'description': 'List all EC2 instances',
+                    'parameters': [
+                        {
+                            'name': 'password',
+                            'in': 'query',
+                            'required': True,
+                            'schema': {'type': 'string'}
+                        },
+                        {
+                            'name': 'include_terminated',
+                            'in': 'query',
+                            'required': False,
+                            'schema': {'type': 'boolean'}
+                        }
+                    ],
+                    'responses': {
+                        '200': {'description': 'List of instances'},
+                        '401': {'description': 'Authentication required'}
+                    }
+                }
+            },
+            '/api/create': {
+                'post': {
+                    'summary': 'Create instances',
+                    'description': 'Create EC2 instances',
+                    'requestBody': {
+                        'required': True,
+                        'content': {
+                            'application/json': {
+                                'schema': {
+                                    'type': 'object',
+                                    'properties': {
+                                        'count': {'type': 'integer'},
+                                        'type': {'type': 'string', 'enum': ['pool', 'admin']},
+                                        'workshop': {'type': 'string'},
+                                        'cleanup_days': {'type': 'integer'},
+                                        'password': {'type': 'string'}
+                                    },
+                                    'required': ['count', 'type']
+                                }
+                            }
+                        }
+                    },
+                    'responses': {
+                        '200': {'description': 'Instances created'},
+                        '400': {'description': 'Invalid request'},
+                        '401': {'description': 'Authentication required'}
+                    }
+                }
+            },
+            '/api/assign': {
+                'post': {
+                    'summary': 'Assign instance',
+                    'description': 'Assign an instance to a student',
+                    'requestBody': {
+                        'required': True,
+                        'content': {
+                            'application/json': {
+                                'schema': {
+                                    'type': 'object',
+                                    'properties': {
+                                        'instance_id': {'type': 'string'},
+                                        'student_name': {'type': 'string'},
+                                        'password': {'type': 'string'}
+                                    },
+                                    'required': ['instance_id', 'student_name']
+                                }
+                            }
+                        }
+                    },
+                    'responses': {
+                        '200': {'description': 'Instance assigned'},
+                        '400': {'description': 'Invalid request'},
+                        '401': {'description': 'Authentication required'}
+                    }
+                }
+            },
+            '/api/delete': {
+                'post': {
+                    'summary': 'Delete instances',
+                    'description': 'Delete EC2 instances',
+                    'requestBody': {
+                        'required': True,
+                        'content': {
+                            'application/json': {
+                                'schema': {
+                                    'type': 'object',
+                                    'properties': {
+                                        'instance_ids': {'type': 'array', 'items': {'type': 'string'}},
+                                        'instance_id': {'type': 'string'},
+                                        'delete_type': {'type': 'string'},
+                                        'password': {'type': 'string'}
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    'responses': {
+                        '200': {'description': 'Instances deleted'},
+                        '401': {'description': 'Authentication required'}
+                    }
+                }
+            },
+            '/api/stop': {
+                'post': {
+                    'summary': 'Stop instances',
+                    'description': 'Stop EC2 instances',
+                    'requestBody': {
+                        'required': True,
+                        'content': {
+                            'application/json': {
+                                'schema': {
+                                    'type': 'object',
+                                    'properties': {
+                                        'instance_ids': {'type': 'array', 'items': {'type': 'string'}},
+                                        'instance_id': {'type': 'string'},
+                                        'password': {'type': 'string'}
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    'responses': {
+                        '200': {'description': 'Instances stopped'},
+                        '401': {'description': 'Authentication required'}
+                    }
+                }
+            },
+            '/api/timeout_settings': {
+                'get': {
+                    'summary': 'Get timeout settings',
+                    'description': 'Get timeout settings for a workshop',
+                    'parameters': [
+                        {
+                            'name': 'workshop',
+                            'in': 'query',
+                            'required': True,
+                            'schema': {'type': 'string'}
+                        },
+                        {
+                            'name': 'password',
+                            'in': 'query',
+                            'required': True,
+                            'schema': {'type': 'string'}
+                        }
+                    ],
+                    'responses': {
+                        '200': {'description': 'Timeout settings'},
+                        '401': {'description': 'Authentication required'}
+                    }
+                }
+            },
+            '/api/update_timeout_settings': {
+                'post': {
+                    'summary': 'Update timeout settings',
+                    'description': 'Update timeout settings for a workshop',
+                    'requestBody': {
+                        'required': True,
+                        'content': {
+                            'application/json': {
+                                'schema': {
+                                    'type': 'object',
+                                    'properties': {
+                                        'workshop': {'type': 'string'},
+                                        'stop_timeout': {'type': 'integer'},
+                                        'terminate_timeout': {'type': 'integer'},
+                                        'hard_terminate_timeout': {'type': 'integer'},
+                                        'admin_cleanup_days': {'type': 'integer'},
+                                        'password': {'type': 'string'}
+                                    },
+                                    'required': ['workshop']
+                                }
+                            }
+                        }
+                    },
+                    'responses': {
+                        '200': {'description': 'Settings updated'},
+                        '401': {'description': 'Authentication required'}
+                    }
+                }
+            }
+        }
+    }
+    
+    return {
+        'statusCode': 200,
+        'headers': get_cors_headers(),
+        'body': json.dumps(swagger_spec, indent=2)
+    }
+
+def normalize_event(event):
+    """Normalize Function URL and API Gateway events to common format
+    
+    Supports both:
+    - Lambda Function URL format: event['requestContext']['http']['method']
+    - API Gateway format: event['httpMethod']
+    """
+    # Check if it's API Gateway format (has httpMethod at root level)
+    if 'httpMethod' in event:
+        # API Gateway format
+        return {
+            'method': event.get('httpMethod', 'GET'),
+            'path': event.get('path', '/'),
+            'queryParams': event.get('queryStringParameters') or {},
+            'body': event.get('body', ''),
+            'headers': event.get('headers', {})
+        }
+    else:
+        # Function URL format (existing)
+        request_context = event.get('requestContext', {})
+        http_context = request_context.get('http', {})
+        return {
+            'method': http_context.get('method', 'GET'),
+            'path': http_context.get('path', '/'),
+            'queryParams': event.get('queryStringParameters') or {},
+            'body': event.get('body', ''),
+            'headers': event.get('headers', {})
+        }
+
 def lambda_handler(event, context):
-    """Lambda handler for EC2 instance pool management"""
+    """Lambda handler for EC2 instance pool management - API only
+    
+    Supports both Lambda Function URL and API Gateway event formats
+    """
     logger.info("=" * 50)
     logger.info("Lambda handler invoked")
     logger.info(f"Event type: {type(event)}")
@@ -617,89 +1392,164 @@ def lambda_handler(event, context):
     logger.info(f"Context: {context}")
     
     try:
-        # Get HTTP method and path
-        http_method = event.get('requestContext', {}).get('http', {}).get('method', 'GET')
-        path = event.get('requestContext', {}).get('http', {}).get('path', '/')
-        logger.info(f"HTTP Method: {http_method}, Path: {path}")
+        # Normalize event format (supports both Function URL and API Gateway)
+        normalized = normalize_event(event)
+        http_method = normalized['method']
+        path = normalized['path']
+        query_params = normalized['queryParams']
+        body_str = normalized['body']
+        headers = normalized['headers']
         
-        # Parse query parameters
-        query_params = event.get('queryStringParameters') or {}
-        body = {}
+        logger.info(f"HTTP Method: {http_method}, Path: {path}")
+        logger.info(f"Event format: {'API Gateway' if 'httpMethod' in event else 'Function URL'}")
+        
+        # Handle OPTIONS for CORS preflight
+        if http_method == 'OPTIONS':
+            return {
+                'statusCode': 200,
+                'headers': get_cors_headers(),
+                'body': ''
+            }
+        
+        # Strip stage prefix if present (e.g., /dev/api/login -> /api/login)
+        # API Gateway stage paths are typically /dev, /prod, /staging, etc.
+        normalized_path = path
+        if '/' in path[1:]:  # Check if there's a second slash (stage prefix)
+            parts = path.split('/', 3)  # Split into ['', 'dev', 'api', 'login']
+            if len(parts) >= 3 and parts[2] == 'api':
+                # Path has stage prefix: /dev/api/login -> /api/login
+                normalized_path = '/api/' + '/'.join(parts[3:]) if len(parts) > 3 else '/api'
+                logger.info(f"Stripped stage prefix: {path} -> {normalized_path}")
+            elif len(parts) >= 2 and parts[1] in ['swagger.json', 'dev', 'staging', 'prod']:
+                # Handle swagger.json at root level (e.g., /dev/swagger.json -> /swagger.json)
+                if parts[1] == 'swagger.json':
+                    normalized_path = '/swagger.json'
+                elif len(parts) >= 3 and parts[2] == 'swagger.json':
+                    normalized_path = '/swagger.json'
+                    logger.info(f"Stripped stage prefix: {path} -> {normalized_path}")
+        
+        # Handle swagger.json endpoint (no authentication required)
+        if normalized_path == '/swagger.json' and http_method == 'GET':
+            return get_swagger_spec()
+        
+        # Only handle /api/* paths - let CloudFront route everything else to S3
+        if not normalized_path.startswith('/api'):
+            return {
+                'statusCode': 404,
+                'headers': get_cors_headers(),
+                'body': json.dumps({
+                    'success': False,
+                    'error': 'Not found - API endpoints must start with /api'
+                })
+            }
+        
+        # Remove /api prefix for routing
+        api_path = normalized_path[4:] if normalized_path.startswith('/api') else normalized_path
         
         # Parse body if it exists
-        if event.get('body'):
+        body = {}
+        if body_str:
             try:
-                body = json.loads(event['body'])
-            except:
+                # API Gateway may pass body as string, Function URL may pass as dict
+                if isinstance(body_str, str):
+                    body = json.loads(body_str) if body_str else {}
+                else:
+                    body = body_str
+            except (json.JSONDecodeError, TypeError):
                 body = {}
         
+        # Handle health/live endpoint (no authentication required)
+        if api_path == '/health' and http_method == 'GET':
+            return {
+                'statusCode': 200,
+                'headers': get_cors_headers(),
+                'body': json.dumps({
+                    'status': 'ok',
+                    'timestamp': datetime.now(timezone.utc).isoformat(),
+                    'environment': ENVIRONMENT,
+                    'workshop_name': WORKSHOP_NAME,
+                    'region': REGION,
+                    'message': 'Instance Manager API is healthy'
+                })
+            }
+        
         # Handle login endpoint (no authentication required)
-        if path == '/login' and http_method == 'POST':
+        if api_path == '/login' and http_method == 'POST':
             password = get_password_from_secret()
             if not password:
                 # No password configured, allow access
-                return create_auth_response('')
+                return {
+                    'statusCode': 200,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({
+                        'success': True,
+                        'message': 'No password configured, access granted'
+                    })
+                }
             
             provided_password = body.get('password') or query_params.get('password', '')
             if provided_password == password:
-                return create_auth_response(password)
+                return {
+                    'statusCode': 200,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({
+                        'success': True,
+                        'message': 'Authentication successful'
+                    })
+                }
             else:
                 return {
                     'statusCode': 401,
-                    'headers': {'Content-Type': 'application/json'},
+                    'headers': get_cors_headers(),
                     'body': json.dumps({
                         'success': False,
                         'error': 'Invalid password'
                     })
                 }
         
-        # Check authentication for all other endpoints
-        if not check_authentication(event):
-            # If no password is configured, allow access (backward compatibility)
-            password = get_password_from_secret()
-            if not password:
-                # No password configured, continue without authentication
-                pass
-            else:
-                # Password is configured but user is not authenticated
-                # Return login page for UI, 401 for API endpoints
-                if path == '/ui' or path == '/':
-                    return {
-                        'statusCode': 200,
-                        'headers': {'Content-Type': 'text/html'},
-                        'body': get_login_html()
-                    }
-                else:
-                    return {
-                        'statusCode': 401,
-                        'headers': {'Content-Type': 'application/json'},
-                        'body': json.dumps({
-                            'success': False,
-                            'error': 'Authentication required',
-                            'requires_auth': True
-                        })
-                    }
-        
-        # Serve frontend HTML
-        if path == '/ui' or path == '/':
+        # Check authentication for all other endpoints (simplified: password in body/query)
+        if not check_password_auth(body, query_params):
+            # Password is configured but not provided or incorrect
             return {
-                'statusCode': 200,
-                'headers': {'Content-Type': 'text/html'},
-                'body': get_frontend_html()
+                'statusCode': 401,
+                'headers': get_cors_headers(),
+                'body': json.dumps({
+                    'success': False,
+                    'error': 'Authentication required. Please provide password in request body or query parameter.',
+                    'requires_auth': True
+                })
             }
         
-        # Route based on method and path
-        if path == '/create' and http_method == 'POST':
+        # Route based on method and path (api_path already has /api removed)
+        if api_path == '/templates' and http_method == 'GET':
+            # Return workshop templates for landing page
+            template_map = get_template_map()
+            return {
+                'statusCode': 200,
+                'headers': get_cors_headers(),
+                'body': json.dumps({
+                    'success': True,
+                    'templates': template_map
+                })
+            }
+        
+        if api_path == '/create' and http_method == 'POST':
             count = int(body.get('count', query_params.get('count', 1)))
             instance_type = body.get('type', query_params.get('type', 'pool'))
             cleanup_days = body.get('cleanup_days') or query_params.get('cleanup_days')
+            workshop_name = body.get('workshop') or query_params.get('workshop') or WORKSHOP_NAME
             if cleanup_days is not None:
                 cleanup_days = int(cleanup_days)
+            
+            # Get timeout parameters from request or use defaults
+            stop_timeout = body.get('stop_timeout') or query_params.get('stop_timeout')
+            terminate_timeout = body.get('terminate_timeout') or query_params.get('terminate_timeout')
+            hard_terminate_timeout = body.get('hard_terminate_timeout') or query_params.get('hard_terminate_timeout')
             
             if count < 1 or count > 120:
                 return {
                     'statusCode': 400,
-                    'headers': {'Content-Type': 'application/json'},
+                    'headers': get_cors_headers(),
                     'body': json.dumps({
                         'success': False,
                         'error': 'Count must be between 1 and 120'
@@ -709,7 +1559,7 @@ def lambda_handler(event, context):
             if instance_type not in ['pool', 'admin']:
                 return {
                     'statusCode': 400,
-                    'headers': {'Content-Type': 'application/json'},
+                    'headers': get_cors_headers(),
                     'body': json.dumps({
                         'success': False,
                         'error': 'Type must be "pool" or "admin"'
@@ -720,34 +1570,60 @@ def lambda_handler(event, context):
                 if cleanup_days < 1 or cleanup_days > 365:
                     return {
                         'statusCode': 400,
-                        'headers': {'Content-Type': 'application/json'},
+                        'headers': get_cors_headers(),
                         'body': json.dumps({
                             'success': False,
                             'error': 'Cleanup days must be between 1 and 365'
                         })
                     }
             
-            result = create_instance(count=count, instance_type=instance_type, cleanup_days=cleanup_days)
+            template_map = get_template_map()
+            if template_map and workshop_name not in template_map:
+                return {
+                    'statusCode': 400,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({
+                        'success': False,
+                        'error': f'Unknown workshop: {workshop_name}',
+                        'available_workshops': sorted(template_map.keys())
+                    })
+                }
+
+            # Get optional tutorial_session_id
+            tutorial_session_id = body.get('tutorial_session_id') or query_params.get('tutorial_session_id')
+            
+            result = create_instance(
+                count=count,
+                instance_type=instance_type,
+                cleanup_days=cleanup_days,
+                workshop_name=workshop_name,
+                stop_timeout=stop_timeout,
+                terminate_timeout=terminate_timeout,
+                hard_terminate_timeout=hard_terminate_timeout,
+                tutorial_session_id=tutorial_session_id
+            )
             # Add a message indicating the operation is async
             if result['success']:
                 result['message'] = f"✅ Initiated creation of {result['count']} {instance_type} instance(s). They will be stopped automatically once running. Refresh to see updates."
             return {
                 'statusCode': 200 if result['success'] else 500,
-                'headers': {'Content-Type': 'application/json'},
+                'headers': get_cors_headers(),
                 'body': json.dumps(result)
             }
         
-        elif path == '/list' and http_method == 'GET':
+        elif api_path == '/list' and http_method == 'GET':
             # Check if include_terminated parameter is set
             include_terminated = query_params.get('include_terminated', 'false').lower() == 'true'
-            result = list_instances(include_terminated=include_terminated)
+            # Check if tutorial_session_id filter is provided
+            tutorial_session_id = query_params.get('tutorial_session_id')
+            result = list_instances(include_terminated=include_terminated, tutorial_session_id=tutorial_session_id)
             return {
                 'statusCode': 200 if result['success'] else 500,
-                'headers': {'Content-Type': 'application/json'},
+                'headers': get_cors_headers(),
                 'body': json.dumps(result, indent=2)
             }
         
-        elif path == '/update_cleanup_days' and http_method == 'POST':
+        elif api_path == '/update_cleanup_days' and http_method == 'POST':
             # Update cleanup days for an admin instance
             instance_id = body.get('instance_id') or query_params.get('instance_id')
             new_cleanup_days = body.get('cleanup_days') or query_params.get('cleanup_days')
@@ -755,7 +1631,7 @@ def lambda_handler(event, context):
             if not instance_id:
                 return {
                     'statusCode': 400,
-                    'headers': {'Content-Type': 'application/json'},
+                    'headers': get_cors_headers(),
                     'body': json.dumps({
                         'success': False,
                         'error': 'instance_id is required'
@@ -765,7 +1641,7 @@ def lambda_handler(event, context):
             if new_cleanup_days is None:
                 return {
                     'statusCode': 400,
-                    'headers': {'Content-Type': 'application/json'},
+                    'headers': get_cors_headers(),
                     'body': json.dumps({
                         'success': False,
                         'error': 'cleanup_days is required'
@@ -777,7 +1653,7 @@ def lambda_handler(event, context):
                 if new_cleanup_days < 1 or new_cleanup_days > 365:
                     return {
                         'statusCode': 400,
-                        'headers': {'Content-Type': 'application/json'},
+                        'headers': get_cors_headers(),
                         'body': json.dumps({
                             'success': False,
                             'error': 'Cleanup days must be between 1 and 365'
@@ -786,7 +1662,7 @@ def lambda_handler(event, context):
             except ValueError:
                 return {
                     'statusCode': 400,
-                    'headers': {'Content-Type': 'application/json'},
+                    'headers': get_cors_headers(),
                     'body': json.dumps({
                         'success': False,
                         'error': 'cleanup_days must be a number'
@@ -799,7 +1675,7 @@ def lambda_handler(event, context):
                 if not response.get('Reservations') or not response['Reservations'][0].get('Instances'):
                     return {
                         'statusCode': 404,
-                        'headers': {'Content-Type': 'application/json'},
+                        'headers': get_cors_headers(),
                         'body': json.dumps({
                             'success': False,
                             'error': 'Instance not found'
@@ -812,7 +1688,7 @@ def lambda_handler(event, context):
                 if tags.get('Type') != 'admin':
                     return {
                         'statusCode': 400,
-                        'headers': {'Content-Type': 'application/json'},
+                        'headers': get_cors_headers(),
                         'body': json.dumps({
                             'success': False,
                             'error': 'Only admin instances can have cleanup days updated'
@@ -831,7 +1707,7 @@ def lambda_handler(event, context):
                 
                 return {
                     'statusCode': 200,
-                    'headers': {'Content-Type': 'application/json'},
+                    'headers': get_cors_headers(),
                     'body': json.dumps({
                         'success': True,
                         'message': f'Updated cleanup days to {new_cleanup_days} for instance {instance_id}',
@@ -843,14 +1719,14 @@ def lambda_handler(event, context):
                 logger.error(f"Error updating cleanup days: {str(e)}")
                 return {
                     'statusCode': 500,
-                    'headers': {'Content-Type': 'application/json'},
+                    'headers': get_cors_headers(),
                     'body': json.dumps({
                         'success': False,
                         'error': str(e)
                     })
                 }
         
-        elif path == '/assign' and http_method == 'POST':
+        elif api_path == '/assign' and http_method == 'POST':
             # Manual assignment endpoint
             instance_id = body.get('instance_id') or query_params.get('instance_id')
             student_name = body.get('student_name') or query_params.get('student_name')
@@ -858,7 +1734,7 @@ def lambda_handler(event, context):
             if not instance_id:
                 return {
                     'statusCode': 400,
-                    'headers': {'Content-Type': 'application/json'},
+                    'headers': get_cors_headers(),
                     'body': json.dumps({
                         'success': False,
                         'error': 'instance_id is required'
@@ -868,7 +1744,7 @@ def lambda_handler(event, context):
             if not student_name:
                 return {
                     'statusCode': 400,
-                    'headers': {'Content-Type': 'application/json'},
+                    'headers': get_cors_headers(),
                     'body': json.dumps({
                         'success': False,
                         'error': 'student_name is required'
@@ -881,7 +1757,7 @@ def lambda_handler(event, context):
                 if not response.get('Reservations') or not response['Reservations'][0].get('Instances'):
                     return {
                         'statusCode': 404,
-                        'headers': {'Content-Type': 'application/json'},
+                        'headers': get_cors_headers(),
                         'body': json.dumps({
                             'success': False,
                             'error': 'Instance not found'
@@ -894,7 +1770,7 @@ def lambda_handler(event, context):
                 if tags.get('Type') != 'pool':
                     return {
                         'statusCode': 400,
-                        'headers': {'Content-Type': 'application/json'},
+                        'headers': get_cors_headers(),
                         'body': json.dumps({
                             'success': False,
                             'error': 'Only pool instances can be manually assigned'
@@ -908,7 +1784,7 @@ def lambda_handler(event, context):
                     if 'Item' in existing and existing['Item'].get('student_name'):
                         return {
                             'statusCode': 400,
-                            'headers': {'Content-Type': 'application/json'},
+                            'headers': get_cors_headers(),
                             'body': json.dumps({
                                 'success': False,
                                 'error': f"Instance is already assigned to {existing['Item'].get('student_name')}"
@@ -973,7 +1849,7 @@ def lambda_handler(event, context):
                 
                 return {
                     'statusCode': 200,
-                    'headers': {'Content-Type': 'application/json'},
+                    'headers': get_cors_headers(),
                     'body': json.dumps({
                         'success': True,
                         'message': f'Successfully assigned instance {instance_id} to {student_name}',
@@ -985,7 +1861,7 @@ def lambda_handler(event, context):
                 if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
                     return {
                         'statusCode': 409,
-                        'headers': {'Content-Type': 'application/json'},
+                        'headers': get_cors_headers(),
                         'body': json.dumps({
                             'success': False,
                             'error': 'Instance is already assigned or assignment in progress'
@@ -994,7 +1870,7 @@ def lambda_handler(event, context):
                 logger.error(f"Error assigning instance: {str(e)}")
                 return {
                     'statusCode': 500,
-                    'headers': {'Content-Type': 'application/json'},
+                    'headers': get_cors_headers(),
                     'body': json.dumps({
                         'success': False,
                         'error': str(e)
@@ -1004,14 +1880,14 @@ def lambda_handler(event, context):
                 logger.error(f"Error assigning instance: {str(e)}", exc_info=True)
                 return {
                     'statusCode': 500,
-                    'headers': {'Content-Type': 'application/json'},
+                    'headers': get_cors_headers(),
                     'body': json.dumps({
                         'success': False,
                         'error': str(e)
                     })
                 }
         
-        elif path == '/stop' and http_method == 'POST':
+        elif api_path == '/stop' and http_method == 'POST':
             instance_ids = body.get('instance_ids') or (query_params.get('instance_ids', '').split(',') if query_params.get('instance_ids') else None)
             
             if not instance_ids:
@@ -1021,7 +1897,7 @@ def lambda_handler(event, context):
                 else:
                     return {
                         'statusCode': 400,
-                        'headers': {'Content-Type': 'application/json'},
+                        'headers': get_cors_headers(),
                         'body': json.dumps({
                             'success': False,
                             'error': 'instance_id or instance_ids is required'
@@ -1034,11 +1910,11 @@ def lambda_handler(event, context):
                 result['message'] = f"✅ Initiated stop for {result['count']} instance(s). Instances are stopping. Refresh to see updates."
             return {
                 'statusCode': 200 if result['success'] else 500,
-                'headers': {'Content-Type': 'application/json'},
+                'headers': get_cors_headers(),
                 'body': json.dumps(result)
             }
         
-        elif path == '/delete' and http_method == 'DELETE':
+        elif api_path == '/delete' and http_method in ['DELETE', 'POST']:
             instance_ids = body.get('instance_ids') or (query_params.get('instance_ids', '').split(',') if query_params.get('instance_ids') else None)
             delete_type = body.get('delete_type', query_params.get('delete_type', 'individual'))
             
@@ -1049,7 +1925,7 @@ def lambda_handler(event, context):
                 else:
                     return {
                         'statusCode': 400,
-                        'headers': {'Content-Type': 'application/json'},
+                        'headers': get_cors_headers(),
                         'body': json.dumps({
                             'success': False,
                             'error': 'instance_id or instance_ids is required for individual delete'
@@ -1062,25 +1938,464 @@ def lambda_handler(event, context):
                 result['message'] = f"✅ Initiated deletion of {result['count']} instance(s). Termination is in progress. Refresh to see updates."
             return {
                 'statusCode': 200 if result['success'] else 500,
-                'headers': {'Content-Type': 'application/json'},
+                'headers': get_cors_headers(),
                 'body': json.dumps(result)
             }
+
+        elif api_path == '/bulk_delete' and http_method == 'POST':
+            # Alias for /delete with delete_type
+            delete_type = body.get('delete_type') or query_params.get('delete_type', 'pool')
+            result = delete_instances(instance_ids=[], delete_type=delete_type)
+            if result['success']:
+                result['message'] = f"✅ Initiated deletion of {result['count']} instance(s). Termination is in progress. Refresh to see updates."
+            return {
+                'statusCode': 200 if result['success'] else 500,
+                'headers': get_cors_headers(),
+                'body': json.dumps(result)
+            }
+
+        elif api_path == '/enable_https' and http_method == 'POST':
+            instance_id = body.get('instance_id') or query_params.get('instance_id')
+            if not instance_id:
+                return {
+                    'statusCode': 400,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({'success': False, 'error': 'instance_id is required'})
+                }
+
+            instance = ec2.describe_instances(InstanceIds=[instance_id])['Reservations'][0]['Instances'][0]
+            tags = {tag['Key']: tag['Value'] for tag in instance.get('Tags', [])}
+            workshop_name = tags.get('WorkshopID') or WORKSHOP_NAME
+            template_config = get_template_for_workshop(workshop_name) or {}
+            app_port = int(template_config.get('app_port') or tags.get('AppPort') or 80)
+
+            result = enable_https_for_instance(instance_id, workshop_name, app_port)
+            return {
+                'statusCode': 200,
+                'headers': get_cors_headers(),
+                'body': json.dumps({'success': True, 'domain': result['domain']})
+            }
+
+        elif api_path == '/delete_https' and http_method == 'POST':
+            instance_id = body.get('instance_id') or query_params.get('instance_id')
+            if not instance_id:
+                return {
+                    'statusCode': 400,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({'success': False, 'error': 'instance_id is required'})
+                }
+
+            instance = ec2.describe_instances(InstanceIds=[instance_id])['Reservations'][0]['Instances'][0]
+            tags = {tag['Key']: tag['Value'] for tag in instance.get('Tags', [])}
+            workshop_name = tags.get('WorkshopID') or WORKSHOP_NAME
+            result = disable_https_for_instance(instance_id, workshop_name, tags)
+            return {
+                'statusCode': 200,
+                'headers': get_cors_headers(),
+                'body': json.dumps({'success': True, 'domain': result['domain']})
+            }
+        
+        elif api_path == '/timeout_settings' and http_method == 'GET':
+            workshop_name = query_params.get('workshop')
+            if not workshop_name:
+                return {
+                    'statusCode': 400,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({'success': False, 'error': 'Workshop name is required'})
+                }
+            
+            timeouts = get_timeout_parameters(workshop_name)
+            return {
+                'statusCode': 200,
+                'headers': get_cors_headers(),
+                'body': json.dumps({'success': True, 'settings': timeouts, 'timeouts': timeouts})
+            }
+        
+        elif api_path == '/update_timeout_settings' and http_method == 'POST':
+            workshop_name = body.get('workshop')
+            stop_timeout = body.get('stop_timeout')
+            terminate_timeout = body.get('terminate_timeout')
+            hard_terminate_timeout = body.get('hard_terminate_timeout')
+            admin_cleanup_days = body.get('admin_cleanup_days')
+            
+            if not workshop_name:
+                return {
+                    'statusCode': 400,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({'success': False, 'error': 'Workshop name is required'})
+                }
+            
+            result = update_timeout_parameters(
+                workshop_name,
+                stop_timeout=stop_timeout,
+                terminate_timeout=terminate_timeout,
+                hard_terminate_timeout=hard_terminate_timeout,
+                admin_cleanup_days=admin_cleanup_days
+            )
+            return {
+                'statusCode': 200 if result['success'] else 500,
+                'headers': get_cors_headers(),
+                'body': json.dumps(result)
+            }
+        
+        elif api_path == '/create_tutorial_session' and http_method == 'POST':
+            # Create a new tutorial session
+            session_id = body.get('session_id')
+            workshop_name = body.get('workshop_name')
+            pool_count = int(body.get('pool_count', 0))
+            admin_count = int(body.get('admin_count', 0))
+            admin_cleanup_days = int(body.get('admin_cleanup_days', 7))
+            
+            if not session_id:
+                return {
+                    'statusCode': 400,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({'success': False, 'error': 'session_id is required'})
+                }
+            
+            if not workshop_name:
+                return {
+                    'statusCode': 400,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({'success': False, 'error': 'workshop_name is required'})
+                }
+            
+            if pool_count < 0 or admin_count < 0:
+                return {
+                    'statusCode': 400,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({'success': False, 'error': 'Counts must be non-negative'})
+                }
+            
+            if pool_count == 0 and admin_count == 0:
+                return {
+                    'statusCode': 400,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({'success': False, 'error': 'At least one pool or admin instance must be created'})
+                }
+            
+            try:
+                # Get tutorial sessions table for this workshop
+                sessions_table = get_tutorial_sessions_table(workshop_name)
+                table_name = f"tutorial-sessions-{workshop_name}-{ENVIRONMENT}"
+                
+                # Verify table exists by attempting to describe it
+                try:
+                    dynamodb_client.describe_table(TableName=table_name)
+                except ClientError as e:
+                    if e.response['Error']['Code'] == 'ResourceNotFoundException':
+                        return {
+                            'statusCode': 500,
+                            'headers': get_cors_headers(),
+                            'body': json.dumps({
+                                'success': False,
+                                'error': f'DynamoDB table "{table_name}" does not exist. Please deploy the infrastructure first using: ./scripts/setup_classroom.sh --name my-classroom --cloud aws --region eu-west-3 --workshop {workshop_name} --environment {ENVIRONMENT}'
+                            })
+                        }
+                    # Re-raise if it's a different ClientError
+                    raise
+                except Exception as e:
+                    logger.warning(f"Error describing table {table_name}: {str(e)}")
+                
+                # Check if session already exists
+                try:
+                    existing = sessions_table.get_item(Key={'session_id': session_id})
+                    if 'Item' in existing:
+                        return {
+                            'statusCode': 409,
+                            'headers': get_cors_headers(),
+                            'body': json.dumps({'success': False, 'error': f'Session {session_id} already exists for workshop {workshop_name}'})
+                        }
+                except Exception as e:
+                    logger.warning(f"Error checking existing session: {str(e)}")
+                
+                # Create session record in DynamoDB
+                session_item = {
+                    'session_id': session_id,
+                    'workshop_name': workshop_name,
+                    'created_at': datetime.now(timezone.utc).isoformat(),
+                    'pool_count': pool_count,
+                    'admin_count': admin_count,
+                    'admin_cleanup_days': admin_cleanup_days,
+                    'status': 'creating'
+                }
+                sessions_table.put_item(Item=session_item)
+                
+                # Create instances
+                created_instances = []
+                errors = []
+                
+                # Create pool instances
+                if pool_count > 0:
+                    pool_result = create_instance(
+                        count=pool_count,
+                        instance_type='pool',
+                        workshop_name=workshop_name,
+                        tutorial_session_id=session_id
+                    )
+                    if pool_result['success']:
+                        created_instances.extend(pool_result['instances'])
+                    else:
+                        errors.append(f"Pool instances: {pool_result.get('error', 'Unknown error')}")
+                
+                # Create admin instances
+                if admin_count > 0:
+                    admin_result = create_instance(
+                        count=admin_count,
+                        instance_type='admin',
+                        cleanup_days=admin_cleanup_days,
+                        workshop_name=workshop_name,
+                        tutorial_session_id=session_id
+                    )
+                    if admin_result['success']:
+                        created_instances.extend(admin_result['instances'])
+                    else:
+                        errors.append(f"Admin instances: {admin_result.get('error', 'Unknown error')}")
+                
+                # Update session status
+                if errors:
+                    sessions_table.update_item(
+                        Key={'session_id': session_id},
+                        UpdateExpression='SET #status = :status, #errors = :errors',
+                        ExpressionAttributeNames={'#status': 'status', '#errors': 'errors'},
+                        ExpressionAttributeValues={':status': 'partial', ':errors': errors}
+                    )
+                else:
+                    sessions_table.update_item(
+                        Key={'session_id': session_id},
+                        UpdateExpression='SET #status = :status',
+                        ExpressionAttributeNames={'#status': 'status'},
+                        ExpressionAttributeValues={':status': 'active'}
+                    )
+                
+                return {
+                    'statusCode': 200,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({
+                        'success': True,
+                        'session': {
+                            'session_id': session_id,
+                            'workshop_name': workshop_name,
+                            'pool_count': pool_count,
+                            'admin_count': admin_count,
+                            'created_at': session_item['created_at'],
+                            'status': 'partial' if errors else 'active'
+                        },
+                        'instances': created_instances,
+                        'errors': errors if errors else None
+                    })
+                }
+            except Exception as e:
+                logger.error(f"Error creating tutorial session: {str(e)}", exc_info=True)
+                return {
+                    'statusCode': 500,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({'success': False, 'error': str(e)})
+                }
+        
+        elif api_path == '/tutorial_sessions' and http_method == 'GET':
+            # List tutorial sessions for a workshop
+            workshop_name = query_params.get('workshop')
+            if not workshop_name:
+                return {
+                    'statusCode': 400,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({'success': False, 'error': 'workshop parameter is required'})
+                }
+            
+            try:
+                sessions_table = get_tutorial_sessions_table(workshop_name)
+                
+                # Query sessions by workshop_name using GSI
+                response = sessions_table.query(
+                    IndexName='workshop_name-index',
+                    KeyConditionExpression='workshop_name = :wn',
+                    ExpressionAttributeValues={':wn': workshop_name}
+                )
+                
+                sessions = []
+                for item in response.get('Items', []):
+                    # Get instance counts for each session
+                    session_id = item['session_id']
+                    instances_result = list_instances(tutorial_session_id=session_id)
+                    instance_count = len(instances_result.get('instances', [])) if instances_result.get('success') else 0
+                    
+                    sessions.append({
+                        'session_id': item['session_id'],
+                        'workshop_name': item['workshop_name'],
+                        'created_at': item['created_at'],
+                        'pool_count': item.get('pool_count', 0),
+                        'admin_count': item.get('admin_count', 0),
+                        'status': item.get('status', 'unknown'),
+                        'actual_instance_count': instance_count
+                    })
+                
+                # Sort by created_at descending (newest first)
+                sessions.sort(key=lambda x: x['created_at'], reverse=True)
+                
+                return {
+                    'statusCode': 200,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({
+                        'success': True,
+                        'sessions': sessions
+                    })
+                }
+            except Exception as e:
+                logger.error(f"Error listing tutorial sessions: {str(e)}", exc_info=True)
+                return {
+                    'statusCode': 500,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({'success': False, 'error': str(e)})
+                }
+        
+        elif api_path.startswith('/tutorial_session/') and http_method == 'GET':
+            # Get a specific tutorial session
+            session_id = api_path.split('/tutorial_session/')[1]
+            workshop_name = query_params.get('workshop')
+            
+            if not workshop_name:
+                return {
+                    'statusCode': 400,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({'success': False, 'error': 'workshop parameter is required'})
+                }
+            
+            try:
+                sessions_table = get_tutorial_sessions_table(workshop_name)
+                response = sessions_table.get_item(Key={'session_id': session_id})
+                
+                if 'Item' not in response:
+                    return {
+                        'statusCode': 404,
+                        'headers': get_cors_headers(),
+                        'body': json.dumps({'success': False, 'error': 'Session not found'})
+                    }
+                
+                item = response['Item']
+                
+                # Get instances for this session
+                instances_result = list_instances(tutorial_session_id=session_id)
+                instances = instances_result.get('instances', []) if instances_result.get('success') else []
+                
+                # Calculate stats
+                pool_instances = [i for i in instances if i.get('type') == 'pool']
+                admin_instances = [i for i in instances if i.get('type') == 'admin']
+                running_count = len([i for i in instances if i.get('state') == 'running'])
+                stopped_count = len([i for i in instances if i.get('state') == 'stopped'])
+                
+                return {
+                    'statusCode': 200,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({
+                        'success': True,
+                        'session': {
+                            'session_id': item['session_id'],
+                            'workshop_name': item['workshop_name'],
+                            'created_at': item['created_at'],
+                            'pool_count': item.get('pool_count', 0),
+                            'admin_count': item.get('admin_count', 0),
+                            'admin_cleanup_days': item.get('admin_cleanup_days', 7),
+                            'status': item.get('status', 'unknown')
+                        },
+                        'stats': {
+                            'total_instances': len(instances),
+                            'pool_instances': len(pool_instances),
+                            'admin_instances': len(admin_instances),
+                            'running': running_count,
+                            'stopped': stopped_count
+                        },
+                        'instances': instances
+                    })
+                }
+            except Exception as e:
+                logger.error(f"Error getting tutorial session: {str(e)}", exc_info=True)
+                return {
+                    'statusCode': 500,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({'success': False, 'error': str(e)})
+                }
+        
+        elif api_path.startswith('/tutorial_session/') and http_method == 'DELETE':
+            # Delete a tutorial session
+            session_id = api_path.split('/tutorial_session/')[1]
+            workshop_name = query_params.get('workshop')
+            delete_instances = query_params.get('delete_instances', 'false').lower() == 'true'
+            
+            if not workshop_name:
+                return {
+                    'statusCode': 400,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({'success': False, 'error': 'workshop parameter is required'})
+                }
+            
+            try:
+                sessions_table = get_tutorial_sessions_table(workshop_name)
+                
+                # Check if session exists
+                response = sessions_table.get_item(Key={'session_id': session_id})
+                if 'Item' not in response:
+                    return {
+                        'statusCode': 404,
+                        'headers': get_cors_headers(),
+                        'body': json.dumps({'success': False, 'error': 'Session not found'})
+                    }
+                
+                # Get instances for this session
+                instances_result = list_instances(tutorial_session_id=session_id)
+                instances = instances_result.get('instances', []) if instances_result.get('success') else []
+                
+                # Delete instances if requested
+                if delete_instances and instances:
+                    instance_ids = [i['instance_id'] for i in instances if i.get('state') != 'terminated']
+                    if instance_ids:
+                        try:
+                            ec2.terminate_instances(InstanceIds=instance_ids)
+                            logger.info(f"Terminated {len(instance_ids)} instances for session {session_id}")
+                        except Exception as e:
+                            logger.error(f"Error terminating instances: {str(e)}")
+                
+                # Delete session record
+                sessions_table.delete_item(Key={'session_id': session_id})
+                
+                return {
+                    'statusCode': 200,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({
+                        'success': True,
+                        'message': f'Session {session_id} deleted',
+                        'instances_deleted': delete_instances
+                    })
+                }
+            except Exception as e:
+                logger.error(f"Error deleting tutorial session: {str(e)}", exc_info=True)
+                return {
+                    'statusCode': 500,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({'success': False, 'error': str(e)})
+                }
         
         else:
             return {
                 'statusCode': 404,
-                'headers': {'Content-Type': 'application/json'},
+                'headers': get_cors_headers(),
                 'body': json.dumps({
                     'success': False,
                     'error': 'Not found',
                     'available_endpoints': {
-                        'GET /ui': 'Frontend interface',
-                        'POST /create': 'Create instances (body: {"count": 1, "type": "pool", "cleanup_days": 7})',
-                        'GET /list': 'List all instances',
-                        'POST /update_cleanup_days': 'Update cleanup days for admin instance (body: {"instance_id": "...", "cleanup_days": 7})',
-                        'POST /assign': 'Manually assign instance to student (body: {"instance_id": "...", "student_name": "..."})',
-                        'POST /stop': 'Stop instances (body: {"instance_id": "..."} or query: ?instance_id=...)',
-                        'DELETE /delete': 'Delete instances'
+                        'GET /api/health': 'Health check endpoint (no auth required)',
+                        'POST /api/login': 'Login endpoint (no auth required)',
+                        'GET /api/templates': 'Get workshop templates',
+                        'POST /api/create': 'Create instances',
+                        'GET /api/list': 'List all instances',
+                        'POST /api/update_cleanup_days': 'Update cleanup days',
+                        'POST /api/assign': 'Assign instance',
+                        'POST /api/delete': 'Delete instances',
+                        'POST /api/bulk_delete': 'Bulk delete instances',
+                        'POST /api/enable_https': 'Enable HTTPS',
+                        'POST /api/delete_https': 'Disable HTTPS',
+                        'GET /api/timeout_settings': 'Get timeout settings',
+                        'POST /api/update_timeout_settings': 'Update timeout settings'
                     }
                 })
             }
@@ -1089,7 +2404,7 @@ def lambda_handler(event, context):
         logger.error(f"Error in lambda_handler: {str(e)}", exc_info=True)
         return {
             'statusCode': 500,
-            'headers': {'Content-Type': 'application/json'},
+            'headers': get_cors_headers(),
             'body': json.dumps({
                 'success': False,
                 'error': str(e)
@@ -1232,7 +2547,10 @@ def get_login_html():
 
 def get_frontend_html():
     """Return the HTML frontend interface"""
-    return """<!DOCTYPE html>
+    template_map = get_template_map()
+    templates_json = json.dumps(template_map)
+    default_workshop = WORKSHOP_NAME
+    html = """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -1501,8 +2819,27 @@ def get_frontend_html():
                 <h2>Create Pool Instances</h2>
                 <form id="createPoolForm">
                     <div class="form-group">
+                        <label>Workshop:</label>
+                        <select id="poolWorkshop"></select>
+                    </div>
+                    <div class="form-group">
                         <label>Number of instances:</label>
                         <input type="number" id="poolCount" min="1" max="120" value="4" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Stop Timeout (minutes, optional):</label>
+                        <input type="number" id="poolStopTimeout" min="1" max="1440" placeholder="Uses SSM default">
+                        <small style="color: #666; font-size: 0.85em;">Minutes before stopping unassigned running instances</small>
+                    </div>
+                    <div class="form-group">
+                        <label>Terminate Timeout (minutes, optional):</label>
+                        <input type="number" id="poolTerminateTimeout" min="1" max="1440" placeholder="Uses SSM default">
+                        <small style="color: #666; font-size: 0.85em;">Minutes before terminating stopped instances</small>
+                    </div>
+                    <div class="form-group">
+                        <label>Hard Terminate Timeout (minutes, optional):</label>
+                        <input type="number" id="poolHardTerminateTimeout" min="1" max="10080" placeholder="Uses SSM default">
+                        <small style="color: #666; font-size: 0.85em;">Minutes before hard terminating any instance</small>
                     </div>
                     <button type="submit">Create Pool</button>
                 </form>
@@ -1512,6 +2849,10 @@ def get_frontend_html():
                 <h2>Create Admin Instance</h2>
                 <form id="createAdminForm">
                     <div class="form-group">
+                        <label>Workshop:</label>
+                        <select id="adminWorkshop"></select>
+                    </div>
+                    <div class="form-group">
                         <label>Number of instances:</label>
                         <input type="number" id="adminCount" min="1" max="5" value="1" required>
                     </div>
@@ -1519,6 +2860,21 @@ def get_frontend_html():
                         <label>Cleanup after (days):</label>
                         <input type="number" id="adminCleanupDays" min="1" max="365" value="7" required>
                         <small style="color: #666; font-size: 0.85em;">Instances will be automatically deleted after this many days (default: 7)</small>
+                    </div>
+                    <div class="form-group">
+                        <label>Stop Timeout (minutes, optional):</label>
+                        <input type="number" id="adminStopTimeout" min="1" max="1440" placeholder="Uses SSM default">
+                        <small style="color: #666; font-size: 0.85em;">Minutes before stopping unassigned running instances</small>
+                    </div>
+                    <div class="form-group">
+                        <label>Terminate Timeout (minutes, optional):</label>
+                        <input type="number" id="adminTerminateTimeout" min="1" max="1440" placeholder="Uses SSM default">
+                        <small style="color: #666; font-size: 0.85em;">Minutes before terminating stopped instances</small>
+                    </div>
+                    <div class="form-group">
+                        <label>Hard Terminate Timeout (minutes, optional):</label>
+                        <input type="number" id="adminHardTerminateTimeout" min="1" max="10080" placeholder="Uses SSM default">
+                        <small style="color: #666; font-size: 0.85em;">Minutes before hard terminating any instance</small>
                     </div>
                     <button type="submit">Create Admin</button>
                 </form>
@@ -1535,6 +2891,41 @@ def get_frontend_html():
                     </select>
                 </div>
                 <button class="delete" onclick="bulkDelete()">Delete Selected</button>
+            </div>
+
+            <div class="card">
+                <h2>Workshop Timeout Settings (SSM Defaults)</h2>
+                <p style="color: #666; font-size: 0.9em; margin-bottom: 15px;">Configure default timeout values per workshop. These are used when creating instances without custom timeout values.</p>
+                <form id="timeoutSettingsForm">
+                    <div class="form-group">
+                        <label>Workshop:</label>
+                        <select id="timeoutWorkshop"></select>
+                    </div>
+                    <div class="form-group">
+                        <label>Stop Timeout (minutes):</label>
+                        <input type="number" id="stopTimeout" min="1" max="1440" required>
+                        <small style="color: #666; font-size: 0.85em;">Default minutes before stopping unassigned running instances</small>
+                    </div>
+                    <div class="form-group">
+                        <label>Terminate Timeout (minutes):</label>
+                        <input type="number" id="terminateTimeout" min="1" max="1440" required>
+                        <small style="color: #666; font-size: 0.85em;">Default minutes before terminating stopped instances</small>
+                    </div>
+                    <div class="form-group">
+                        <label>Hard Terminate Timeout (minutes):</label>
+                        <input type="number" id="hardTerminateTimeout" min="1" max="10080" required>
+                        <small style="color: #666; font-size: 0.85em;">Default minutes before hard terminating any instance (max: 7 days)</small>
+                    </div>
+                    <div class="form-group">
+                        <label>Admin Cleanup Days:</label>
+                        <input type="number" id="adminCleanupDaysSetting" min="1" max="365" required>
+                        <small style="color: #666; font-size: 0.85em;">Default days before admin instances are deleted</small>
+                    </div>
+                    <div style="display: flex; gap: 10px;">
+                        <button type="submit">Save Defaults</button>
+                        <button type="button" onclick="loadTimeoutSettings()" style="background: #666;">Load Current</button>
+                    </div>
+                </form>
             </div>
         </div>
 
@@ -1557,6 +2948,8 @@ def get_frontend_html():
 
     <script>
         const API_URL = window.location.origin;
+        const WORKSHOP_TEMPLATES = __TEMPLATES_JSON__;
+        const DEFAULT_WORKSHOP = "__DEFAULT_WORKSHOP__";
 
         function showMessage(text, type = 'success') {
             const messageDiv = document.getElementById('message');
@@ -1568,12 +2961,48 @@ def get_frontend_html():
             }, 5000);
         }
 
-        async function createInstances(count, type, cleanupDays = null) {
+        function getSelectedWorkshop(type) {
+            const selectId = type === 'admin' ? 'adminWorkshop' : 'poolWorkshop';
+            const select = document.getElementById(selectId);
+            return select ? select.value : DEFAULT_WORKSHOP;
+        }
+
+        function populateWorkshopSelects() {
+            const workshops = Object.keys(WORKSHOP_TEMPLATES);
+            const options = workshops.length > 0 ? workshops : [DEFAULT_WORKSHOP];
+            const selects = [document.getElementById('poolWorkshop'), document.getElementById('adminWorkshop'), document.getElementById('timeoutWorkshop')];
+
+            selects.forEach(select => {
+                if (!select) return;
+                select.innerHTML = '';
+                options.forEach(workshop => {
+                    const option = document.createElement('option');
+                    option.value = workshop;
+                    option.textContent = workshop;
+                    if (workshop === DEFAULT_WORKSHOP) {
+                        option.selected = true;
+                    }
+                    select.appendChild(option);
+                });
+            });
+        }
+
+        async function createInstances(count, type, cleanupDays = null, stopTimeout = null, terminateTimeout = null, hardTerminateTimeout = null) {
             try {
                 showMessage('Creating instances...', 'success');
                 const payload = {count, type};
+                payload.workshop = getSelectedWorkshop(type);
                 if (type === 'admin' && cleanupDays !== null) {
                     payload.cleanup_days = cleanupDays;
+                }
+                if (stopTimeout !== null && stopTimeout !== '') {
+                    payload.stop_timeout = parseInt(stopTimeout);
+                }
+                if (terminateTimeout !== null && terminateTimeout !== '') {
+                    payload.terminate_timeout = parseInt(terminateTimeout);
+                }
+                if (hardTerminateTimeout !== null && hardTerminateTimeout !== '') {
+                    payload.hard_terminate_timeout = parseInt(hardTerminateTimeout);
                 }
                 const response = await fetch(`${API_URL}/create`, {
                     method: 'POST',
@@ -1610,6 +3039,46 @@ def get_frontend_html():
                     refreshList();
                     // Auto-refresh after a few seconds to show updated states
                     setTimeout(refreshList, 3000);
+                } else {
+                    showMessage(`❌ Error: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                showMessage(`❌ Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function enableHttps(instanceId) {
+            try {
+                showMessage('Enabling HTTPS...', 'success');
+                const response = await fetch(`${API_URL}/https/enable`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({instance_id: instanceId})
+                });
+                const data = await response.json();
+                if (data.success) {
+                    showMessage(`✅ HTTPS enabled: ${data.domain}`, 'success');
+                    refreshList();
+                } else {
+                    showMessage(`❌ Error: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                showMessage(`❌ Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function disableHttps(instanceId) {
+            try {
+                showMessage('Disabling HTTPS...', 'success');
+                const response = await fetch(`${API_URL}/https/disable`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({instance_id: instanceId})
+                });
+                const data = await response.json();
+                if (data.success) {
+                    showMessage('✅ HTTPS disabled', 'success');
+                    refreshList();
                 } else {
                     showMessage(`❌ Error: ${data.error}`, 'error');
                 }
@@ -1706,9 +3175,10 @@ def get_frontend_html():
                     return;
                 }
 
-                let tableHTML = '<table><thead><tr><th>Instance ID</th><th>Type</th><th>State</th><th>Public IP</th><th>Assigned To</th><th>Days Remaining</th><th>Actions</th></tr></thead><tbody>';
+                let tableHTML = '<table><thead><tr><th>Instance ID</th><th>Workshop</th><th>Type</th><th>State</th><th>Public IP</th><th>Assigned To</th><th>Days Remaining</th><th>Actions</th></tr></thead><tbody>';
                 
                 data.instances.forEach(instance => {
+                    const workshop = instance.tags && instance.tags.WorkshopID ? instance.tags.WorkshopID : '-';
                     const typeBadge = `<span class="badge ${instance.type}">${instance.type}</span>`;
                     const stateBadge = `<span class="badge ${instance.state}">${instance.state}</span>`;
                     
@@ -1731,6 +3201,14 @@ def get_frontend_html():
                         publicIpCell = '-';
                     }
                     
+                    // HTTPS toggle button
+                    const httpsEnabled = instance.tags && instance.tags.HttpsEnabled === 'true';
+                    const httpsButton = instance.state === 'terminated'
+                        ? '<span style="color: #999;">-</span>'
+                        : (httpsEnabled
+                            ? `<button class="btn-small" style="background: #ff9800;" onclick="disableHttps('${instance.instance_id}')">Disable HTTPS</button>`
+                            : `<button class="btn-small" style="background: #3f51b5;" onclick="enableHttps('${instance.instance_id}')">Enable HTTPS</button>`);
+
                     // Only show delete button if instance is not terminated
                     const deleteButton = instance.state === 'terminated' 
                         ? '<span style="color: #999;">-</span>'
@@ -1766,12 +3244,13 @@ def get_frontend_html():
                     tableHTML += `
                         <tr>
                             <td><code>${instance.instance_id}</code></td>
+                            <td>${workshop}</td>
                             <td>${typeBadge}</td>
                             <td>${stateBadge}</td>
                             <td>${publicIpCell}</td>
                             <td>${assignedBadge}</td>
                             <td>${daysRemainingCell}</td>
-                            <td>${deleteButton}</td>
+                            <td>${httpsButton}<br>${deleteButton}</td>
                         </tr>
                     `;
                 });
@@ -1783,19 +3262,29 @@ def get_frontend_html():
             }
         }
 
+        populateWorkshopSelects();
+
         // Form handlers
         document.getElementById('createPoolForm').addEventListener('submit', (e) => {
             e.preventDefault();
             const count = parseInt(document.getElementById('poolCount').value);
-            createInstances(count, 'pool');
+            const stopTimeout = document.getElementById('poolStopTimeout').value;
+            const terminateTimeout = document.getElementById('poolTerminateTimeout').value;
+            const hardTerminateTimeout = document.getElementById('poolHardTerminateTimeout').value;
+            createInstances(count, 'pool', null, stopTimeout, terminateTimeout, hardTerminateTimeout);
         });
 
         document.getElementById('createAdminForm').addEventListener('submit', (e) => {
             e.preventDefault();
             const count = parseInt(document.getElementById('adminCount').value);
             const cleanupDays = parseInt(document.getElementById('adminCleanupDays').value);
-            createInstances(count, 'admin', cleanupDays);
+            const stopTimeout = document.getElementById('adminStopTimeout').value;
+            const terminateTimeout = document.getElementById('adminTerminateTimeout').value;
+            const hardTerminateTimeout = document.getElementById('adminHardTerminateTimeout').value;
+            createInstances(count, 'admin', cleanupDays, stopTimeout, terminateTimeout, hardTerminateTimeout);
         });
+
+        document.getElementById('timeoutSettingsForm').addEventListener('submit', saveTimeoutSettings);
         
         async function extendCleanupDays(instanceId, currentDays) {
             const newDays = prompt(`Current cleanup days: ${currentDays}\nEnter new number of days (1-365):`, currentDays + 7);
@@ -1819,6 +3308,67 @@ def get_frontend_html():
                     showMessage(data.message || `✅ Updated cleanup days to ${days}`, 'success');
                     refreshList();
                     setTimeout(refreshList, 2000);
+                } else {
+                    showMessage(`❌ Error: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                showMessage(`❌ Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function loadTimeoutSettings() {
+            const workshop = document.getElementById('timeoutWorkshop').value;
+            if (!workshop) {
+                showMessage('Please select a workshop', 'error');
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_URL}/timeout_settings?workshop=${workshop}`);
+                const data = await response.json();
+                if (data.success) {
+                    document.getElementById('stopTimeout').value = data.timeouts.stop_timeout;
+                    document.getElementById('terminateTimeout').value = data.timeouts.terminate_timeout;
+                    document.getElementById('hardTerminateTimeout').value = data.timeouts.hard_terminate_timeout;
+                    document.getElementById('adminCleanupDaysSetting').value = data.timeouts.admin_cleanup_days;
+                    showMessage('✅ Settings loaded', 'success');
+                } else {
+                    showMessage(`❌ Error: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                showMessage(`❌ Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function saveTimeoutSettings(event) {
+            event.preventDefault();
+            const workshop = document.getElementById('timeoutWorkshop').value;
+            const stopTimeout = parseInt(document.getElementById('stopTimeout').value);
+            const terminateTimeout = parseInt(document.getElementById('terminateTimeout').value);
+            const hardTerminateTimeout = parseInt(document.getElementById('hardTerminateTimeout').value);
+            const adminCleanupDays = parseInt(document.getElementById('adminCleanupDaysSetting').value);
+            
+            if (!workshop) {
+                showMessage('Please select a workshop', 'error');
+                return;
+            }
+            
+            try {
+                showMessage('Saving settings...', 'success');
+                const response = await fetch(`${API_URL}/update_timeout_settings`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({
+                        workshop,
+                        stop_timeout: stopTimeout,
+                        terminate_timeout: terminateTimeout,
+                        hard_terminate_timeout: hardTerminateTimeout,
+                        admin_cleanup_days: adminCleanupDays
+                    })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    showMessage(`✅ Settings saved for ${workshop}`, 'success');
                 } else {
                     showMessage(`❌ Error: ${data.error}`, 'error');
                 }
@@ -1859,3 +3409,4 @@ def get_frontend_html():
     </script>
 </body>
 </html>"""
+    return html.replace("__TEMPLATES_JSON__", templates_json).replace("__DEFAULT_WORKSHOP__", default_workshop)
