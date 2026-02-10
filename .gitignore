@@ -46,9 +46,11 @@ obj/
 .terraform/
 *.tfstate
 *.tfstate.*
+*.tfplan
 *.tfvars
 .terraformrc
 terraform.rc
+errored.tfstate
 
 # Logs
 *.log
