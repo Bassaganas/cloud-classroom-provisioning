@@ -87,11 +87,28 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
 
     # Package instance manager Lambda function (MOVED BEFORE dify_jira to ensure it runs)
     echo "Packaging AWS Lambda instance manager function..."
+    
+    # Clean up extracted directory if it exists (leftover from previous extractions)
+    if [ -d "$PROJECT_ROOT/functions/packages/classroom_instance_manager" ]; then
+        echo "Cleaning up extracted directory: functions/packages/classroom_instance_manager"
+        rm -rf "$PROJECT_ROOT/functions/packages/classroom_instance_manager"
+    fi
+    
+    # Delete existing zip file to ensure clean packaging
+    PACKAGE_PATH="$PROJECT_ROOT/functions/packages/classroom_instance_manager.zip"
+    if [ -f "$PACKAGE_PATH" ]; then
+        echo "Deleting existing zip file to ensure clean packaging..."
+        rm -f "$PACKAGE_PATH"
+    fi
+    
+    # Create fresh temporary directory for this Lambda (completely isolated)
     TEMP_DIR5=$(mktemp -d)
+    echo "Created isolated temporary directory: $TEMP_DIR5"
     
     # Verify source file exists and has content
     if [ ! -f "$PROJECT_ROOT/functions/common/classroom_instance_manager.py" ]; then
         echo "ERROR: Source file not found: $PROJECT_ROOT/functions/common/classroom_instance_manager.py"
+        rm -rf "$TEMP_DIR5"
         exit 1
     fi
     
@@ -100,50 +117,79 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
     
     if [ "$SOURCE_SIZE" -lt 100 ]; then
         echo "ERROR: Source file appears to be empty or too small ($SOURCE_SIZE bytes)"
+        rm -rf "$TEMP_DIR5"
         exit 1
     fi
     
-    # Copy the file
+    # Explicitly copy ONLY the intended file (classroom_instance_manager.py)
+    echo "Copying classroom_instance_manager.py to temp directory..."
     cp "$PROJECT_ROOT/functions/common/classroom_instance_manager.py" "$TEMP_DIR5/"
     
     # Verify copy succeeded
     COPIED_SIZE=$(wc -c < "$TEMP_DIR5/classroom_instance_manager.py")
     if [ "$SOURCE_SIZE" -ne "$COPIED_SIZE" ]; then
         echo "ERROR: File copy failed. Source: $SOURCE_SIZE bytes, Copied: $COPIED_SIZE bytes"
+        rm -rf "$TEMP_DIR5"
         exit 1
     fi
     echo "File copied successfully: $COPIED_SIZE bytes"
     
-    # Install dependencies
-    pip install -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR5/"
-    
-    # Create zip
-    cd "$TEMP_DIR5"
-    zip -r9 "$PROJECT_ROOT/functions/packages/classroom_instance_manager.zip" .
-    cd "$PROJECT_ROOT"
-    
-    # Verify the package was created and contains the file
-    if [ ! -f "$PROJECT_ROOT/functions/packages/classroom_instance_manager.zip" ]; then
-        echo "ERROR: Package file was not created"
+    # Verify temp directory only contains the intended file before installing dependencies
+    PYTHON_FILES_IN_TEMP=$(find "$TEMP_DIR5" -maxdepth 1 -name "*.py" -type f | wc -l)
+    if [ "$PYTHON_FILES_IN_TEMP" -ne 1 ]; then
+        echo "ERROR: Temp directory contains unexpected Python files before dependency installation"
+        echo "Found $PYTHON_FILES_IN_TEMP Python files, expected 1"
+        rm -rf "$TEMP_DIR5"
         exit 1
     fi
     
-    # Check if lambda_handler is in the package
-    if ! unzip -l "$PROJECT_ROOT/functions/packages/classroom_instance_manager.zip" | grep -q "classroom_instance_manager.py"; then
+    # Install dependencies
+    echo "Installing dependencies..."
+    pip install -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR5/"
+    
+    # Create zip from clean temp directory
+    echo "Creating zip package..."
+    cd "$TEMP_DIR5"
+    zip -r9 "$PACKAGE_PATH" .
+    cd "$PROJECT_ROOT"
+    
+    # Verify the package was created
+    if [ ! -f "$PACKAGE_PATH" ]; then
+        echo "ERROR: Package file was not created"
+        rm -rf "$TEMP_DIR5"
+        exit 1
+    fi
+    
+    # Verify the package contains the correct file
+    if ! unzip -l "$PACKAGE_PATH" | grep -q "classroom_instance_manager.py"; then
         echo "ERROR: Package does not contain classroom_instance_manager.py"
+        rm -rf "$TEMP_DIR5"
         exit 1
     fi
     
     # Verify lambda_handler function exists in the package
-    if ! unzip -p "$PROJECT_ROOT/functions/packages/classroom_instance_manager.zip" classroom_instance_manager.py | grep -q "def lambda_handler"; then
+    if ! unzip -p "$PACKAGE_PATH" classroom_instance_manager.py | grep -q "def lambda_handler"; then
         echo "ERROR: lambda_handler function not found in packaged file"
+        rm -rf "$TEMP_DIR5"
         exit 1
     fi
     
-    PACKAGE_SIZE=$(unzip -l "$PROJECT_ROOT/functions/packages/classroom_instance_manager.zip" | grep "classroom_instance_manager.py" | awk '{print $1}')
+    # Verify that testus_patronus_instance_manager.py is NOT in the package
+    if unzip -l "$PACKAGE_PATH" | grep -q "testus_patronus_instance_manager.py"; then
+        echo "ERROR: Package contains unwanted file: testus_patronus_instance_manager.py"
+        echo "This file should not be in the package. Cleaning up..."
+        rm -f "$PACKAGE_PATH"
+        rm -rf "$TEMP_DIR5"
+        exit 1
+    fi
+    echo "✓ Verified: testus_patronus_instance_manager.py is not in the package"
+    
+    PACKAGE_SIZE=$(unzip -l "$PACKAGE_PATH" | grep "classroom_instance_manager.py" | awk '{print $1}')
     echo "Package created successfully. File size in package: $PACKAGE_SIZE bytes"
     
+    # Clean up temp directory
     rm -rf "$TEMP_DIR5"
+    echo "✓ Cleanup complete"
 
     # Package dify_jira API Lambda function
     echo "Packaging AWS Lambda dify_jira API function..."

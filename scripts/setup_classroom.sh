@@ -151,6 +151,11 @@ if [ "$CLOUD_PROVIDER" = "azure" ]; then
     ${FORCE_UNLOCK:+"--force-unlock"} \
     ${SETUP_RBAC:+"--setup-rbac"}
 else
+  # Infer workshop name from classroom name if not explicitly set and a matching folder exists
+  if [ "$WORKSHOP_ROOT" = "testus_patronus" ] && [ -d "iac/aws/workshops/$CLASSROOM_NAME" ]; then
+    WORKSHOP_ROOT="$CLASSROOM_NAME"
+  fi
+  
   # Call setup_aws.sh with all necessary parameters
   AWS_ARGS=("$CLASSROOM_NAME" "$REGION" "$ACTION")
   if [ "$WITH_POOL" = true ]; then
