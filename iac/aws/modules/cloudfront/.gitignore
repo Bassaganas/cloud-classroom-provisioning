@@ -1,0 +1,3 @@
+# Terraform generated files
+*.zip
+cloudfront_log_processor.zip

@@ -40,7 +40,9 @@ resource "aws_iam_role_policy" "lambda_iam_policy" {
           "dynamodb:UpdateItem",
           "dynamodb:DeleteItem",
           "dynamodb:Query",
-          "dynamodb:Scan"
+          "dynamodb:Scan",
+          "dynamodb:DescribeTable",
+          "dynamodb:ListTables"
         ]
         Resource = "*"
       },
@@ -97,7 +99,58 @@ resource "aws_iam_role_policy" "lambda_iam_policy" {
           "ssm:GetParameter",
           "ssm:GetParameters"
         ]
-        Resource = "arn:aws:ssm:${var.region}:${var.account_id}:parameter/classroom/${var.workshop_name}/${var.environment}/*"
+        Resource = [
+          "arn:aws:ssm:${var.region}:${var.account_id}:parameter/classroom/${var.workshop_name}/${var.environment}/*",
+          "arn:aws:ssm:${var.region}:${var.account_id}:parameter/classroom/templates/${var.environment}"
+        ]
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "elasticloadbalancing:CreateLoadBalancer",
+          "elasticloadbalancing:DeleteLoadBalancer",
+          "elasticloadbalancing:DescribeLoadBalancers",
+          "elasticloadbalancing:CreateTargetGroup",
+          "elasticloadbalancing:DeleteTargetGroup",
+          "elasticloadbalancing:DescribeTargetGroups",
+          "elasticloadbalancing:RegisterTargets",
+          "elasticloadbalancing:DeregisterTargets",
+          "elasticloadbalancing:CreateListener",
+          "elasticloadbalancing:DeleteListener",
+          "elasticloadbalancing:DescribeListeners",
+          "elasticloadbalancing:CreateRule",
+          "elasticloadbalancing:DeleteRule",
+          "elasticloadbalancing:DescribeRules",
+          "elasticloadbalancing:AddTags"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "route53:ChangeResourceRecordSets",
+          "route53:ListHostedZonesByName",
+          "route53:ListResourceRecordSets"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "acm:DescribeCertificate",
+          "acm:ListCertificates"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "ec2:CreateSecurityGroup",
+          "ec2:AuthorizeSecurityGroupIngress",
+          "ec2:RevokeSecurityGroupIngress",
+          "ec2:DeleteSecurityGroup"
+        ]
+        Resource = "*"
       },
       {
         Effect = "Allow"
@@ -119,9 +172,10 @@ resource "aws_iam_role_policy_attachment" "lambda_basic" {
 }
 
 # IAM Policy for Secrets Manager (if secret ARN provided)
-# Use secret name for count check to avoid dependency issues during apply
+# Always create the policy - it will be empty if no secrets are provided
+# This avoids count dependency issues with resource outputs
 resource "aws_iam_policy" "lambda_secretsmanager_policy" {
-  count = (var.secrets_manager_secret_arn != "" || var.instance_manager_password_secret_name != "") ? 1 : 0
+  count = 1
 
   name        = "lambda-secretsmanager-policy-${var.workshop_name}-${var.environment}"
   description = "Allow Lambda to get secrets from Secrets Manager"
@@ -151,7 +205,8 @@ resource "aws_iam_policy" "lambda_secretsmanager_policy" {
 }
 
 resource "aws_iam_role_policy_attachment" "lambda_secretsmanager_attach" {
-  count = (var.secrets_manager_secret_arn != "" || var.instance_manager_password_secret_name != "") ? 1 : 0
+  # Always attach the policy since we always create it (policy will be empty if no secrets)
+  count = 1
 
   role       = aws_iam_role.lambda_role.name
   policy_arn = aws_iam_policy.lambda_secretsmanager_policy[0].arn

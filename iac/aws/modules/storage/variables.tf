@@ -38,3 +38,11 @@ variable "instance_manager_password" {
   sensitive   = true
 }
 
+
+
+
+variable "create_instance_manager_password_secret" {
+  description = "Whether to create the instance manager password secret (set to false if using a shared/common secret)"
+  type        = bool
+  default     = true
+}

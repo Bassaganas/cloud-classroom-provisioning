@@ -114,6 +114,30 @@ variable "instance_manager_password_secret_name" {
   default     = ""
 }
 
+variable "instance_manager_template_map_parameter" {
+  description = "SSM parameter name containing the workshop template map"
+  type        = string
+  default     = ""
+}
+
+variable "instance_manager_base_domain" {
+  description = "Base domain for per-instance HTTPS hostnames"
+  type        = string
+  default     = ""
+}
+
+variable "instance_manager_hosted_zone_id" {
+  description = "Route53 hosted zone ID for per-instance HTTPS records"
+  type        = string
+  default     = ""
+}
+
+variable "instance_manager_https_cert_arn" {
+  description = "ACM certificate ARN for per-instance HTTPS (ALB)"
+  type        = string
+  default     = ""
+}
+
 variable "skip_iam_user_creation" {
   description = "Skip IAM user creation to avoid rate limiting (useful for conference scenarios). When true, users will only get EC2 instances, not AWS console access."
   type        = bool
