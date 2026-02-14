@@ -6,6 +6,7 @@ import logging
 import time
 from botocore.exceptions import ClientError
 from datetime import datetime, timezone
+from decimal import Decimal
 import base64
 
 logger = logging.getLogger()
@@ -46,6 +47,19 @@ def get_tutorial_sessions_table(workshop_name=None):
     """Get the tutorial sessions DynamoDB table for a workshop"""
     workshop = workshop_name or WORKSHOP_NAME
     return dynamodb.Table(f"tutorial-sessions-{workshop}-{ENVIRONMENT}")
+
+def convert_decimal(obj):
+    """Convert Decimal objects to int or float for JSON serialization"""
+    if isinstance(obj, Decimal):
+        # Convert to int if it's a whole number, otherwise float
+        if obj % 1 == 0:
+            return int(obj)
+        return float(obj)
+    elif isinstance(obj, dict):
+        return {k: convert_decimal(v) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_decimal(item) for item in obj]
+    return obj
 
 # Get configuration from environment variables
 INSTANCE_TYPE = os.environ.get('EC2_INSTANCE_TYPE', 't3.medium')
@@ -588,24 +602,29 @@ su - ec2-user -c "cd ~/dify/docker && docker compose up -d"
 """
 
 def get_latest_ami():
-    """Get the latest Amazon Linux 2 AMI"""
+    """Get the latest Amazon Linux 2 AMI for the current region"""
     try:
         response = ec2.describe_images(
             Owners=['amazon'],
             Filters=[
                 {'Name': 'name', 'Values': ['amzn2-ami-hvm-*-x86_64-gp2']},
-                {'Name': 'virtualization-type', 'Values': ['hvm']}
+                {'Name': 'virtualization-type', 'Values': ['hvm']},
+                {'Name': 'state', 'Values': ['available']}
             ],
             MostRecent=True
         )
         if response['Images']:
-            return response['Images'][0]['ImageId']
+            ami_id = response['Images'][0]['ImageId']
+            logger.info(f"Found latest Amazon Linux 2 AMI: {ami_id} in region {REGION}")
+            return ami_id
         else:
-            logger.warning("No AMI found, using default")
-            return 'ami-0746ed6b6c0683e67'  # Fallback AMI for eu-west-3
+            error_msg = f"No Amazon Linux 2 AMI found in region {REGION}"
+            logger.error(error_msg)
+            raise RuntimeError(error_msg)
     except Exception as e:
-        logger.error(f"Error getting AMI: {str(e)}")
-        return 'ami-0746ed6b6c0683e67'  # Fallback AMI
+        error_msg = f"Error getting AMI in region {REGION}: {str(e)}"
+        logger.error(error_msg)
+        raise RuntimeError(error_msg)
 
 def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_name=None,
                     stop_timeout=None, terminate_timeout=None, hard_terminate_timeout=None,
@@ -626,8 +645,28 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
         workshop_name = workshop_name or WORKSHOP_NAME
         template_config = get_template_for_workshop(workshop_name)
         ami_id = template_config.get('ami_id') if template_config else None
+        
+        # If no AMI ID in template, try to get the latest Amazon Linux 2 AMI
         if not ami_id:
-            ami_id = get_latest_ami()
+            logger.warning(f"No AMI ID found in template for workshop {workshop_name}, attempting to get latest Amazon Linux 2 AMI")
+            try:
+                ami_id = get_latest_ami()
+            except RuntimeError as e:
+                error_msg = f"Cannot create instances: {str(e)}. Please ensure the template for workshop '{workshop_name}' includes a valid 'ami_id' for region {REGION}."
+                logger.error(error_msg)
+                return {
+                    'success': False,
+                    'error': error_msg
+                }
+        
+        if not ami_id:
+            error_msg = f"No AMI ID available for workshop {workshop_name} in region {REGION}. Please configure the template with a valid AMI ID."
+            logger.error(error_msg)
+            return {
+                'success': False,
+                'error': error_msg
+            }
+        
         instance_type_override = template_config.get('instance_type') if template_config else None
         selected_instance_type = instance_type_override or INSTANCE_TYPE
         user_data = get_user_data_script(template_config)
@@ -2220,12 +2259,20 @@ def lambda_handler(event, context):
                     instances_result = list_instances(tutorial_session_id=session_id)
                     instance_count = len(instances_result.get('instances', [])) if instances_result.get('success') else 0
                     
+                    # Convert Decimal values to int/float for JSON serialization
+                    pool_count = item.get('pool_count', 0)
+                    admin_count = item.get('admin_count', 0)
+                    if isinstance(pool_count, Decimal):
+                        pool_count = int(pool_count) if pool_count % 1 == 0 else float(pool_count)
+                    if isinstance(admin_count, Decimal):
+                        admin_count = int(admin_count) if admin_count % 1 == 0 else float(admin_count)
+                    
                     sessions.append({
                         'session_id': item['session_id'],
                         'workshop_name': item['workshop_name'],
                         'created_at': item['created_at'],
-                        'pool_count': item.get('pool_count', 0),
-                        'admin_count': item.get('admin_count', 0),
+                        'pool_count': pool_count,
+                        'admin_count': admin_count,
                         'status': item.get('status', 'unknown'),
                         'actual_instance_count': instance_count
                     })
@@ -2284,6 +2331,17 @@ def lambda_handler(event, context):
                 running_count = len([i for i in instances if i.get('state') == 'running'])
                 stopped_count = len([i for i in instances if i.get('state') == 'stopped'])
                 
+                # Convert Decimal values to int/float for JSON serialization
+                pool_count = item.get('pool_count', 0)
+                admin_count = item.get('admin_count', 0)
+                admin_cleanup_days = item.get('admin_cleanup_days', 7)
+                if isinstance(pool_count, Decimal):
+                    pool_count = int(pool_count) if pool_count % 1 == 0 else float(pool_count)
+                if isinstance(admin_count, Decimal):
+                    admin_count = int(admin_count) if admin_count % 1 == 0 else float(admin_count)
+                if isinstance(admin_cleanup_days, Decimal):
+                    admin_cleanup_days = int(admin_cleanup_days) if admin_cleanup_days % 1 == 0 else float(admin_cleanup_days)
+                
                 return {
                     'statusCode': 200,
                     'headers': get_cors_headers(),
@@ -2293,9 +2351,9 @@ def lambda_handler(event, context):
                             'session_id': item['session_id'],
                             'workshop_name': item['workshop_name'],
                             'created_at': item['created_at'],
-                            'pool_count': item.get('pool_count', 0),
-                            'admin_count': item.get('admin_count', 0),
-                            'admin_cleanup_days': item.get('admin_cleanup_days', 7),
+                            'pool_count': pool_count,
+                            'admin_count': admin_count,
+                            'admin_cleanup_days': admin_cleanup_days,
                             'status': item.get('status', 'unknown')
                         },
                         'stats': {
@@ -2320,7 +2378,10 @@ def lambda_handler(event, context):
             # Delete a tutorial session
             session_id = api_path.split('/tutorial_session/')[1]
             workshop_name = query_params.get('workshop')
-            delete_instances = query_params.get('delete_instances', 'false').lower() == 'true'
+            # Initialize should_delete_instances at the start to avoid reference errors
+            # Use different variable name to avoid shadowing the delete_instances() function
+            delete_instances_param = query_params.get('delete_instances', 'false')
+            should_delete_instances = delete_instances_param.lower() == 'true' if delete_instances_param else False
             
             if not workshop_name:
                 return {
@@ -2346,7 +2407,7 @@ def lambda_handler(event, context):
                 instances = instances_result.get('instances', []) if instances_result.get('success') else []
                 
                 # Delete instances if requested
-                if delete_instances and instances:
+                if should_delete_instances and instances:
                     instance_ids = [i['instance_id'] for i in instances if i.get('state') != 'terminated']
                     if instance_ids:
                         try:
@@ -2364,7 +2425,7 @@ def lambda_handler(event, context):
                     'body': json.dumps({
                         'success': True,
                         'message': f'Session {session_id} deleted',
-                        'instances_deleted': delete_instances
+                        'instances_deleted': should_delete_instances
                     })
                 }
             except Exception as e:

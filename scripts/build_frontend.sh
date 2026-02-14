@@ -55,8 +55,8 @@ fi
 echo "Building React app..."
 cd frontend/ec2-manager
 
-# Set API URL for production build
-export VITE_API_URL="https://ec2-management-api.testingfantasy.com/api"
+# Set API URL for production build (environment-specific)
+export VITE_API_URL="https://ec2-management-api-${ENVIRONMENT}.testingfantasy.com/api"
 echo "Using API URL: $VITE_API_URL"
 
 npm run build
@@ -126,8 +126,9 @@ echo "✓ Frontend uploaded to S3"
 
 # Invalidate CloudFront cache
 echo "Invalidating CloudFront cache..."
+CLOUDFRONT_DOMAIN="ec2-management-${ENVIRONMENT}.testingfantasy.com"
 CLOUDFRONT_DIST_ID=$(aws cloudfront list-distributions \
-  --query "DistributionList.Items[?Aliases.Items[?contains(@, 'ec2-management.testingfantasy.com')]].Id" \
+  --query "DistributionList.Items[?Aliases.Items[?contains(@, '${CLOUDFRONT_DOMAIN}')]].Id" \
   --output text \
   --region "$REGION" 2>/dev/null || echo "")
 
