@@ -67,7 +67,8 @@ resource "aws_iam_role_policy" "lambda_iam_policy" {
           "iam:CreateLoginProfile",
           "iam:DeleteLoginProfile",
           "iam:GetLoginProfile",
-          "iam:UpdateLoginProfile"
+          "iam:UpdateLoginProfile",
+          "iam:CreateServiceLinkedRole"
         ]
         Resource = "*"
       },
@@ -84,7 +85,8 @@ resource "aws_iam_role_policy" "lambda_iam_policy" {
           "ec2:DescribeSecurityGroups",
           "ec2:CreateTags",
           "ec2:StopInstances",
-          "ec2:StartInstances"
+          "ec2:StartInstances",
+          "ec2:DescribeAccountAttributes"
         ]
         Resource = "*"
       },

@@ -303,11 +303,11 @@ resource "aws_lambda_event_source_mapping" "cloudfront_logs" {
   }
 }
 
-# CloudFront Function to rewrite API Gateway paths to include stage
+  # CloudFront Function to rewrite API Gateway paths to include stage
 # This adds the stage prefix (e.g., /dev) to API requests before forwarding to API Gateway
 # Only needed when using regional API Gateway endpoint (not custom domain)
 resource "aws_cloudfront_function" "api_path_rewrite" {
-  count = var.api_gateway_domain != "" && !var.use_api_gateway_custom_domain ? 1 : 0
+  count = !var.use_api_gateway_custom_domain ? 1 : 0
 
   name    = "api-path-rewrite-${var.environment}-${var.workshop_name}"
   runtime = "cloudfront-js-1.0"
@@ -569,21 +569,21 @@ resource "aws_cloudfront_distribution" "distribution" {
 }
 
 # Route53 record for ACM certificate validation
+# Use static key (domain name) to avoid for_each issues with unknown domain_validation_options
+# The validation options are only known after the certificate is created, so we use a static key
+# and access the first validation option by converting the set to a list
 resource "aws_route53_record" "cert_validation" {
-  for_each = {
-    for dvo in aws_acm_certificate.cert.domain_validation_options : dvo.domain_name => {
-      name   = dvo.resource_record_name
-      record = dvo.resource_record_value
-      type   = dvo.resource_record_type
-    }
-  }
+  # Use static key based on known domain name (known at plan time)
+  for_each = var.domain_name != "" ? toset([var.domain_name]) : toset([])
 
   allow_overwrite = true
-  name            = each.value.name
-  records         = [each.value.record]
-  ttl             = 60
-  type            = each.value.type
-  zone_id         = data.aws_route53_zone.domain.zone_id
+  # Access the first (and only) validation option
+  # Convert set to list to access by index - this will be populated after certificate creation
+  name    = try(tolist(aws_acm_certificate.cert.domain_validation_options)[0].resource_record_name, "")
+  records = [try(tolist(aws_acm_certificate.cert.domain_validation_options)[0].resource_record_value, "")]
+  ttl     = 60
+  type    = try(tolist(aws_acm_certificate.cert.domain_validation_options)[0].resource_record_type, "CNAME")
+  zone_id = data.aws_route53_zone.domain.zone_id
 }
 
 # Route53 CNAME record pointing to CloudFront distribution

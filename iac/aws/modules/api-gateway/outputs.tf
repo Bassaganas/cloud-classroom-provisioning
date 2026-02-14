@@ -7,12 +7,12 @@ output "api_gateway_id" {
 
 output "api_gateway_url" {
   description = "URL of the API Gateway REST API"
-  value       = "${aws_api_gateway_rest_api.api.execution_arn}/restapis/${aws_api_gateway_rest_api.api.id}/${aws_api_gateway_stage.api.stage_name}"
+  value       = "${aws_api_gateway_rest_api.api.execution_arn}/restapis/${aws_api_gateway_rest_api.api.id}/${local.stage_name}"
 }
 
 output "api_gateway_invoke_url" {
   description = "Invoke URL of the API Gateway REST API"
-  value       = "https://${aws_api_gateway_rest_api.api.id}.execute-api.${data.aws_region.current.name}.amazonaws.com/${aws_api_gateway_stage.api.stage_name}"
+  value       = "https://${aws_api_gateway_rest_api.api.id}.execute-api.${data.aws_region.current.name}.amazonaws.com/${local.stage_name}"
 }
 
 output "api_gateway_arn" {
@@ -32,7 +32,7 @@ output "api_gateway_domain_name" {
 
 output "openapi_spec_url" {
   description = "URL to export OpenAPI spec from API Gateway"
-  value       = "https://${aws_api_gateway_rest_api.api.id}.execute-api.${data.aws_region.current.name}.amazonaws.com/${aws_api_gateway_stage.api.stage_name}/swagger.json"
+  value       = "https://${aws_api_gateway_rest_api.api.id}.execute-api.${data.aws_region.current.name}.amazonaws.com/${local.stage_name}/swagger.json"
 }
 
 
@@ -60,4 +60,14 @@ output "api_gateway_certificate_validation_records" {
 output "api_gateway_custom_domain_cloudfront_zone_id" {
   description = "CloudFront hosted zone ID for API Gateway custom domain (Edge endpoint) - for Route53 alias"
   value       = var.api_custom_domain_name != "" && var.wait_for_certificate_validation ? try(aws_api_gateway_domain_name.api_domain["create"].cloudfront_zone_id, null) : null
+}
+
+output "api_custom_domain_name" {
+  description = "The API custom domain name variable (for use in other modules to avoid circular dependencies)"
+  value       = var.api_custom_domain_name
+}
+
+output "wait_for_certificate_validation" {
+  description = "Whether certificate validation is enabled (for use in other modules to avoid circular dependencies)"
+  value       = var.wait_for_certificate_validation
 }

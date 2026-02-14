@@ -45,6 +45,7 @@ resource "azurerm_resource_group" "function_rg" {
     Environment = var.environment
     Owner       = var.owner
     Project     = "classroom-provisioning"
+    Company     = "TestingFantasy"
   }
 }
 
@@ -57,6 +58,13 @@ resource "azurerm_storage_account" "function_storage" {
   account_replication_type = "LRS"
   min_tls_version          = "TLS1_2"
   depends_on               = [azurerm_resource_group.function_rg]
+
+  tags = {
+    Environment = var.environment
+    Owner       = var.owner
+    Project     = "classroom-provisioning"
+    Company     = "TestingFantasy"
+  }
 }
 
 # Create App Service Plan for Function App
@@ -70,6 +78,7 @@ resource "azurerm_service_plan" "function_plan" {
     Environment = var.environment
     Owner       = var.owner
     Project     = "classroom-provisioning"
+    Company     = "TestingFantasy"
   }
   depends_on = [azurerm_resource_group.function_rg]
 }
@@ -82,6 +91,13 @@ resource "azurerm_linux_function_app" "user_management" {
   service_plan_id            = azurerm_service_plan.function_plan.id
   storage_account_name       = azurerm_storage_account.function_storage.name
   storage_account_access_key = azurerm_storage_account.function_storage.primary_access_key
+
+  tags = {
+    Environment = var.environment
+    Owner       = var.owner
+    Project     = "classroom-provisioning"
+    Company     = "TestingFantasy"
+  }
 
   site_config {
     application_stack {
@@ -133,6 +149,13 @@ resource "azurerm_key_vault" "classroom" {
   # Enable Soft Delete and Purge Protection
   soft_delete_retention_days = 7
   purge_protection_enabled   = false
+
+  tags = {
+    Environment = var.environment
+    Owner       = var.owner
+    Project     = "classroom-provisioning"
+    Company     = "TestingFantasy"
+  }
 }
 
 # Get current client configuration

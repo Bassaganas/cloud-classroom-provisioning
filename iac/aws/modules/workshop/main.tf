@@ -3,6 +3,22 @@
 
 data "aws_caller_identity" "current" {}
 
+# Data source for latest Amazon Linux 2 AMI (used if ec2_ami_id is not provided)
+data "aws_ami" "amazon_linux_2" {
+  most_recent = true
+  owners      = ["amazon"]
+
+  filter {
+    name   = "name"
+    values = ["amzn2-ami-hvm-*-x86_64-gp2"]
+  }
+
+  filter {
+    name   = "virtualization-type"
+    values = ["hvm"]
+  }
+}
+
 # Resource Group for this workshop
 resource "aws_resourcegroups_group" "workshop" {
   name = "workshop-${var.workshop_name}-${var.environment}"
@@ -128,6 +144,9 @@ module "cloudfront_user_management" {
   domain_name      = var.user_management_domain
   lambda_function_url = module.lambda.user_management_url
   wait_for_certificate_validation = var.wait_for_certificate_validation
+  # Disable CloudFront logging to avoid conflicts with existing resources
+  # Logging is optional and only used for debugging
+  enable_cloudwatch_logging = false
 }
 
 # CloudFront Module - Custom Domain and CDN for Dify Jira API
@@ -144,4 +163,7 @@ module "cloudfront_dify_jira" {
   domain_name      = var.dify_jira_domain
   lambda_function_url = module.lambda.dify_jira_api_url
   wait_for_certificate_validation = var.wait_for_certificate_validation
+  # Disable CloudFront logging to avoid conflicts with existing resources
+  # Logging is optional and only used for debugging
+  enable_cloudwatch_logging = false
 }

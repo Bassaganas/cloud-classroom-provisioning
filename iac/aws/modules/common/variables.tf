@@ -41,9 +41,9 @@ variable "ec2_pool_size" {
 }
 
 variable "ec2_ami_id" {
-  description = "AMI ID for classroom EC2 instances"
+  description = "AMI ID for classroom EC2 instances. If empty, will use latest Amazon Linux 2 AMI for the region"
   type        = string
-  default     = "ami-0746ed6b6c0683e67"
+  default     = ""
 }
 
 variable "ec2_instance_type" {

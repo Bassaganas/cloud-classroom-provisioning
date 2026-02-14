@@ -44,9 +44,9 @@ variable "common_ec2_pool_size" {
 }
 
 variable "common_ec2_ami_id" {
-  description = "AMI ID for classroom EC2 instances"
+  description = "AMI ID for classroom EC2 instances. If empty, will use latest Amazon Linux 2 AMI for the region"
   type        = string
-  default     = "ami-0746ed6b6c0683e67"
+  default     = ""
 }
 
 variable "common_ec2_instance_type" {
@@ -124,9 +124,9 @@ variable "fellowship_classroom_name" {
 }
 
 variable "fellowship_ec2_ami_id" {
-  description = "AMI ID for fellowship EC2 instances"
+  description = "AMI ID for fellowship EC2 instances. If empty, will use latest Amazon Linux 2 AMI for the region"
   type        = string
-  default     = "ami-0746ed6b6c0683e67"
+  default     = ""
 }
 
 variable "fellowship_ec2_instance_type" {
@@ -246,9 +246,9 @@ variable "testus_patronus_classroom_name" {
 }
 
 variable "testus_patronus_ec2_ami_id" {
-  description = "AMI ID for testus_patronus EC2 instances"
+  description = "AMI ID for testus_patronus EC2 instances. If empty, will use latest Amazon Linux 2 AMI for the region"
   type        = string
-  default     = "ami-0746ed6b6c0683e67"
+  default     = ""
 }
 
 variable "testus_patronus_ec2_instance_type" {

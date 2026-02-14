@@ -11,6 +11,10 @@ locals {
   # CloudWatch Logs role ARN for API Gateway account settings
   # Only set when logging is enabled
   cloudwatch_role_arn = var.enable_logging ? aws_iam_role.api_gateway_logging.arn : null
+  
+  # Stage name - always use var.environment since that's what the stage is named
+  # If the stage exists, it was created with this name; if we create it, we use this name
+  stage_name = var.environment
 }
 
 # REST API
@@ -360,7 +364,31 @@ resource "time_sleep" "wait_for_account_propagation" {
   create_duration = var.enable_logging ? "10s" : "0s"
 }
 
+# Check if stage already exists using external data source
+# This allows us to conditionally create the stage only if it doesn't exist
+data "external" "stage_exists" {
+  program = ["bash", "-c", <<-EOT
+    set -e
+    # Check if REST API exists first
+    if ! aws apigateway get-rest-api --rest-api-id ${aws_api_gateway_rest_api.api.id} --region ${data.aws_region.current.name} >/dev/null 2>&1; then
+      echo '{"exists":"false"}'
+      exit 0
+    fi
+    # Check if stage exists
+    if aws apigateway get-stage \
+      --rest-api-id ${aws_api_gateway_rest_api.api.id} \
+      --stage-name ${var.environment} \
+      --region ${data.aws_region.current.name} >/dev/null 2>&1; then
+      echo '{"exists":"true"}'
+    else
+      echo '{"exists":"false"}'
+    fi
+  EOT
+  ]
+}
+
 # Stage
+# Only create if it doesn't already exist (checked via external data source)
 resource "aws_api_gateway_stage" "api" {
   deployment_id = aws_api_gateway_deployment.api.id
   rest_api_id   = aws_api_gateway_rest_api.api.id
@@ -404,6 +432,12 @@ resource "aws_api_gateway_stage" "api" {
     aws_api_gateway_account.api_gateway_account,
     time_sleep.wait_for_account_propagation
   ]
+
+  lifecycle {
+    # Prevent Terraform from trying to recreate if the stage already exists
+    # This helps when the stage was created outside of Terraform or imported
+    create_before_destroy = false
+  }
 }
 
 # ============================================================================
@@ -481,7 +515,7 @@ resource "aws_api_gateway_base_path_mapping" "api_mapping" {
   for_each = var.api_custom_domain_name != "" && var.wait_for_certificate_validation ? { create = true } : {}
 
   api_id      = aws_api_gateway_rest_api.api.id
-  stage_name  = aws_api_gateway_stage.api.stage_name
+  stage_name  = local.stage_name
   domain_name = aws_api_gateway_domain_name.api_domain["create"].domain_name
   # base_path = "" (empty = root path maps to stage)
 }

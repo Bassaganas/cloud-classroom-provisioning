@@ -134,10 +134,10 @@ module "api_gateway" {
   environment                     = var.environment
   owner                          = var.owner
   workshop_name                  = var.workshop_name
-  domain_name                    = "ec2-management.testingfantasy.com"
-  api_custom_domain_name         = "ec2-management-api.testingfantasy.com"
+  domain_name                    = "ec2-management-${var.environment}.${var.base_domain}"
+  api_custom_domain_name         = "ec2-management-api-${var.environment}.${var.base_domain}"
   base_domain                    = var.base_domain
-  wait_for_certificate_validation = false # Set to true after DNS validation records are added
+  wait_for_certificate_validation = true # Enable to create API Gateway custom domain
 }
 
 # Monitoring Module - CloudWatch Events
@@ -173,11 +173,18 @@ module "cloudfront_instance_manager" {
   environment        = var.environment
   owner              = var.owner
   workshop_name      = var.workshop_name
-  domain_name        = "ec2-management.testingfantasy.com"
+  domain_name        = "ec2-management-${var.environment}.${var.base_domain}"
   # Use API Gateway custom domain if available, otherwise fall back to regional endpoint
-  api_gateway_domain            = module.api_gateway.api_gateway_custom_domain_regional_domain_name != null ? module.api_gateway.api_gateway_custom_domain_regional_domain_name : module.api_gateway.api_gateway_domain_name
-  use_api_gateway_custom_domain = module.api_gateway.api_gateway_custom_domain_regional_domain_name != null
+  # Note: We determine use_api_gateway_custom_domain from input vars to avoid circular dependency
+  use_api_gateway_custom_domain = module.api_gateway.api_custom_domain_name != "" && module.api_gateway.wait_for_certificate_validation
+  # Always use the regional domain name (known at plan time)
+  # When custom domain is created, we'll need to update CloudFront origin in a subsequent apply
+  # or use a data source to get the custom domain CloudFront name after it's created
+  api_gateway_domain            = module.api_gateway.api_gateway_domain_name
   s3_bucket_domain             = module.s3_frontend.bucket_regional_domain_name
   s3_origin_access_identity    = module.s3_frontend.origin_access_identity_path
   wait_for_certificate_validation = true
+  # Disable CloudFront logging to avoid conflicts with existing resources
+  # Logging is optional and only used for debugging
+  enable_cloudwatch_logging = false
 }
