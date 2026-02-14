@@ -1,5 +1,6 @@
 // Use environment variable for API URL, fallback to relative path for backward compatibility
-// Production: Set VITE_API_URL=https://ec2-management-api.testingfantasy.com during build
+// Production: Set VITE_API_URL=https://ec2-management-api-{environment}.testingfantasy.com/api during build
+// Example: VITE_API_URL=https://ec2-management-api-dev.testingfantasy.com/api
 // Development: Uses relative /api which proxies through Vite dev server
 const API_BASE = import.meta.env.VITE_API_URL || '/api'
 const PASSWORD_STORAGE_KEY = 'instance_manager_password'

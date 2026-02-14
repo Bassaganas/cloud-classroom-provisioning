@@ -27,14 +27,14 @@ export default defineConfig({
     } : {
       // Default: proxy to mock server for local testing
       '/api': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:3001',
         changeOrigin: true,
         rewrite: (path) => path,
         configure: (proxy, _options) => {
           proxy.on('error', (err, _req, _res) => {
-            console.log('⚠️  Mock API server not running on port 8000');
-            console.log('   Start it with: python3 scripts/mock_api_server.py');
-            console.log('   Or set LAMBDA_URL to use real Lambda API');
+            console.log('⚠️  Mock API server not running on port 3001');
+            console.log('   Start it with: npm run mock:server');
+            console.log('   Or set VITE_API_URL to use real API');
           });
         },
       }

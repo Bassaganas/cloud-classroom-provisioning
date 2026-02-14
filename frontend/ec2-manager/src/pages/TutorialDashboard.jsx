@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { api } from '../services/api'
+import Header from '../components/Header'
 import './TutorialDashboard.css'
 
 function TutorialDashboard() {
@@ -12,6 +13,11 @@ function TutorialDashboard() {
   const [loading, setLoading] = useState(true)
   const [message, setMessage] = useState({ text: '', type: '' })
   const [showCreateForm, setShowCreateForm] = useState(false)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [deleteInstances, setDeleteInstances] = useState(false)
+  const [deletingSession, setDeletingSession] = useState(false)
+  const [activeFilter, setActiveFilter] = useState(null)
+  const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' })
   const [createFormData, setCreateFormData] = useState({
     type: 'pool',
     count: 1,
@@ -107,6 +113,26 @@ function TutorialDashboard() {
     }
   }
 
+  const handleDeleteSession = async (deleteInstances) => {
+    try {
+      setDeletingSession(true)
+      const response = await api.deleteTutorialSession(sessionId, workshop, deleteInstances)
+      
+      if (response.success) {
+        showMessage(`✅ Tutorial session ${sessionId} deleted`, 'success')
+        setTimeout(() => {
+          navigate('/')
+        }, 1500)
+      } else {
+        showMessage(`❌ Error: ${response.error || 'Failed to delete session'}`, 'error')
+        setDeletingSession(false)
+      }
+    } catch (error) {
+      showMessage(`❌ Error: ${error.message || 'Failed to delete session'}`, 'error')
+      setDeletingSession(false)
+    }
+  }
+
   if (loading && !session) {
     return <div className="tutorial-dashboard"><div className="loading">Loading...</div></div>
   }
@@ -120,23 +146,64 @@ function TutorialDashboard() {
     )
   }
 
-  const poolInstances = instances.filter(i => i.type === 'pool')
-  const adminInstances = instances.filter(i => i.type === 'admin')
-  const runningInstances = instances.filter(i => i.state === 'running')
-  const stoppedInstances = instances.filter(i => i.state === 'stopped')
+  // Filter instances based on active filter
+  const filteredInstances = instances.filter(instance => {
+    if (!activeFilter) return true
+    if (activeFilter === 'running' || activeFilter === 'stopped') {
+      return instance.state === activeFilter
+    }
+    if (activeFilter === 'pool' || activeFilter === 'admin') {
+      return instance.type === activeFilter
+    }
+    return true
+  })
+
+  const handleFilterClick = (filterType) => {
+    if (activeFilter === filterType) {
+      setActiveFilter(null) // Toggle off if already active
+    } else {
+      setActiveFilter(filterType)
+    }
+  }
+
+  const handleSort = (key) => {
+    let direction = 'asc'
+    if (sortConfig.key === key && sortConfig.direction === 'asc') {
+      direction = 'desc'
+    }
+    setSortConfig({ key, direction })
+  }
+
+  const sortedInstances = [...filteredInstances].sort((a, b) => {
+    if (!sortConfig.key) return 0
+    let aVal = a[sortConfig.key] || ''
+    let bVal = b[sortConfig.key] || ''
+    
+    // Handle special cases
+    if (sortConfig.key === 'type') {
+      aVal = a.type || a.instance_type || ''
+      bVal = b.type || b.instance_type || ''
+    }
+    
+    // Convert to string for comparison
+    aVal = String(aVal).toLowerCase()
+    bVal = String(bVal).toLowerCase()
+    
+    if (sortConfig.direction === 'asc') {
+      return aVal > bVal ? 1 : aVal < bVal ? -1 : 0
+    }
+    return aVal < bVal ? 1 : aVal > bVal ? -1 : 0
+  })
 
   return (
-    <div className="tutorial-dashboard">
-      <header className="dashboard-header">
-        <div>
-          <button className="back-btn" onClick={() => navigate('/')}>← Back</button>
-          <h1>{session.session_id}</h1>
-          <p className="subtitle">Workshop: {session.workshop_name}</p>
-        </div>
-        <button className="create-instance-btn" onClick={() => setShowCreateForm(true)}>
-          ➕ Create Instance
-        </button>
-      </header>
+    <div className="page-container">
+      <Header 
+        title={session.session_id}
+        subtitle={`Workshop: ${session.workshop_name}`}
+        showBack={true}
+        backPath="/"
+      />
+      <div className="tutorial-dashboard">
 
       {message.text && (
         <div className={`message message-${message.type}`}>{message.text}</div>
@@ -144,66 +211,182 @@ function TutorialDashboard() {
 
       {/* Stats Cards */}
       <div className="stats-grid">
-        <div className="stat-card">
+        <div 
+          className={`stat-card ${activeFilter === null ? 'active' : ''}`}
+          onClick={() => handleFilterClick(null)}
+        >
           <div className="stat-value">{stats?.total_instances || 0}</div>
           <div className="stat-label">Total Instances</div>
         </div>
-        <div className="stat-card running">
+        <div 
+          className={`stat-card running ${activeFilter === 'running' ? 'active' : ''}`}
+          onClick={() => handleFilterClick('running')}
+        >
           <div className="stat-value">{stats?.running || 0}</div>
           <div className="stat-label">Running</div>
         </div>
-        <div className="stat-card stopped">
+        <div 
+          className={`stat-card stopped ${activeFilter === 'stopped' ? 'active' : ''}`}
+          onClick={() => handleFilterClick('stopped')}
+        >
           <div className="stat-value">{stats?.stopped || 0}</div>
           <div className="stat-label">Stopped</div>
         </div>
-        <div className="stat-card pool">
+        <div 
+          className={`stat-card pool ${activeFilter === 'pool' ? 'active' : ''}`}
+          onClick={() => handleFilterClick('pool')}
+        >
           <div className="stat-value">{stats?.pool_instances || 0}</div>
           <div className="stat-label">Pool Instances</div>
         </div>
-        <div className="stat-card admin">
+        <div 
+          className={`stat-card admin ${activeFilter === 'admin' ? 'active' : ''}`}
+          onClick={() => handleFilterClick('admin')}
+        >
           <div className="stat-value">{stats?.admin_instances || 0}</div>
           <div className="stat-label">Admin Instances</div>
         </div>
       </div>
 
-      {/* Instance Lists */}
-      <div className="instances-container">
-        <div className="instances-column">
-          <h2>Pool Instances ({poolInstances.length})</h2>
-          <div className="instances-list">
-            {poolInstances.length === 0 ? (
-              <div className="no-instances">No pool instances</div>
-            ) : (
-              poolInstances.map(instance => (
-                <InstanceCard
-                  key={instance.instance_id}
-                  instance={instance}
-                  onDelete={handleDeleteInstance}
-                  onEnableHttps={handleEnableHttps}
-                />
-              ))
-            )}
-          </div>
-        </div>
-
-        <div className="instances-column">
-          <h2>Admin Instances ({adminInstances.length})</h2>
-          <div className="instances-list">
-            {adminInstances.length === 0 ? (
-              <div className="no-instances">No admin instances</div>
-            ) : (
-              adminInstances.map(instance => (
-                <InstanceCard
-                  key={instance.instance_id}
-                  instance={instance}
-                  onDelete={handleDeleteInstance}
-                  onEnableHttps={handleEnableHttps}
-                />
-              ))
-            )}
-          </div>
-        </div>
+      {/* Session Actions */}
+      <div className="session-actions">
+        <button
+          className="delete-session-btn"
+          onClick={() => setShowDeleteConfirm(true)}
+          disabled={deletingSession}
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" fill="currentColor"/>
+          </svg>
+          Delete Session
+        </button>
       </div>
+
+      {/* Instances Table */}
+      <div className="instances-section">
+        <div className="instances-header">
+          <h2>Instances ({filteredInstances.length})</h2>
+        </div>
+        {loading ? (
+          <div className="loading">Loading instances...</div>
+        ) : (
+          <div className="instances-table">
+            <table>
+              <thead>
+                <tr>
+                  <th className="sortable" onClick={() => handleSort('instance_id')}>
+                    Instance ID
+                    {sortConfig.key === 'instance_id' && (
+                      <span className="sort-indicator">{sortConfig.direction === 'asc' ? ' ↑' : ' ↓'}</span>
+                    )}
+                  </th>
+                  <th className="sortable" onClick={() => handleSort('type')}>
+                    Type
+                    {sortConfig.key === 'type' && (
+                      <span className="sort-indicator">{sortConfig.direction === 'asc' ? ' ↑' : ' ↓'}</span>
+                    )}
+                  </th>
+                  <th className="sortable" onClick={() => handleSort('state')}>
+                    State
+                    {sortConfig.key === 'state' && (
+                      <span className="sort-indicator">{sortConfig.direction === 'asc' ? ' ↑' : ' ↓'}</span>
+                    )}
+                  </th>
+                  <th className="sortable" onClick={() => handleSort('public_ip')}>
+                    IP Address
+                    {sortConfig.key === 'public_ip' && (
+                      <span className="sort-indicator">{sortConfig.direction === 'asc' ? ' ↑' : ' ↓'}</span>
+                    )}
+                  </th>
+                  <th className="sortable" onClick={() => handleSort('assigned_to')}>
+                    Assigned To
+                    {sortConfig.key === 'assigned_to' && (
+                      <span className="sort-indicator">{sortConfig.direction === 'asc' ? ' ↑' : ' ↓'}</span>
+                    )}
+                  </th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedInstances.length === 0 ? (
+                  <tr>
+                    <td colSpan="6" style={{ textAlign: 'center', padding: '40px' }}>
+                      No instances found
+                    </td>
+                  </tr>
+                ) : (
+                  sortedInstances.map(instance => (
+                    <tr key={instance.instance_id}>
+                      <td>{instance.instance_id}</td>
+                      <td>
+                        <span className={`badge badge-${instance.type || 'pool'}`}>
+                          {instance.type || 'pool'}
+                        </span>
+                      </td>
+                      <td>
+                        <span className={`badge badge-${instance.state}`}>
+                          {instance.state}
+                        </span>
+                      </td>
+                      <td>
+                        {instance.public_ip ? (
+                          <a 
+                            href={`http://${instance.public_ip}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="ip-link"
+                          >
+                            {instance.public_ip}
+                          </a>
+                        ) : (
+                          '-'
+                        )}
+                      </td>
+                      <td>{instance.assigned_to || '-'}</td>
+                      <td>
+                        <div className="action-buttons">
+                          {instance.public_ip && !instance.https_url && (
+                            <button
+                              className="small-btn"
+                              onClick={() => handleEnableHttps(instance.instance_id)}
+                              disabled={instance.state !== 'running'}
+                            >
+                              Enable HTTPS
+                            </button>
+                          )}
+                          {instance.https_url && (
+                            <a
+                              href={instance.https_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="small-btn link-btn"
+                            >
+                              Open HTTPS
+                            </a>
+                          )}
+                          <button
+                            className="small-btn delete"
+                            onClick={() => handleDeleteInstance(instance.instance_id)}
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Floating Action Button */}
+      <button className="fab" onClick={() => setShowCreateForm(true)} aria-label="Create Instance">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z" fill="currentColor"/>
+        </svg>
+      </button>
 
       {/* Create Instance Modal */}
       {showCreateForm && (
@@ -258,65 +441,56 @@ function TutorialDashboard() {
           </div>
         </div>
       )}
-    </div>
-  )
-}
 
-function InstanceCard({ instance, onDelete, onEnableHttps }) {
-  const stateColors = {
-    running: '#4caf50',
-    stopped: '#ff9800',
-    pending: '#2196f3',
-    stopping: '#ff9800',
-    starting: '#2196f3',
-    terminated: '#999',
-  }
-
-  return (
-    <div className="instance-card">
-      <div className="instance-header">
-        <div className="instance-id">{instance.instance_id}</div>
-        <span
-          className="instance-state"
-          style={{ color: stateColors[instance.state] || '#666' }}
-        >
-          {instance.state}
-        </span>
-      </div>
-      <div className="instance-details">
-        {instance.public_ip && (
-          <div className="instance-detail">
-            <span className="detail-label">IP:</span>
-            <span className="detail-value">{instance.public_ip}</span>
+      {/* Delete Session Confirmation Modal */}
+      {showDeleteConfirm && (
+        <div className="modal-overlay" onClick={() => setShowDeleteConfirm(false)}>
+          <div className="modal-content delete-confirm-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>Delete Tutorial Session</h2>
+              <button className="close-btn" onClick={() => setShowDeleteConfirm(false)}>×</button>
+            </div>
+            <div className="modal-body">
+              <p>Are you sure you want to delete the tutorial session <strong>{sessionId}</strong>?</p>
+              {instances.length > 0 && (
+                <div className="delete-instance-warning">
+                  <p>This session has <strong>{instances.length}</strong> associated instance(s).</p>
+                  <label className="checkbox-label">
+                    <input
+                      type="checkbox"
+                      id="deleteInstances"
+                      checked={deleteInstances}
+                      onChange={(e) => setDeleteInstances(e.target.checked)}
+                    />
+                    <span>Also delete all associated EC2 instances</span>
+                  </label>
+                </div>
+              )}
+            </div>
+            <div className="form-actions">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowDeleteConfirm(false)
+                  setDeleteInstances(false)
+                }}
+                className="secondary"
+                disabled={deletingSession}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDeleteSession(deleteInstances)}
+                className="delete-btn"
+                disabled={deletingSession}
+              >
+                {deletingSession ? 'Deleting...' : 'Delete Session'}
+              </button>
+            </div>
           </div>
-        )}
-        {instance.assigned_to && (
-          <div className="instance-detail">
-            <span className="detail-label">Assigned to:</span>
-            <span className="detail-value">{instance.assigned_to}</span>
-          </div>
-        )}
-        {instance.cleanup_days_remaining !== null && instance.cleanup_days_remaining !== undefined && (
-          <div className="instance-detail">
-            <span className="detail-label">Cleanup in:</span>
-            <span className="detail-value">{instance.cleanup_days_remaining} days</span>
-          </div>
-        )}
-      </div>
-      <div className="instance-actions">
-        <button
-          className="action-btn enable-https-btn"
-          onClick={() => onEnableHttps(instance.instance_id)}
-          disabled={instance.state !== 'running'}
-        >
-          Enable HTTPS
-        </button>
-        <button
-          className="action-btn delete-btn"
-          onClick={() => onDelete(instance.instance_id)}
-        >
-          Delete
-        </button>
+        </div>
+      )}
       </div>
     </div>
   )

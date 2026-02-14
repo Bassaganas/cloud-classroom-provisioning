@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useAuth } from '../services/auth'
 import { api } from '../services/api'
 import TutorialSessionForm from './TutorialSessionForm'
+import Header from '../components/Header'
 import './Landing.css'
 
 function Landing() {
@@ -12,8 +12,9 @@ function Landing() {
   const [error, setError] = useState('')
   const [showSessionForm, setShowSessionForm] = useState(null) // workshopName or null
   const [showSettings, setShowSettings] = useState(null) // workshopName or null
+  const [deletingSession, setDeletingSession] = useState(null) // { workshopName, sessionId }
+  const [deleteConfirmData, setDeleteConfirmData] = useState(null) // { workshopName, sessionId, instanceCount }
   const navigate = useNavigate()
-  const { logout } = useAuth()
 
   useEffect(() => {
     loadWorkshops()
@@ -64,6 +65,30 @@ function Landing() {
     loadTutorialSessions(workshopName)
   }
 
+  const handleDeleteSession = async (workshopName, sessionId, instanceCount, deleteInstances) => {
+    try {
+      setDeletingSession({ workshopName, sessionId })
+      const response = await api.deleteTutorialSession(sessionId, workshopName, deleteInstances)
+      
+      if (response.success) {
+        // Reload sessions for this workshop
+        await loadTutorialSessions(workshopName)
+        setDeleteConfirmData(null)
+      } else {
+        alert(`Error: ${response.error || 'Failed to delete session'}`)
+      }
+    } catch (error) {
+      alert(`Error: ${error.message || 'Failed to delete session'}`)
+    } finally {
+      setDeletingSession(null)
+    }
+  }
+
+  const handleDeleteClick = (e, workshopName, sessionId, instanceCount) => {
+    e.stopPropagation()
+    setDeleteConfirmData({ workshopName, sessionId, instanceCount })
+  }
+
   if (loading) {
     return <div className="landing-container"><div className="loading">Loading workshops...</div></div>
   }
@@ -78,25 +103,9 @@ function Landing() {
   }
 
   return (
-    <div className="landing-container">
-      <header className="landing-header">
-        <div className="header-content">
-          <div className="header-title-wrapper">
-            <svg className="rocket-icon" width="32" height="32" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-              <path d="M9.19 6.35c-2.45 2.49-5.46 5.52-5.77 8.96-.36 3.29 3.56 6.29 6.86 5.93 3.44-.31 6.47-3.32 8.96-5.77 3.27-3.22 3.27-8.55 0-11.77-3.27-3.22-8.55-3.22-11.77 0l1.72 1.65zm3.36 3.35L6.88 16.9c-2.13-2.12-3.31-4.53-2.87-6.99.44-2.5 2.6-4.66 5.1-5.1 2.46-.44 4.87.74 6.99 2.87l-4.25 4.22z" fill="currentColor"/>
-              <circle cx="15" cy="9" r="1.5" fill="currentColor"/>
-            </svg>
-            <h1>EC2 Instance Manager</h1>
-          </div>
-          <p className="subtitle">Manage your cloud classroom instances</p>
-        </div>
-        <button className="logout-btn" onClick={logout}>
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M17 7l-1.41 1.41L18.17 11H8v2h10.17l-2.58 2.59L17 17l5-5-5-5zM4 5h8V3H4c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h8v-2H4V5z" fill="currentColor"/>
-          </svg>
-          Logout
-        </button>
-      </header>
+    <div className="page-container">
+      <Header />
+      <div className="landing-container">
 
       <div className="workshops-grid">
         {workshops.length === 0 ? (
@@ -105,7 +114,11 @@ function Landing() {
           workshops.map(workshop => {
             const sessions = tutorialSessions[workshop.name] || []
             return (
-              <div key={workshop.name} className="workshop-card">
+              <div 
+                key={workshop.name} 
+                className="workshop-card"
+                onClick={() => navigate(`/workshop/${workshop.name}`)}
+              >
                 <div className="workshop-card-header">
                   <h2>{workshop.name}</h2>
                   <div className="workshop-card-actions">
@@ -163,9 +176,17 @@ function Landing() {
                               <span className="session-date">
                                 {new Date(session.created_at).toLocaleDateString()}
                               </span>
-                              <span className={`session-status session-status-${session.status}`}>
-                                {session.status}
-                              </span>
+                              <button
+                                className="session-delete-btn"
+                                onClick={(e) => handleDeleteClick(e, workshop.name, session.session_id, session.actual_instance_count || 0)}
+                                title="Delete session"
+                                aria-label="Delete session"
+                                disabled={deletingSession?.sessionId === session.session_id}
+                              >
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                  <path d="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z" fill="currentColor"/>
+                                </svg>
+                              </button>
                             </div>
                           </li>
                         ))}
@@ -190,6 +211,58 @@ function Landing() {
           onSuccess={() => handleSessionCreated(showSessionForm)}
         />
       )}
+
+      {/* Delete Confirmation Modal */}
+      {deleteConfirmData && (
+        <div className="modal-overlay" onClick={() => setDeleteConfirmData(null)}>
+          <div className="modal-content delete-confirm-modal" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>Delete Tutorial Session</h2>
+              <button className="close-btn" onClick={() => setDeleteConfirmData(null)}>×</button>
+            </div>
+            <div className="modal-body">
+              <p>Are you sure you want to delete the tutorial session <strong>{deleteConfirmData.sessionId}</strong>?</p>
+              {deleteConfirmData.instanceCount > 0 && (
+                <div className="delete-instance-warning">
+                  <p>This session has <strong>{deleteConfirmData.instanceCount}</strong> associated instance(s).</p>
+                  <label className="checkbox-label">
+                    <input
+                      type="checkbox"
+                      id="deleteInstances"
+                      onChange={(e) => setDeleteConfirmData({ ...deleteConfirmData, deleteInstances: e.target.checked })}
+                    />
+                    <span>Also delete all associated EC2 instances</span>
+                  </label>
+                </div>
+              )}
+            </div>
+            <div className="form-actions">
+              <button
+                type="button"
+                onClick={() => setDeleteConfirmData(null)}
+                className="secondary"
+                disabled={deletingSession?.sessionId === deleteConfirmData.sessionId}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDeleteSession(
+                  deleteConfirmData.workshopName,
+                  deleteConfirmData.sessionId,
+                  deleteConfirmData.instanceCount,
+                  deleteConfirmData.deleteInstances || false
+                )}
+                className="delete-btn"
+                disabled={deletingSession?.sessionId === deleteConfirmData.sessionId}
+              >
+                {deletingSession?.sessionId === deleteConfirmData.sessionId ? 'Deleting...' : 'Delete Session'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      </div>
     </div>
   )
 }

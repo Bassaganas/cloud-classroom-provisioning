@@ -5,7 +5,10 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "mock:server": "cd mock-server && npm start",
+    "mock:dev": "cd mock-server && npm run dev",
+    "dev:mock": "npm run mock:server & vite"
   },
   "dependencies": {
     "react": "^18.2.0",

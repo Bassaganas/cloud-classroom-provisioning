@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { api } from '../services/api'
+import Header from '../components/Header'
 import './WorkshopConfig.css'
 
 function WorkshopConfig() {
@@ -71,16 +72,15 @@ function WorkshopConfig() {
   }
 
   return (
-    <div className="config-container">
-      <header className="config-header">
-        <div>
-          <h1>⚙️ Workshop Configuration</h1>
-          <p className="subtitle">Workshop: {workshopName}</p>
-        </div>
-        <Link to={`/workshop/${workshopName}`} className="back-link">
-          ← Back to Dashboard
-        </Link>
-      </header>
+    <div className="page-container">
+      <Header 
+        title="Workshop Configuration"
+        subtitle={`Workshop: ${workshopName}`}
+        showBack={true}
+        backPath="/"
+        showSettings={false}
+      />
+      <div className="config-container">
 
       {message.text && (
         <div className={`message message-${message.type}`}>{message.text}</div>
@@ -150,6 +150,7 @@ function WorkshopConfig() {
             </button>
           </div>
         </form>
+      </div>
       </div>
     </div>
   )
