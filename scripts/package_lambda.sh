@@ -6,6 +6,16 @@ set -e
 # Get the absolute path of the project root directory
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# Detect pip command (prefer pip3, fallback to pip)
+if command -v pip3 >/dev/null 2>&1; then
+    PIP_CMD="pip3"
+elif command -v pip >/dev/null 2>&1; then
+    PIP_CMD="pip"
+else
+    echo "ERROR: Neither pip nor pip3 found. Please install Python pip."
+    exit 1
+fi
+
 # Parse command line arguments
 CLOUD_PROVIDER=""
 
@@ -55,7 +65,7 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
         exit 1
     fi
     
-    pip install -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR1/"
+    $PIP_CMD install -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR1/"
     
     # Verify no unwanted Lambda function files in root directory (check for other Lambda function patterns)
     UNWANTED_LAMBDA_FILES=$(find "$TEMP_DIR1" -maxdepth 1 -type f \( -name "classroom_*.py" -o -name "testus_patronus_*.py" -o -name "dify_jira_*.py" \) ! -name "classroom_user_management.py")
@@ -120,7 +130,7 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
         exit 1
     fi
     
-    pip install -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR2/"
+    $PIP_CMD install -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR2/"
     
     # Verify no unwanted Lambda function files in root directory (check for other Lambda function patterns)
     UNWANTED_LAMBDA_FILES=$(find "$TEMP_DIR2" -maxdepth 1 -type f \( -name "classroom_*.py" -o -name "testus_patronus_*.py" -o -name "dify_jira_*.py" \) ! -name "testus_patronus_status.py")
@@ -185,7 +195,7 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
         exit 1
     fi
     
-    pip install -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR3/"
+    $PIP_CMD install -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR3/"
     
     # Verify no unwanted Lambda function files in root directory (check for other Lambda function patterns)
     UNWANTED_LAMBDA_FILES=$(find "$TEMP_DIR3" -maxdepth 1 -type f \( -name "classroom_*.py" -o -name "testus_patronus_*.py" -o -name "dify_jira_*.py" \) ! -name "classroom_stop_old_instances.py")
@@ -250,7 +260,7 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
         exit 1
     fi
     
-    pip install -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR6/"
+    $PIP_CMD install -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR6/"
     
     # Verify no unwanted Lambda function files in root directory (check for other Lambda function patterns)
     UNWANTED_LAMBDA_FILES=$(find "$TEMP_DIR6" -maxdepth 1 -type f \( -name "classroom_*.py" -o -name "testus_patronus_*.py" -o -name "dify_jira_*.py" \) ! -name "classroom_admin_cleanup.py")
@@ -352,7 +362,7 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
     
     # Install dependencies
     echo "Installing dependencies..."
-    pip install -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR5/"
+    $PIP_CMD install -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR5/"
     
     # Create zip from clean temp directory
     echo "Creating zip package..."
@@ -432,7 +442,7 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
     fi
 
     # Install dependencies
-    pip install -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR4/"
+    $PIP_CMD install -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR4/"
 
     # Verify no unwanted Lambda function files in root directory (check for other Lambda function patterns)
     UNWANTED_LAMBDA_FILES=$(find "$TEMP_DIR4" -maxdepth 1 -type f \( -name "classroom_*.py" -o -name "testus_patronus_*.py" -o -name "dify_jira_*.py" \) ! -name "dify_jira_api.py")
@@ -474,7 +484,7 @@ else
     PACKAGE_PATH="$PROJECT_ROOT/functions/packages/azure_function.zip"
     
     # Install dependencies
-    pip install -r "$PROJECT_ROOT/functions/azure/requirements.txt" -t "$TEMP_DIR/"
+    $PIP_CMD install -r "$PROJECT_ROOT/functions/azure/requirements.txt" -t "$TEMP_DIR/"
     
     # Copy all Azure function files
     cp -r "$PROJECT_ROOT/functions/azure/"* "$TEMP_DIR/"

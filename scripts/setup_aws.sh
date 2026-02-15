@@ -229,7 +229,7 @@ REGION_CODE=$(echo "$REGION" | tr -d '-')
 BACKEND_BUCKET="terraform-state-classroom-shared-${REGION_CODE}"
 BACKEND_TABLE="terraform-locks-classroom-shared"
 if [ "$ENVIRONMENT" = "dev" ]; then
-  STATE_KEY="classroom/terraform.tfstate"
+  STATE_KEY="classroom/dev/terraform.tfstate"
 else
   STATE_KEY="classroom/${ENVIRONMENT}/terraform.tfstate"
 fi
