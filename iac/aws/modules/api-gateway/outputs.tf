@@ -36,8 +36,8 @@ output "openapi_spec_url" {
 }
 
 
-output "api_gateway_custom_domain_name" {  
-  description = "Custom domain name for API Gateway (if configured)"  
+output "api_gateway_custom_domain_name" {
+  description = "Custom domain name for API Gateway (if configured)"
   value       = var.api_custom_domain_name != "" && var.wait_for_certificate_validation ? try(aws_api_gateway_domain_name.api_domain["create"].domain_name, null) : null
 }
 
@@ -51,8 +51,8 @@ output "api_gateway_certificate_validation_records" {
   value = var.api_custom_domain_name != "" ? {
     for dvo in aws_acm_certificate.api_domain_cert[0].domain_validation_options : dvo.domain_name => {
       domain_name           = dvo.domain_name
-      resource_record_name = dvo.resource_record_name
-      resource_record_type = dvo.resource_record_type
+      resource_record_name  = dvo.resource_record_name
+      resource_record_type  = dvo.resource_record_type
       resource_record_value = dvo.resource_record_value
     }
   } : {}

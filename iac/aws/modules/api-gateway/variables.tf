@@ -53,3 +53,8 @@ variable "log_retention_days" {
   type        = number
   default     = 14
 }
+
+variable "region" {
+  description = "The AWS region to deploy to"
+  type        = string
+}

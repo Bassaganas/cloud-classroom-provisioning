@@ -9,10 +9,10 @@ output "lambda_function_arn" {
 output "template_config" {
   description = "Template configuration for EC2 instance manager (AMI, instance type)"
   value = {
-    workshop_name    = var.workshop_name
-    ami_id           = var.ec2_ami_id != "" ? var.ec2_ami_id : data.aws_ami.amazon_linux_2.id
-    instance_type    = var.ec2_instance_type
-    app_port         = 8080
+    workshop_name = var.workshop_name
+    ami_id        = var.ec2_ami_id != "" ? var.ec2_ami_id : data.aws_ami.amazon_linux_2.id
+    instance_type = var.ec2_instance_type
+    app_port      = 8080
   }
 }
 

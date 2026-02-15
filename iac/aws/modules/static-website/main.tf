@@ -151,9 +151,9 @@ resource "aws_cloudfront_distribution" "website" {
   # When validation is enabled: use ACM certificate for custom domain
   # When validation is not enabled: use default certificate (no custom domain aliases)
   viewer_certificate {
-    acm_certificate_arn      = var.wait_for_certificate_validation ? aws_acm_certificate_validation.cert["create"].certificate_arn : null
-    ssl_support_method       = var.wait_for_certificate_validation ? "sni-only" : null
-    minimum_protocol_version = var.wait_for_certificate_validation ? "TLSv1.2_2021" : null
+    acm_certificate_arn            = var.wait_for_certificate_validation ? aws_acm_certificate_validation.cert["create"].certificate_arn : null
+    ssl_support_method             = var.wait_for_certificate_validation ? "sni-only" : null
+    minimum_protocol_version       = var.wait_for_certificate_validation ? "TLSv1.2_2021" : null
     cloudfront_default_certificate = !var.wait_for_certificate_validation
   }
 
@@ -189,30 +189,32 @@ resource "aws_route53_record" "cert_validation" {
 # Route53 ALIAS record for root domain pointing to CloudFront (A record for apex domain)
 resource "aws_route53_record" "root_domain" {
   for_each = var.wait_for_certificate_validation ? { create = true } : {}
-  
-  zone_id = data.aws_route53_zone.domain.zone_id
-  name    = var.domain_name
-  type    = "A"
+
+  zone_id         = data.aws_route53_zone.domain.zone_id
+  name            = var.domain_name
+  type            = "A"
+  allow_overwrite = true
 
   alias {
     name                   = aws_cloudfront_distribution.website.domain_name
     zone_id                = aws_cloudfront_distribution.website.hosted_zone_id
     evaluate_target_health = false
   }
-  
+
   depends_on = [aws_cloudfront_distribution.website]
 }
 
 # Route53 CNAME record for www subdomain pointing to CloudFront
 resource "aws_route53_record" "www_domain" {
   for_each = var.wait_for_certificate_validation ? { create = true } : {}
-  
-  zone_id = data.aws_route53_zone.domain.zone_id
-  name    = "www.${var.domain_name}"
-  type    = "CNAME"
-  ttl     = 300
-  records = [aws_cloudfront_distribution.website.domain_name]
-  
+
+  zone_id         = data.aws_route53_zone.domain.zone_id
+  name            = "www.${var.domain_name}"
+  type            = "CNAME"
+  ttl             = 300
+  allow_overwrite = true
+  records         = [aws_cloudfront_distribution.website.domain_name]
+
   depends_on = [aws_cloudfront_distribution.website]
 }
 

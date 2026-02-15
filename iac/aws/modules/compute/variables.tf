@@ -46,6 +46,11 @@ variable "user_data_script_content" {
   default     = ""
 }
 
+variable "region" {
+  description = "The AWS region to deploy to"
+  type        = string
+}
+
 
 
 

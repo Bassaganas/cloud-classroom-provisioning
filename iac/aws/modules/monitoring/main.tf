@@ -1,6 +1,22 @@
+# Locals for normalized naming
+locals {
+  # Normalize tutorial names: testus_patronus -> testus-patronus, fellowship-of-the-build -> fellowship, shared -> common
+  normalized_tutorial_name = replace(
+    replace(
+      replace(var.workshop_name, "testus_patronus", "testus-patronus"),
+      "fellowship-of-the-build",
+      "fellowship"
+    ),
+    "shared",
+    "common"
+  )
+  # Convert region to region code (eu-west-1 -> euwest1)
+  region_code = replace(var.region, "-", "")
+}
+
 # CloudWatch Event Rule for Stopping Old Instances
 resource "aws_cloudwatch_event_rule" "stop_old_instances_schedule" {
-  name                = "stop-old-instances-schedule-${var.workshop_name}-${var.environment}"
+  name                = "eventbridge-stop-old-instances-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   schedule_expression = "rate(10 minutes)"
   description         = "Stop EC2 instances running for more than configured timeout"
 
@@ -29,7 +45,7 @@ resource "aws_lambda_permission" "allow_eventbridge_stop_old_instances" {
 
 # CloudWatch Event Rule for Admin Instance Cleanup
 resource "aws_cloudwatch_event_rule" "admin_cleanup_schedule" {
-  name                = "admin-cleanup-schedule-${var.workshop_name}-${var.environment}"
+  name                = "eventbridge-admin-cleanup-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   schedule_expression = var.admin_cleanup_schedule
   description         = "Clean up admin instances based on age"
 

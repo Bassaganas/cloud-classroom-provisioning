@@ -1,5 +1,21 @@
+# Locals for normalized naming
+locals {
+  # Normalize tutorial names: testus_patronus -> testus-patronus, fellowship-of-the-build -> fellowship, shared -> common
+  normalized_tutorial_name = replace(
+    replace(
+      replace(var.workshop_name, "testus_patronus", "testus-patronus"),
+      "fellowship-of-the-build",
+      "fellowship"
+    ),
+    "shared",
+    "common"
+  )
+  # Convert region to region code (eu-west-1 -> euwest1)
+  region_code = replace(var.region, "-", "")
+}
+
 resource "aws_iam_policy" "user_restricted_policy_lambda" {
-  name        = "UserRestrictedPolicyLambda-${var.workshop_name}-${var.environment}"
+  name        = "iam-user-restricted-policy-lambda-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   description = "Policy to restrict users to their own resources"
 
   policy = jsonencode({
@@ -44,7 +60,7 @@ resource "aws_iam_policy" "user_restricted_policy_lambda" {
 }
 
 resource "aws_iam_policy" "user_restricted_policy_athena" {
-  name        = "UserRestrictedPolicyAthena-${var.workshop_name}-${var.environment}"
+  name        = "iam-user-restricted-policy-athena-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   description = "Policy to restrict users to their own resources on Athena"
 
   policy = jsonencode({
@@ -87,7 +103,7 @@ resource "aws_iam_policy" "user_restricted_policy_athena" {
 }
 
 resource "aws_iam_policy" "user_restricted_policy_s3" {
-  name        = "UserRestrictedPolicyS3-${var.workshop_name}-${var.environment}"
+  name        = "iam-user-restricted-policy-s3-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   description = "Policy to restrict users to their own resources on S3"
 
   policy = jsonencode({
@@ -130,7 +146,7 @@ resource "aws_iam_policy" "user_restricted_policy_s3" {
 }
 
 resource "aws_iam_policy" "user_restricted_policy_eventbridge" {
-  name        = "UserRestrictedPolicyEventbridge-${var.workshop_name}-${var.environment}"
+  name        = "iam-user-restricted-policy-eventbridge-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   description = "Policy to restrict users to their own resources on Eventbridge"
 
   policy = jsonencode({
@@ -167,7 +183,7 @@ resource "aws_iam_policy" "user_restricted_policy_eventbridge" {
 }
 
 resource "aws_iam_policy" "user_restricted_policy_dynamodb" {
-  name        = "UserRestrictedPolicyDynamoDB-${var.workshop_name}-${var.environment}"
+  name        = "iam-user-restricted-policy-dynamodb-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   description = "Policy to restrict users to their own resources on DynamoDB"
 
   policy = jsonencode({
@@ -211,7 +227,7 @@ resource "aws_iam_policy" "user_restricted_policy_dynamodb" {
 }
 
 resource "aws_iam_policy" "user_restricted_policy_cicd" {
-  name        = "UserRestrictedPolicyCICD-${var.workshop_name}-${var.environment}"
+  name        = "iam-user-restricted-policy-cicd-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   description = "Policy to restrict users to their own CICD resources"
 
   policy = jsonencode({
@@ -263,7 +279,7 @@ resource "aws_iam_policy" "user_restricted_policy_cicd" {
 }
 
 resource "aws_iam_policy" "user_restricted_policy_resource_groups" {
-  name        = "UserRestrictedPolicyResourceGroups-${var.workshop_name}-${var.environment}"
+  name        = "iam-user-restricted-policy-resourcegroups-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   description = "Policy to allow resource groups and related actions"
 
   policy = jsonencode({
@@ -292,7 +308,7 @@ resource "aws_iam_policy" "user_restricted_policy_resource_groups" {
 }
 
 resource "aws_iam_policy" "user_restricted_policy_tagging" {
-  name        = "UserRestrictedPolicyTagging-${var.workshop_name}-${var.environment}"
+  name        = "iam-user-restricted-policy-tagging-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   description = "Policy to allow users to manage tags on their resources"
 
   policy = jsonencode({
@@ -322,7 +338,7 @@ resource "aws_iam_policy" "user_restricted_policy_tagging" {
 }
 
 resource "aws_iam_role" "restricted_user_role" {
-  name = "restricted-user-role-${var.workshop_name}-${var.environment}"
+  name = "iam-restricted-user-role-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -391,4 +407,4 @@ resource "aws_iam_role_policy_attachment" "attach_tagging_policy" {
   policy_arn = aws_iam_policy.user_restricted_policy_tagging.arn
 }
 
-data "aws_caller_identity" "current" {} 
+data "aws_caller_identity" "current" {}

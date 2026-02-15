@@ -79,7 +79,7 @@ resource "aws_iam_role_policy" "cloudfront_logging" {
 resource "aws_cloudfront_realtime_log_config" "cloudfront_realtime_logs" {
   count = var.enable_cloudwatch_logging ? 1 : 0
 
-  name   = "${var.environment}-${var.workshop_name}-realtime-logs"
+  name = "${var.environment}-${var.workshop_name}-realtime-logs"
   fields = [
     "timestamp",
     "c-ip",
@@ -125,7 +125,7 @@ resource "aws_cloudfront_realtime_log_config" "cloudfront_realtime_logs" {
   }
   lifecycle {
     create_before_destroy = true
-    ignore_changes = [name]
+    ignore_changes        = [name]
   }
 }
 
@@ -179,13 +179,13 @@ resource "aws_iam_role_policy" "cloudfront_kinesis" {
 resource "aws_lambda_function" "cloudfront_log_processor" {
   count = var.enable_cloudwatch_logging ? 1 : 0
 
-  filename         = "${path.module}/cloudfront_log_processor.zip"
-  function_name    = "cloudfront-log-processor-${var.environment}-${var.workshop_name}"
-  role            = aws_iam_role.lambda_log_processor[0].arn
-  handler         = "index.handler"
-  runtime         = "python3.11"
-  timeout         = 60
-  memory_size     = 256
+  filename      = "${path.module}/cloudfront_log_processor.zip"
+  function_name = "cloudfront-log-processor-${var.environment}-${var.workshop_name}"
+  role          = aws_iam_role.lambda_log_processor[0].arn
+  handler       = "index.handler"
+  runtime       = "python3.11"
+  timeout       = 60
+  memory_size   = 256
 
   source_code_hash = data.archive_file.cloudfront_log_processor[0].output_base64sha256
 
@@ -204,7 +204,7 @@ resource "aws_lambda_function" "cloudfront_log_processor" {
   }
   lifecycle {
     create_before_destroy = true
-    ignore_changes = [filename, source_code_hash]  # Allow code updates without replacement
+    ignore_changes        = [filename, source_code_hash] # Allow code updates without replacement
   }
 }
 
@@ -291,10 +291,10 @@ resource "aws_iam_role_policy" "lambda_log_processor" {
 resource "aws_lambda_event_source_mapping" "cloudfront_logs" {
   count = var.enable_cloudwatch_logging ? 1 : 0
 
-  event_source_arn  = aws_kinesis_stream.cloudfront_logs[0].arn
-  function_name     = aws_lambda_function.cloudfront_log_processor[0].arn
-  starting_position = "LATEST"
-  batch_size        = 100
+  event_source_arn                   = aws_kinesis_stream.cloudfront_logs[0].arn
+  function_name                      = aws_lambda_function.cloudfront_log_processor[0].arn
+  starting_position                  = "LATEST"
+  batch_size                         = 100
   maximum_batching_window_in_seconds = 5
   lifecycle {
     create_before_destroy = true
@@ -303,13 +303,65 @@ resource "aws_lambda_event_source_mapping" "cloudfront_logs" {
   }
 }
 
-  # CloudFront Function to rewrite API Gateway paths to include stage
+# CloudFront Function to rewrite API Gateway paths to include stage
 # This adds the stage prefix (e.g., /dev) to API requests before forwarding to API Gateway
 # Only needed when using regional API Gateway endpoint (not custom domain)
+# Extract a unique identifier from domain name to avoid conflicts when multiple CloudFront distributions
+# use the same workshop_name (e.g., user_management vs dify_jira)
+locals {
+  # Extract a short unique identifier from domain name
+  # e.g., "testus-patronus.testingfantasy.com" -> "testus-patronus"
+  #      "dify-jira.testingfantasy.com" -> "dify-jira"
+  #      "fellowship-of-the-build.testingfantasy.com" -> "fellowship-of-the-build"
+  domain_identifier = replace(replace(var.domain_name, ".testingfantasy.com", ""), ".", "-")
+  # Function name using domain identifier for uniqueness
+  function_name = "api-path-rewrite-${var.environment}-${local.domain_identifier}"
+  # Old function name (for cleanup) - used workshop_name which caused conflicts
+  old_function_name = "api-path-rewrite-${var.environment}-${var.workshop_name}"
+}
+
+# Null resource to cleanup existing CloudFront Functions (for one-shot deployment)
+# Handles both old naming (workshop_name) and new naming (domain_identifier)
+resource "null_resource" "cleanup_existing_cloudfront_function" {
+  count = !var.use_api_gateway_custom_domain ? 1 : 0
+
+  triggers = {
+    function_name = local.function_name
+  }
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      # Try to delete existing CloudFront Function with new name if it exists
+      if aws cloudfront describe-function --name "${local.function_name}" >/dev/null 2>&1; then
+        echo "Found existing CloudFront Function ${local.function_name}, deleting..."
+        ETAG=$(aws cloudfront describe-function --name "${local.function_name}" --query 'ETag' --output text 2>/dev/null)
+        if [ ! -z "$ETAG" ] && [ "$ETAG" != "None" ]; then
+          aws cloudfront delete-function --name "${local.function_name}" --if-match "$ETAG" 2>/dev/null || \
+          echo "Failed to delete function (may be in use)"
+        fi
+      fi
+      
+      # Also try to delete old function name (from previous deployments with workshop_name)
+      if aws cloudfront describe-function --name "${local.old_function_name}" >/dev/null 2>&1; then
+        echo "Found old CloudFront Function ${local.old_function_name}, deleting..."
+        ETAG=$(aws cloudfront describe-function --name "${local.old_function_name}" --query 'ETag' --output text 2>/dev/null)
+        if [ ! -z "$ETAG" ] && [ "$ETAG" != "None" ]; then
+          aws cloudfront delete-function --name "${local.old_function_name}" --if-match "$ETAG" 2>/dev/null || \
+          echo "Failed to delete old function (may be in use)"
+        fi
+      fi
+      
+      echo "CloudFront Function cleanup complete, proceeding with creation"
+    EOT
+  }
+}
+
 resource "aws_cloudfront_function" "api_path_rewrite" {
   count = !var.use_api_gateway_custom_domain ? 1 : 0
 
-  name    = "api-path-rewrite-${var.environment}-${var.workshop_name}"
+  depends_on = [null_resource.cleanup_existing_cloudfront_function]
+
+  name    = local.function_name
   runtime = "cloudfront-js-1.0"
   code    = <<-EOF
     function handler(event) {
@@ -375,12 +427,45 @@ resource "aws_acm_certificate_validation" "cert" {
   }
 }
 
+# Null resource to check for and disable existing CloudFront distributions with the same CNAME
+# This handles the case where a distribution exists outside Terraform state (for one-shot deployment)
+resource "null_resource" "cleanup_existing_cloudfront" {
+  for_each = var.wait_for_certificate_validation ? { create = true } : {}
+
+  triggers = {
+    domain_name = var.domain_name
+  }
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      # Find existing CloudFront distributions with the same alias
+      DIST_ID=$(aws cloudfront list-distributions --query "DistributionList.Items[?Aliases.Items[?@=='${var.domain_name}']].Id" --output text 2>/dev/null | head -n1)
+      
+      if [ ! -z "$DIST_ID" ] && [ "$DIST_ID" != "None" ]; then
+        echo "Found existing CloudFront distribution $DIST_ID with alias ${var.domain_name}"
+        echo "Note: CloudFront distributions must be disabled manually before deletion"
+        echo "Please disable distribution $DIST_ID in AWS Console or use:"
+        echo "  aws cloudfront get-distribution-config --id $DIST_ID > /tmp/dist-config.json"
+        echo "  # Edit /tmp/dist-config.json to set Enabled: false"
+        echo "  aws cloudfront update-distribution --id $DIST_ID --if-match <ETag> --distribution-config file:///tmp/dist-config.json"
+        echo "Then wait for deployment and delete with:"
+        echo "  aws cloudfront delete-distribution --id $DIST_ID --if-match <ETag>"
+        exit 1
+      else
+        echo "No existing CloudFront distribution found with alias ${var.domain_name}, proceeding with creation"
+      fi
+    EOT
+  }
+}
+
 # CloudFront Distribution
 # Only create if wait_for_certificate_validation is true (certificate must be validated)
 # CloudFront requires a validated certificate to work with custom domains
 # Using for_each instead of count to avoid Terraform evaluation issues
 resource "aws_cloudfront_distribution" "distribution" {
   for_each = var.wait_for_certificate_validation ? { create = true } : {}
+
+  depends_on = [null_resource.cleanup_existing_cloudfront, aws_acm_certificate_validation.cert]
 
   enabled             = true
   is_ipv6_enabled     = true
@@ -456,7 +541,7 @@ resource "aws_cloudfront_distribution" "distribution" {
       cache_policy_id          = data.aws_cloudfront_cache_policy.caching_disabled.id
       origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer.id
       realtime_log_config_arn  = var.enable_cloudwatch_logging ? aws_cloudfront_realtime_log_config.cloudfront_realtime_logs[0].arn : null
-      
+
       # Only use path rewriting function when NOT using custom domain
       dynamic "function_association" {
         for_each = !var.use_api_gateway_custom_domain ? [1] : []
@@ -483,7 +568,7 @@ resource "aws_cloudfront_distribution" "distribution" {
       cache_policy_id          = data.aws_cloudfront_cache_policy.caching_disabled.id
       origin_request_policy_id = data.aws_cloudfront_origin_request_policy.all_viewer.id
       realtime_log_config_arn  = var.enable_cloudwatch_logging ? aws_cloudfront_realtime_log_config.cloudfront_realtime_logs[0].arn : null
-      
+
       # Only use path rewriting function when NOT using custom domain
       dynamic "function_association" {
         for_each = !var.use_api_gateway_custom_domain ? [1] : []
@@ -498,16 +583,18 @@ resource "aws_cloudfront_distribution" "distribution" {
   # Lifecycle: Create before destroy to minimize downtime during updates
   lifecycle {
     create_before_destroy = true
+    # Prevent replacement if only tags change
+    ignore_changes = [tags, tags_all]
   }
 
   # Default cache behavior - route to S3 (frontend) if available, otherwise API Gateway/Lambda
   # This is evaluated AFTER all ordered_cache_behavior blocks
   default_cache_behavior {
-    allowed_methods        = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
-    cached_methods         = ["GET", "HEAD"]
-    target_origin_id       = var.s3_bucket_domain != "" ? "s3-frontend" : (var.api_gateway_domain != "" ? "api-gateway" : "lambda-function-url")
-    compress               = true
-    viewer_protocol_policy = "redirect-to-https"
+    allowed_methods         = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
+    cached_methods          = ["GET", "HEAD"]
+    target_origin_id        = var.s3_bucket_domain != "" ? "s3-frontend" : (var.api_gateway_domain != "" ? "api-gateway" : "lambda-function-url")
+    compress                = true
+    viewer_protocol_policy  = "redirect-to-https"
     realtime_log_config_arn = var.enable_cloudwatch_logging ? aws_cloudfront_realtime_log_config.cloudfront_realtime_logs[0].arn : null
 
     forwarded_values {
@@ -565,7 +652,7 @@ resource "aws_cloudfront_distribution" "distribution" {
 
   # CloudFront will only be created when certificate validation is enabled
   # The validation resource will complete immediately if certificate is already validated
-  depends_on = [aws_acm_certificate_validation.cert]
+  # (depends_on is already set at the top of the resource block)
 }
 
 # Route53 record for ACM certificate validation
@@ -590,11 +677,12 @@ resource "aws_route53_record" "cert_validation" {
 resource "aws_route53_record" "cloudfront_alias" {
   for_each = var.wait_for_certificate_validation ? { create = true } : {}
 
-  zone_id = data.aws_route53_zone.domain.zone_id
-  name    = var.domain_name
-  type    = "CNAME"
-  ttl     = 300
-  records = [aws_cloudfront_distribution.distribution[each.key].domain_name]
+  zone_id         = data.aws_route53_zone.domain.zone_id
+  name            = var.domain_name
+  type            = "CNAME"
+  ttl             = 300
+  allow_overwrite = true
+  records         = [aws_cloudfront_distribution.distribution[each.key].domain_name]
 
   depends_on = [aws_cloudfront_distribution.distribution]
 }

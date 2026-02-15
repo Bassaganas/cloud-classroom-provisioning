@@ -29,6 +29,11 @@ variable "admin_cleanup_schedule" {
   default     = "cron(0 2 ? * SUN *)"
 }
 
+variable "region" {
+  description = "The AWS region to deploy to"
+  type        = string
+}
+
 
 
 

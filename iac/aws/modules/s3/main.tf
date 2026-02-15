@@ -1,6 +1,22 @@
+# Locals for normalized naming
+locals {
+  # Normalize tutorial names: testus_patronus -> testus-patronus, fellowship-of-the-build -> fellowship, shared -> common
+  normalized_tutorial_name = replace(
+    replace(
+      replace(var.workshop_name, "testus_patronus", "testus-patronus"),
+      "fellowship-of-the-build",
+      "fellowship"
+    ),
+    "shared",
+    "common"
+  )
+  # Convert region to region code (eu-west-1 -> euwest1)
+  region_code = replace(var.region, "-", "")
+}
+
 # S3 Bucket for static website hosting (React frontend)
 resource "aws_s3_bucket" "frontend" {
-  bucket = "${var.bucket_name}-${var.environment}"
+  bucket = "s3-${var.bucket_name}-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
 
   tags = {
     Environment = var.environment
@@ -18,7 +34,7 @@ resource "aws_s3_bucket_public_access_block" "frontend" {
   block_public_acls       = true
   block_public_policy     = true
   ignore_public_acls      = true
-  restrict_public_buckets  = true
+  restrict_public_buckets = true
 }
 
 # Enable versioning

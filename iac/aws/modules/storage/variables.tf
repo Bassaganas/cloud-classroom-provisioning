@@ -46,3 +46,8 @@ variable "create_instance_manager_password_secret" {
   type        = bool
   default     = true
 }
+
+variable "region" {
+  description = "The AWS region to deploy to"
+  type        = string
+}

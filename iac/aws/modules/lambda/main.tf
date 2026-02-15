@@ -1,8 +1,24 @@
+# Locals for normalized naming
+locals {
+  # Normalize tutorial names: testus_patronus -> testus-patronus, fellowship-of-the-build -> fellowship, shared -> common
+  normalized_tutorial_name = replace(
+    replace(
+      replace(var.workshop_name, "testus_patronus", "testus-patronus"),
+      "fellowship-of-the-build",
+      "fellowship"
+    ),
+    "shared",
+    "common"
+  )
+  # Convert region to region code (eu-west-1 -> euwest1)
+  region_code = replace(var.region, "-", "")
+}
+
 # Lambda Function for Status Checking (created first)
 resource "aws_lambda_function" "status" {
-  count = var.enable_status ? 1 : 0
+  count            = var.enable_status ? 1 : 0
   filename         = "${path.root}/../../functions/packages/testus_patronus_status.zip"
-  function_name    = "status-lambda-${var.classroom_name}-${var.workshop_name}-${var.environment}"
+  function_name    = "lambda-status-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   role             = var.lambda_role_arn
   handler          = "testus_patronus_status.lambda_handler"
   runtime          = "python3.9"
@@ -29,7 +45,7 @@ resource "aws_lambda_function" "status" {
 
 # Lambda Function URL for Status
 resource "aws_lambda_function_url" "status_url" {
-  count             = var.enable_status ? 1 : 0
+  count              = var.enable_status ? 1 : 0
   function_name      = aws_lambda_function.status[0].function_name
   authorization_type = "NONE"
 
@@ -45,24 +61,24 @@ resource "aws_lambda_function_url" "status_url" {
 
 # Lambda Function for User Management (depends on status URL)
 resource "aws_lambda_function" "user_management" {
-  count                        = var.enable_user_management ? 1 : 0
-  filename                      = "${path.root}/../../functions/packages/classroom_user_management.zip"
-  function_name                 = "lambda-${var.classroom_name}-${var.workshop_name}-${var.environment}"
-  role                          = var.lambda_role_arn
-  handler                       = "classroom_user_management.lambda_handler"
-  runtime                       = "python3.9"
-  timeout                       = var.user_management_timeout
-  memory_size                   = var.user_management_memory_size
-  package_type                  = "Zip"
-  source_code_hash              = filebase64sha256("${path.root}/../../functions/packages/classroom_user_management.zip")
-  publish                       = var.user_management_provisioned_concurrency > 0 ? true : false  # Publish version if using provisioned concurrency
-  reserved_concurrent_executions = var.user_management_reserved_concurrency > 0 ? var.user_management_reserved_concurrency : null  # Reserved concurrency (null = unlimited)
+  count                          = var.enable_user_management ? 1 : 0
+  filename                       = "${path.root}/../../functions/packages/classroom_user_management.zip"
+  function_name                  = "lambda-user-management-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
+  role                           = var.lambda_role_arn
+  handler                        = "classroom_user_management.lambda_handler"
+  runtime                        = "python3.9"
+  timeout                        = var.user_management_timeout
+  memory_size                    = var.user_management_memory_size
+  package_type                   = "Zip"
+  source_code_hash               = filebase64sha256("${path.root}/../../functions/packages/classroom_user_management.zip")
+  publish                        = var.user_management_provisioned_concurrency > 0 ? true : false                                 # Publish version if using provisioned concurrency
+  reserved_concurrent_executions = var.user_management_reserved_concurrency > 0 ? var.user_management_reserved_concurrency : null # Reserved concurrency (null = unlimited)
 
   environment {
     variables = {
-      ENVIRONMENT       = var.environment
-      WORKSHOP_NAME     = var.workshop_name
-      STATUS_LAMBDA_URL = var.status_lambda_url != "" ? var.status_lambda_url : (var.enable_status ? aws_lambda_function_url.status_url[0].function_url : "")
+      ENVIRONMENT            = var.environment
+      WORKSHOP_NAME          = var.workshop_name
+      STATUS_LAMBDA_URL      = var.status_lambda_url != "" ? var.status_lambda_url : (var.enable_status ? aws_lambda_function_url.status_url[0].function_url : "")
       SKIP_IAM_USER_CREATION = var.skip_iam_user_creation ? "true" : "false"
     }
   }
@@ -85,8 +101,8 @@ resource "aws_lambda_alias" "user_management" {
   name             = "live"
   description      = "Live alias for provisioned concurrency"
   function_name    = aws_lambda_function.user_management[0].function_name
-  function_version = aws_lambda_function.user_management[0].version  # Points to published version
-  
+  function_version = aws_lambda_function.user_management[0].version # Points to published version
+
   # Note: When function code is updated, Terraform will publish a new version
   # and the alias will need to be updated (or use lifecycle ignore_changes)
 }
@@ -99,13 +115,13 @@ resource "aws_lambda_provisioned_concurrency_config" "user_management" {
   function_name                     = aws_lambda_function.user_management[0].function_name
   provisioned_concurrent_executions = var.user_management_provisioned_concurrency
   qualifier                         = aws_lambda_alias.user_management[0].name
-  
+
   depends_on = [aws_lambda_alias.user_management]
 }
 
 # Lambda Function URL for User Management
 resource "aws_lambda_function_url" "user_management_url" {
-  count             = var.enable_user_management ? 1 : 0
+  count              = var.enable_user_management ? 1 : 0
   function_name      = aws_lambda_function.user_management[0].function_name
   authorization_type = "NONE"
 
@@ -124,7 +140,7 @@ resource "aws_lambda_function_url" "user_management_url" {
 resource "aws_lambda_function" "stop_old_instances" {
   count            = var.enable_stop_old_instances ? 1 : 0
   filename         = "${path.root}/../../functions/packages/classroom_stop_old_instances.zip"
-  function_name    = "stop-old-instances-${var.classroom_name}-${var.workshop_name}-${var.environment}"
+  function_name    = "lambda-stop-old-instances-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   role             = var.lambda_role_arn
   handler          = "classroom_stop_old_instances.lambda_handler"
   runtime          = "python3.9"
@@ -153,7 +169,7 @@ resource "aws_lambda_function" "stop_old_instances" {
 resource "aws_lambda_function" "instance_manager" {
   count            = var.enable_instance_manager ? 1 : 0
   filename         = "${path.root}/../../functions/packages/classroom_instance_manager.zip"
-  function_name    = "instance-manager-${var.classroom_name}-${var.workshop_name}-${var.environment}"
+  function_name    = "lambda-instance-manager-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   role             = var.lambda_role_arn
   handler          = "classroom_instance_manager.lambda_handler"
   runtime          = "python3.9"
@@ -164,18 +180,18 @@ resource "aws_lambda_function" "instance_manager" {
 
   environment {
     variables = {
-      ENVIRONMENT                   = var.environment
-      WORKSHOP_NAME                 = var.workshop_name
-      CLASSROOM_REGION              = var.region
-      EC2_INSTANCE_TYPE             = var.instance_type
-      EC2_SUBNET_ID                 = var.subnet_id
-      EC2_SECURITY_GROUP_IDS        = join(",", var.security_group_ids)
-      EC2_IAM_INSTANCE_PROFILE      = var.iam_instance_profile_name
-      INSTANCE_MANAGER_PASSWORD_SECRET = var.instance_manager_password_secret_name
+      ENVIRONMENT                             = var.environment
+      WORKSHOP_NAME                           = var.workshop_name
+      CLASSROOM_REGION                        = var.region
+      EC2_INSTANCE_TYPE                       = var.instance_type
+      EC2_SUBNET_ID                           = var.subnet_id
+      EC2_SECURITY_GROUP_IDS                  = join(",", var.security_group_ids)
+      EC2_IAM_INSTANCE_PROFILE                = var.iam_instance_profile_name
+      INSTANCE_MANAGER_PASSWORD_SECRET        = var.instance_manager_password_secret_name
       INSTANCE_MANAGER_TEMPLATE_MAP_PARAMETER = var.instance_manager_template_map_parameter
-      INSTANCE_MANAGER_BASE_DOMAIN = var.instance_manager_base_domain
-      INSTANCE_MANAGER_HOSTED_ZONE_ID = var.instance_manager_hosted_zone_id
-      INSTANCE_MANAGER_HTTPS_CERT_ARN = var.instance_manager_https_cert_arn
+      INSTANCE_MANAGER_BASE_DOMAIN            = var.instance_manager_base_domain
+      INSTANCE_MANAGER_HOSTED_ZONE_ID         = var.instance_manager_hosted_zone_id
+      INSTANCE_MANAGER_HTTPS_CERT_ARN         = var.instance_manager_https_cert_arn
     }
   }
 
@@ -190,7 +206,7 @@ resource "aws_lambda_function" "instance_manager" {
 
 # Lambda Function URL for Instance Manager
 resource "aws_lambda_function_url" "instance_manager_url" {
-  count             = var.enable_instance_manager ? 1 : 0
+  count              = var.enable_instance_manager ? 1 : 0
   function_name      = aws_lambda_function.instance_manager[0].function_name
   authorization_type = "NONE"
 
@@ -208,11 +224,11 @@ resource "aws_lambda_function_url" "instance_manager_url" {
 # This ensures the Function URL is accessible even if there are propagation delays
 resource "aws_lambda_permission" "instance_manager_url_public" {
   count = var.enable_instance_manager ? 1 : 0
-  
-  statement_id  = "AllowPublicInvoke"
-  action        = "lambda:InvokeFunctionUrl"
-  function_name = aws_lambda_function.instance_manager[0].function_name
-  principal     = "*"
+
+  statement_id           = "AllowPublicInvoke"
+  action                 = "lambda:InvokeFunctionUrl"
+  function_name          = aws_lambda_function.instance_manager[0].function_name
+  principal              = "*"
   function_url_auth_type = "NONE"
 }
 
@@ -220,7 +236,7 @@ resource "aws_lambda_permission" "instance_manager_url_public" {
 resource "aws_lambda_function" "admin_cleanup" {
   count            = var.enable_admin_cleanup ? 1 : 0
   filename         = "${path.root}/../../functions/packages/classroom_admin_cleanup.zip"
-  function_name    = "admin-cleanup-${var.classroom_name}-${var.workshop_name}-${var.environment}"
+  function_name    = "lambda-admin-cleanup-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   role             = var.lambda_role_arn
   handler          = "classroom_admin_cleanup.lambda_handler"
   runtime          = "python3.9"
@@ -251,7 +267,7 @@ resource "aws_lambda_function" "admin_cleanup" {
 resource "aws_lambda_function" "dify_jira_api" {
   count            = var.enable_dify_jira_api ? 1 : 0
   filename         = "${path.root}/../../functions/packages/dify_jira_api.zip"
-  function_name    = "dify-jira-api-${var.classroom_name}-${var.workshop_name}-${var.environment}"
+  function_name    = "lambda-dify-jira-api-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   role             = var.lambda_role_arn
   handler          = "dify_jira_api.lambda_handler"
   runtime          = "python3.9"
@@ -280,7 +296,7 @@ resource "aws_lambda_function" "dify_jira_api" {
 
 # Lambda Function URL for Dify Jira API
 resource "aws_lambda_function_url" "dify_jira_api_url" {
-  count             = var.enable_dify_jira_api ? 1 : 0
+  count              = var.enable_dify_jira_api ? 1 : 0
   function_name      = aws_lambda_function.dify_jira_api[0].function_name
   authorization_type = "NONE"
   invoke_mode        = "BUFFERED"

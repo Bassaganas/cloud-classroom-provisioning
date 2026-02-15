@@ -52,7 +52,7 @@ variable "common_ec2_ami_id" {
 variable "common_ec2_instance_type" {
   description = "Instance type for classroom EC2 instances"
   type        = string
-  default     = "t3.medium"
+  default     = "t3.micro"
 }
 
 variable "common_ec2_subnet_id" {
@@ -132,7 +132,7 @@ variable "fellowship_ec2_ami_id" {
 variable "fellowship_ec2_instance_type" {
   description = "Instance type for fellowship EC2 instances"
   type        = string
-  default     = "t3.medium"
+  default     = "t3.small"
 }
 
 variable "fellowship_instance_stop_timeout_minutes" {
@@ -254,7 +254,7 @@ variable "testus_patronus_ec2_ami_id" {
 variable "testus_patronus_ec2_instance_type" {
   description = "Instance type for testus_patronus EC2 instances"
   type        = string
-  default     = "t3.medium"
+  default     = "t3.small"
 }
 
 variable "testus_patronus_instance_stop_timeout_minutes" {

@@ -1,6 +1,22 @@
+# Locals for normalized naming
+locals {
+  # Normalize tutorial names: testus_patronus -> testus-patronus, fellowship-of-the-build -> fellowship, shared -> common
+  normalized_tutorial_name = replace(
+    replace(
+      replace(var.workshop_name, "testus_patronus", "testus-patronus"),
+      "fellowship-of-the-build",
+      "fellowship"
+    ),
+    "shared",
+    "common"
+  )
+  # Convert region to region code (eu-west-1 -> euwest1)
+  region_code = replace(var.region, "-", "")
+}
+
 # IAM Role for Lambda execution
 resource "aws_iam_role" "lambda_role" {
-  name = "classroom-lambda-execution-role-${var.workshop_name}-${var.environment}"
+  name = "iam-lambda-execution-role-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -26,7 +42,7 @@ resource "aws_iam_role" "lambda_role" {
 
 # IAM Policy for Lambda to manage EC2, DynamoDB, IAM, etc.
 resource "aws_iam_role_policy" "lambda_iam_policy" {
-  name = "LambdaIAMManagementPolicy-${var.workshop_name}-${var.environment}"
+  name = "iam-lambda-management-policy-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   role = aws_iam_role.lambda_role.id
 
   policy = jsonencode({
@@ -179,7 +195,7 @@ resource "aws_iam_role_policy_attachment" "lambda_basic" {
 resource "aws_iam_policy" "lambda_secretsmanager_policy" {
   count = 1
 
-  name        = "lambda-secretsmanager-policy-${var.workshop_name}-${var.environment}"
+  name        = "iam-lambda-secretsmanager-policy-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   description = "Allow Lambda to get secrets from Secrets Manager"
   policy = jsonencode({
     Version = "2012-10-17"

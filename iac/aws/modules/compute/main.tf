@@ -14,9 +14,25 @@ data "aws_ami" "amazon_linux_2" {
   }
 }
 
+# Locals for normalized naming
+locals {
+  # Normalize tutorial names: testus_patronus -> testus-patronus, fellowship-of-the-build -> fellowship, shared -> common
+  normalized_tutorial_name = replace(
+    replace(
+      replace(var.workshop_name, "testus_patronus", "testus-patronus"),
+      "fellowship-of-the-build",
+      "fellowship"
+    ),
+    "shared",
+    "common"
+  )
+  # Convert region to region code (eu-west-1 -> euwest1)
+  region_code = replace(var.region, "-", "")
+}
+
 # IAM Role for EC2 instances
 resource "aws_iam_role" "ec2_ssm_role" {
-  name = "ec2-ssm-role-${var.workshop_name}-${var.environment}"
+  name = "iam-ec2-ssm-role-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -48,7 +64,7 @@ resource "aws_iam_role_policy_attachment" "ssm_policy" {
 
 # Create instance profile
 resource "aws_iam_instance_profile" "ec2_ssm_profile" {
-  name = "ec2-ssm-profile-${var.workshop_name}-${var.environment}"
+  name = "iam-ec2-ssm-profile-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   role = aws_iam_role.ec2_ssm_role.name
 }
 
@@ -70,7 +86,7 @@ data "aws_subnet" "default" {
 
 # Security Group for Classroom EC2 Instances
 resource "aws_security_group" "classroom_sg" {
-  name_prefix = "classroom-sg-${var.workshop_name}-${var.environment}-"
+  name_prefix = "classroom-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}-"
   vpc_id      = data.aws_vpc.default.id
   description = "Minimal security group for classroom EC2 instances"
 
@@ -111,7 +127,7 @@ resource "aws_security_group" "classroom_sg" {
   }
 
   tags = {
-    Name        = "classroom-sg-${var.workshop_name}-${var.environment}"
+    Name        = "sg-classroom-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
     Environment = var.environment
     Owner       = var.owner
     Project     = "classroom"

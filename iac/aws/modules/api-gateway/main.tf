@@ -11,15 +11,28 @@ locals {
   # CloudWatch Logs role ARN for API Gateway account settings
   # Only set when logging is enabled
   cloudwatch_role_arn = var.enable_logging ? aws_iam_role.api_gateway_logging.arn : null
-  
+
   # Stage name - always use var.environment since that's what the stage is named
   # If the stage exists, it was created with this name; if we create it, we use this name
   stage_name = var.environment
+
+  # Normalize tutorial names: testus_patronus -> testus-patronus, fellowship-of-the-build -> fellowship, shared -> common
+  normalized_tutorial_name = replace(
+    replace(
+      replace(var.workshop_name, "testus_patronus", "testus-patronus"),
+      "fellowship-of-the-build",
+      "fellowship"
+    ),
+    "shared",
+    "common"
+  )
+  # Convert region to region code (eu-west-1 -> euwest1)
+  region_code = replace(var.region, "-", "")
 }
 
 # REST API
 resource "aws_api_gateway_rest_api" "api" {
-  name        = "instance-manager-api-${var.environment}"
+  name        = "apigateway-instance-manager-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   description = "API Gateway for EC2 Instance Manager - ${var.environment}"
 
   endpoint_configuration {
@@ -260,7 +273,7 @@ resource "aws_api_gateway_deployment" "api" {
 # CloudWatch Log Group for API Gateway (AWS Best Practice)
 resource "aws_cloudwatch_log_group" "api_gateway" {
   count             = var.enable_logging ? 1 : 0
-  name              = "/aws/apigateway/instance-manager-api-${var.environment}"
+  name              = "log-apigateway-instance-manager-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   retention_in_days = var.log_retention_days
 
   tags = {
@@ -279,7 +292,7 @@ resource "aws_cloudwatch_log_group" "api_gateway" {
 # IAM Role for API Gateway to write logs to CloudWatch
 # Always create the role (even when logging is disabled) to allow account settings to reference it
 resource "aws_iam_role" "api_gateway_logging" {
-  name = "api-gateway-logging-${var.environment}-${var.workshop_name}"
+  name = "iam-api-gateway-logging-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
 
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
@@ -308,7 +321,7 @@ resource "aws_iam_role" "api_gateway_logging" {
 # API Gateway requires permissions to create log groups and write to any log group
 resource "aws_iam_role_policy" "api_gateway_logging" {
   count = var.enable_logging ? 1 : 0
-  name  = "api-gateway-logging-policy"
+  name  = "iam-api-gateway-logging-policy-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   role  = aws_iam_role.api_gateway_logging.id
 
   policy = jsonencode({
@@ -518,6 +531,11 @@ resource "aws_api_gateway_base_path_mapping" "api_mapping" {
   stage_name  = local.stage_name
   domain_name = aws_api_gateway_domain_name.api_domain["create"].domain_name
   # base_path = "" (empty = root path maps to stage)
+
+  depends_on = [
+    aws_api_gateway_stage.api,
+    aws_api_gateway_deployment.api
+  ]
 }
 
 # Route53 record for ACM certificate validation
@@ -542,9 +560,10 @@ resource "aws_route53_record" "api_cert_validation" {
 resource "aws_route53_record" "api_domain" {
   for_each = var.api_custom_domain_name != "" && var.wait_for_certificate_validation ? { create = true } : {}
 
-  zone_id = data.aws_route53_zone.api_domain[0].zone_id
-  name    = var.api_custom_domain_name
-  type    = "A"
+  zone_id         = data.aws_route53_zone.api_domain[0].zone_id
+  name            = var.api_custom_domain_name
+  type            = "A"
+  allow_overwrite = true
 
   alias {
     name                   = aws_api_gateway_domain_name.api_domain["create"].cloudfront_domain_name

@@ -148,25 +148,25 @@ variable "skip_iam_user_creation" {
 variable "user_management_memory_size" {
   description = "Memory size (MB) for user_management Lambda. More memory = more CPU. Range: 128-10240 MB"
   type        = number
-  default     = 512  # Increased from 256 for better performance
+  default     = 512 # Increased from 256 for better performance
 }
 
 variable "user_management_timeout" {
   description = "Timeout (seconds) for user_management Lambda. Range: 1-900 seconds"
   type        = number
-  default     = 120  # Increased from 60 for conference scenarios
+  default     = 120 # Increased from 60 for conference scenarios
 }
 
 variable "user_management_provisioned_concurrency" {
   description = "Number of provisioned concurrent executions for user_management Lambda. Eliminates cold starts but costs more. Set to 0 to disable."
   type        = number
-  default     = 0  # Disabled by default (cost optimization)
+  default     = 0 # Disabled by default (cost optimization)
 }
 
 variable "user_management_reserved_concurrency" {
   description = "Reserved concurrency for user_management Lambda. Guarantees capacity but limits scaling. Set to 0 to use unreserved concurrency."
   type        = number
-  default     = 0  # No reservation by default (allows full scaling)
+  default     = 0 # No reservation by default (allows full scaling)
 }
 
 variable "instance_manager_memory_size" {

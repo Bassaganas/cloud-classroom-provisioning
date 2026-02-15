@@ -22,9 +22,25 @@ resource "aws_acm_certificate" "instance_https" {
   }
 }
 
+# Locals for normalized naming
+locals {
+  # Normalize tutorial names: testus_patronus -> testus-patronus, fellowship-of-the-build -> fellowship, shared -> common
+  normalized_tutorial_name = replace(
+    replace(
+      replace(var.workshop_name, "testus_patronus", "testus-patronus"),
+      "fellowship-of-the-build",
+      "fellowship"
+    ),
+    "shared",
+    "common"
+  )
+  # Convert region to region code (eu-west-1 -> euwest1)
+  region_code = replace(var.region, "-", "")
+}
+
 # Resource Group for shared/common resources
 resource "aws_resourcegroups_group" "shared" {
-  name        = "workshop-${var.workshop_name}-${var.environment}"
+  name        = "resourcegroup-shared-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   description = "Shared classroom infrastructure EC2 manager cleanup storage ${var.environment}"
 
   resource_query {
@@ -54,6 +70,7 @@ module "storage" {
   environment                             = var.environment
   owner                                   = var.owner
   workshop_name                           = var.workshop_name
+  region                                  = var.region
   instance_stop_timeout_minutes           = var.instance_stop_timeout_minutes
   instance_terminate_timeout_minutes      = var.instance_terminate_timeout_minutes
   instance_hard_terminate_timeout_minutes = var.hard_terminate_timeout_minutes
@@ -81,6 +98,7 @@ module "compute" {
   environment           = var.environment
   owner                 = var.owner
   workshop_name         = var.workshop_name
+  region                = var.region
   ec2_pool_size         = var.ec2_pool_size
   ec2_ami_id            = var.ec2_ami_id
   ec2_instance_type     = var.ec2_instance_type
@@ -130,13 +148,14 @@ module "api_gateway" {
     aws.us_east_1 = aws.us_east_1
   }
 
-  lambda_function_arn            = module.lambda.instance_manager_function_arn
+  lambda_function_arn             = module.lambda.instance_manager_function_arn
   environment                     = var.environment
-  owner                          = var.owner
-  workshop_name                  = var.workshop_name
-  domain_name                    = "ec2-management-${var.environment}.${var.base_domain}"
-  api_custom_domain_name         = "ec2-management-api-${var.environment}.${var.base_domain}"
-  base_domain                    = var.base_domain
+  owner                           = var.owner
+  workshop_name                   = var.workshop_name
+  region                          = var.region
+  domain_name                     = "ec2-management-${var.environment}.${var.base_domain}"
+  api_custom_domain_name          = "ec2-management-api-${var.environment}.${var.base_domain}"
+  base_domain                     = var.base_domain
   wait_for_certificate_validation = true # Enable to create API Gateway custom domain
 }
 
@@ -147,6 +166,7 @@ module "monitoring" {
   environment                   = var.environment
   owner                         = var.owner
   workshop_name                 = var.workshop_name
+  region                        = var.region
   stop_old_instances_lambda_arn = module.lambda.stop_old_instances_function_arn
   admin_cleanup_lambda_arn      = module.lambda.admin_cleanup_function_arn
   admin_cleanup_schedule        = var.admin_cleanup_schedule
@@ -160,6 +180,7 @@ module "s3_frontend" {
   environment   = var.environment
   owner         = var.owner
   workshop_name = var.workshop_name
+  region        = var.region
 }
 
 # CloudFront Module - Custom Domain and CDN for Instance Manager
@@ -170,19 +191,19 @@ module "cloudfront_instance_manager" {
     aws.us_east_1 = aws.us_east_1
   }
 
-  environment        = var.environment
-  owner              = var.owner
-  workshop_name      = var.workshop_name
-  domain_name        = "ec2-management-${var.environment}.${var.base_domain}"
+  environment   = var.environment
+  owner         = var.owner
+  workshop_name = var.workshop_name
+  domain_name   = "ec2-management-${var.environment}.${var.base_domain}"
   # Use API Gateway custom domain if available, otherwise fall back to regional endpoint
   # Note: We determine use_api_gateway_custom_domain from input vars to avoid circular dependency
   use_api_gateway_custom_domain = module.api_gateway.api_custom_domain_name != "" && module.api_gateway.wait_for_certificate_validation
   # Always use the regional domain name (known at plan time)
   # When custom domain is created, we'll need to update CloudFront origin in a subsequent apply
   # or use a data source to get the custom domain CloudFront name after it's created
-  api_gateway_domain            = module.api_gateway.api_gateway_domain_name
-  s3_bucket_domain             = module.s3_frontend.bucket_regional_domain_name
-  s3_origin_access_identity    = module.s3_frontend.origin_access_identity_path
+  api_gateway_domain              = module.api_gateway.api_gateway_domain_name
+  s3_bucket_domain                = module.s3_frontend.bucket_regional_domain_name
+  s3_origin_access_identity       = module.s3_frontend.origin_access_identity_path
   wait_for_certificate_validation = true
   # Disable CloudFront logging to avoid conflicts with existing resources
   # Logging is optional and only used for debugging
