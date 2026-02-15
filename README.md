@@ -1,336 +1,1096 @@
 # Cloud Classroom Provisioning
 
-This project provides infrastructure and automation for managing cloud classroom environments in both AWS and Azure. It creates Lambda functions for user management, optional EC2 instance pools with pre-configured Dify AI applications, and automated Terraform backend setup.
+A comprehensive Infrastructure as Code (IaC) solution for provisioning and managing cloud classroom environments on AWS and Azure. This project automates the creation of student accounts, EC2 instance pools with pre-configured applications (Dify AI, Jenkins), and provides a web-based management interface for instructors.
 
-## 🎯 What This Project Does
+## 🎯 Project Goal
 
-- **🏗️ Automated Infrastructure**: Deploy complete cloud classrooms with a single command
-- **👥 User Management**: Lambda functions to create and manage student accounts
-- **🖥️ EC2 Instance Pools**: Pre-configured instances with Dify AI for hands-on learning
-- **🔒 Secure Backend**: Automated Terraform state management with S3 and DynamoDB
-- **🧹 Easy Cleanup**: Destroy resources while preserving backend for reuse
+This project enables educational institutions and training organizations to:
 
-## Quick Start
+- **Automate Classroom Setup**: Deploy complete cloud classroom infrastructure with a single command
+- **Manage Student Accounts**: Automatically create and manage student AWS/Azure accounts with appropriate permissions
+- **Provide Hands-On Learning**: Pre-configure EC2 instances with applications like Dify AI and Jenkins for immediate use
+- **Control Costs**: Automatically stop/terminate idle instances to minimize cloud costs
+- **Simplify Management**: Web-based UI for instructors to manage instances, assignments, and configurations
+- **Support Multiple Workshops**: Deploy different workshop configurations (Testus Patronus, Fellowship, etc.) with isolated resources
 
-### 🚀 Deploy a Complete AWS Classroom
+## 🏗️ Overall Architecture
 
-```bash
-# Deploy with EC2 instance pool (recommended for hands-on classes)
-./scripts/setup_classroom.sh --name my-classroom --cloud aws --region eu-west-3 --with-pool --pool-size 10
+The system follows a **serverless, modular monolith** architecture pattern:
 
-# Deploy Lambda functions only (cost-effective for basic user management)
-./scripts/setup_classroom.sh --name my-classroom --cloud aws --region eu-west-3
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    User Access Layer                         │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
+│  │   Students   │  │  Instructors │  │   Admins     │      │
+│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘      │
+└─────────┼──────────────────┼──────────────────┼──────────────┘
+          │                  │                  │
+          ▼                  ▼                  ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Frontend Layer                          │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │  React SPA (CloudFront + S3)                        │   │
+│  │  - Instance Management UI                            │   │
+│  │  - Workshop Configuration                           │   │
+│  │  - Tutorial Session Management                      │   │
+│  └──────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+          │
+          ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    API Layer                                  │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │  API Gateway (REST API)                              │   │
+│  │  - Routes /api/* requests                            │   │
+│  │  - Custom domain: ec2-management-api.testingfantasy │   │
+│  └──────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────┘
+          │
+          ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Compute Layer                              │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
+│  │   Lambda    │  │   Lambda     │  │   Lambda     │      │
+│  │  Instance   │  │   User       │  │   Cleanup    │      │
+│  │  Manager    │  │  Management  │  │   Functions  │      │
+│  └──────┬──────┘  └──────┬───────┘  └──────┬───────┘      │
+│         │                │                 │               │
+│         └────────────────┼─────────────────┘               │
+│                          │                                 │
+│         ┌────────────────▼─────────────────┐              │
+│         │      EC2 Instance Pool            │              │
+│         │  - Pre-configured applications     │              │
+│         │  - Dify AI, Jenkins, etc.          │              │
+│         └────────────────────────────────────┘              │
+└─────────────────────────────────────────────────────────────┘
+          │
+          ▼
+┌─────────────────────────────────────────────────────────────┐
+│                    Data Layer                                │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
+│  │  DynamoDB    │  │  SSM         │  │  Secrets     │      │
+│  │  - Instance  │  │  Parameter   │  │  Manager     │      │
+│  │    Assignments│  │  Store       │  │  - Passwords │      │
+│  │  - Sessions  │  │  - Templates  │  │  - Configs   │      │
+│  └──────────────┘  └──────────────┘  └──────────────┘      │
+└─────────────────────────────────────────────────────────────┘
 ```
 
-### 🗑️ Destroy Infrastructure
+### Key Components
 
-```bash
-# Destroy classroom infrastructure (keeps Terraform backend for reuse)
-./scripts/setup_classroom.sh --name my-classroom --cloud aws --region eu-west-3 --destroy
+1. **Frontend (React SPA)**: Web-based management interface hosted on S3 and served via CloudFront
+2. **API Gateway**: RESTful API that routes requests to Lambda functions
+3. **Lambda Functions**: Serverless compute for business logic
+4. **EC2 Instances**: Pre-configured compute resources for students
+5. **Data Storage**: DynamoDB for state, SSM for configuration, Secrets Manager for credentials
+6. **Infrastructure as Code**: Terraform modules for reproducible deployments
+
+## 🏛️ AWS Architecture
+
+### Detailed Component Architecture
+
+```mermaid
+flowchart TB
+    subgraph client["Client Access"]
+        User["👤 User<br/>Browser"]
+    end
+
+    subgraph cdn["Content Delivery & Routing"]
+        CF["🌐 CloudFront<br/>CDN Distribution<br/>ec2-management-{env}.testingfantasy.com"]
+        ACM["🔒 ACM Certificate<br/>SSL/TLS (us-east-1)"]
+        Route53["📡 Route53<br/>DNS Management"]
+    end
+
+    subgraph frontend["Frontend Hosting"]
+        S3["🪣 S3 Bucket<br/>Static React App<br/>ec2-manager-frontend-{workshop}-{env}"]
+    end
+
+    subgraph api["API Layer"]
+        APIGW["🚪 API Gateway<br/>REST API<br/>ec2-management-api-{env}.testingfantasy.com"]
+        CF_Func["⚡ CloudFront Function<br/>URL Rewriting"]
+    end
+
+    subgraph compute["Compute Layer"]
+        LambdaIM["⚡ Lambda<br/>Instance Manager<br/>lambda-instance-manager-{workshop}-{env}-{region}"]
+        LambdaStop["⚡ Lambda<br/>Stop Old Instances<br/>lambda-stop-old-instances-{workshop}-{env}-{region}"]
+        LambdaCleanup["⚡ Lambda<br/>Admin Cleanup<br/>lambda-admin-cleanup-{workshop}-{env}-{region}"]
+        LambdaUser["⚡ Lambda<br/>User Management<br/>lambda-user-management-{workshop}-{env}-{region}"]
+        EC2["🖥️ EC2 Instances<br/>{workshop}-pool-{i}<br/>{workshop}-admin-{i}"]
+        ALB["⚖️ Application Load Balancer<br/>Per-Instance HTTPS<br/>{instance-id}.{workshop}.testingfantasy.com"]
+    end
+
+    subgraph data["Data Layer"]
+        DynamoAssign["💾 DynamoDB<br/>Instance Assignments<br/>dynamodb-instance-assignments-{workshop}-{env}-{region}"]
+        DynamoSessions["💾 DynamoDB<br/>Tutorial Sessions<br/>dynamodb-tutorial-sessions-{workshop}-{env}-{region}"]
+        SSM["🔧 SSM Parameter Store<br/>/classroom/templates/{env}<br/>/classroom/{workshop}/{env}/*"]
+        Secrets["🔐 Secrets Manager<br/>classroom/{workshop}/{env}/instance-manager/password"]
+    end
+
+    subgraph monitoring["Monitoring & Automation"]
+        CWEvents["⏰ EventBridge<br/>Scheduled Rules<br/>Stop: Every 5 min<br/>Cleanup: Daily"]
+    end
+
+    subgraph iam["Security"]
+        IAMRole["🛡️ IAM Roles<br/>Least Privilege<br/>lambda-execution-role-{workshop}-{env}-{region}"]
+    end
+
+    %% Client to CDN
+    User -->|"HTTPS"| CF
+    CF -->|"SSL/TLS"| ACM
+    CF -->|"DNS"| Route53
+
+    %% CDN Routing
+    CF -->|"Static Files<br/>(/* paths)"| S3
+    CF -->|"API Calls<br/>(/api/* paths)"| CF_Func
+    CF_Func -->|"Rewrite"| APIGW
+
+    %% API Gateway to Lambda
+    APIGW -->|"Invoke"| LambdaIM
+    APIGW -->|"Invoke"| LambdaUser
+
+    %% Lambda to Data Layer
+    LambdaIM -->|"Read/Write"| DynamoAssign
+    LambdaIM -->|"Read/Write"| DynamoSessions
+    LambdaIM -->|"Get Templates"| SSM
+    LambdaIM -->|"Get Password"| Secrets
+    LambdaIM -->|"Manage Instances"| EC2
+    LambdaIM -->|"Enable HTTPS"| ALB
+
+    %% Scheduled Tasks
+    CWEvents -->|"Trigger"| LambdaStop
+    CWEvents -->|"Trigger"| LambdaCleanup
+    LambdaStop -->|"Stop Instances"| EC2
+    LambdaCleanup -->|"Terminate Instances"| EC2
+
+    %% Lambda Permissions
+    LambdaIM -.->|"Assume Role"| IAMRole
+    LambdaStop -.->|"Assume Role"| IAMRole
+    LambdaCleanup -.->|"Assume Role"| IAMRole
+    LambdaUser -.->|"Assume Role"| IAMRole
+
+    %% ALB to EC2
+    ALB -->|"HTTPS Traffic"| EC2
 ```
 
-## Development Environment Setup
+### Resource Naming Convention
 
-### Option 1: Using GitHub Codespaces (Recommended)
+All AWS resources follow a consistent naming pattern:
 
-GitHub Codespaces provides a pre-configured development environment in the cloud.
+```
+{aws-service-name}-{resource-type}-{workshop-name}-{environment}-{region-code}
+```
 
-1. Navigate to the repository on GitHub
-2. Click the green "Code" button
-3. Select "Create codespace on main"
-4. Wait for the environment to be created
+**Examples:**
+- Lambda Function: `lambda-instance-manager-testus-patronus-dev-euwest1`
+- DynamoDB Table: `dynamodb-instance-assignments-testus-patronus-dev-euwest1`
+- S3 Bucket: `s3-ec2-manager-frontend-testus-patronus-dev-euwest1`
+- IAM Role: `iam-lambda-execution-role-testus-patronus-dev-euwest1`
 
-The Codespace includes:
-- Python 3.9+
-- AWS CLI
-- Azure CLI
-- Terraform
-- Virtual environment management
-- All required VS Code extensions
+**Naming Components:**
+- `{aws-service-name}`: AWS service identifier (lambda, dynamodb, s3, iam, etc.)
+- `{resource-type}`: Specific resource type (instance-manager, instance-assignments, etc.)
+- `{workshop-name}`: Workshop identifier (testus-patronus, fellowship, common)
+- `{environment}`: Environment name (dev, staging, prod)
+- `{region-code}`: Region code without hyphens (euwest1, uswest2, etc.)
 
-### Option 2: Using Dev Containers (Alternative)
+### Component Details
 
-This project includes a `.devcontainer` configuration that provides a consistent development environment.
+#### Frontend & CDN Layer
+- **Amazon CloudFront**: Global CDN serving the React SPA and routing API requests
+  - Custom domain: `ec2-management-{environment}.testingfantasy.com`
+  - SSL/TLS termination via ACM certificates
+- **Amazon S3**: Static website hosting for React application files
+  - Bucket: `s3-ec2-manager-frontend-{workshop}-{env}-{region}`
+  - Versioning and encryption enabled
+- **AWS Certificate Manager (ACM)**: SSL/TLS certificates (must be in `us-east-1` for CloudFront)
+- **Amazon Route53**: DNS management for custom domains
 
-1. Install prerequisites:
-   - [Docker Desktop](https://www.docker.com/products/docker-desktop)
-   - [Visual Studio Code](https://code.visualstudio.com/)
-   - [Remote - Containers extension](https://marketplace.visualstudio.com/items?itemName=ms-vscode-remote.remote-containers)
+#### API Layer
+- **Amazon API Gateway**: REST API endpoint routing `/api/*` requests
+  - Custom domain: `ec2-management-api-{environment}.testingfantasy.com`
+  - Regional endpoint type
+  - CORS enabled for frontend access
+- **CloudFront Function**: URL rewriting for API path routing
 
-2. Open the project in VS Code:
+#### Compute Layer
+- **Instance Manager Lambda**: Core Lambda function handling EC2 lifecycle
+  - Function name: `lambda-instance-manager-{workshop}-{env}-{region}`
+  - Supports both API Gateway and Function URL invocation
+  - Manages instance creation, assignment, deletion, HTTPS setup
+- **Stop Old Instances Lambda**: Scheduled function stopping idle instances
+  - Function name: `lambda-stop-old-instances-{workshop}-{env}-{region}`
+  - Runs every 5 minutes via EventBridge
+- **Admin Cleanup Lambda**: Scheduled function terminating admin instances
+  - Function name: `lambda-admin-cleanup-{workshop}-{env}-{region}`
+  - Runs on configurable schedule (default: weekly)
+- **User Management Lambda**: Creates and manages student accounts
+  - Function name: `lambda-user-management-{workshop}-{env}-{region}`
+  - Workshop-specific (Testus Patronus, Fellowship)
+- **Amazon EC2 Instances**: Pre-configured instances for students
+  - Pool instances: `{workshop}-pool-{i}`
+  - Admin instances: `{workshop}-admin-{i}`
+  - Pre-installed applications: Dify AI, Jenkins, etc.
+- **Application Load Balancer (ALB)**: On-demand HTTPS endpoints
+  - Creates subdomains: `{instance-id}.{workshop}.testingfantasy.com`
+  - Wildcard certificate for `*.testingfantasy.com`
+
+#### Data Layer
+- **DynamoDB - Instance Assignments**: Tracks EC2 instance assignments
+  - Table: `dynamodb-instance-assignments-{workshop}-{env}-{region}`
+  - Hash key: `instance_id`
+  - GSI: `student_name`
+- **DynamoDB - Tutorial Sessions**: Tracks tutorial session metadata
+  - Table: `dynamodb-tutorial-sessions-{workshop}-{env}-{region}`
+  - Hash key: `session_id`
+  - GSI: `workshop_name`
+- **AWS Systems Manager Parameter Store**: Configuration storage
+  - `/classroom/templates/{env}`: Workshop template configurations (AMI, instance type, user_data)
+  - `/classroom/{workshop}/{env}/*`: Workshop-specific timeout settings
+- **AWS Secrets Manager**: Secure credential storage
+  - `classroom/{workshop}/{env}/instance-manager/password`: Instance manager authentication password
+
+#### Monitoring & Automation
+- **Amazon EventBridge**: Scheduled rules triggering cleanup functions
+  - Stop old instances: Every 5 minutes
+  - Admin cleanup: Configurable (default: weekly on Sunday 2 AM)
+
+#### Security
+- **IAM Roles**: Lambda execution roles with least-privilege permissions
+  - Role name: `iam-lambda-execution-role-{workshop}-{env}-{region}`
+  - Permissions: EC2, DynamoDB, SSM, Secrets Manager, ALB management
+  - Instance profiles for EC2 instances
+
+## 🚀 Deployment Guide
+
+### Prerequisites
+
+1. **Install Required Tools:**
    ```bash
-   code .
+   # macOS
+   brew install terraform awscli python3
+   
+   # Linux
+   sudo apt-get update
+   sudo apt-get install terraform awscli python3 python3-pip
    ```
 
-3. When prompted, click "Reopen in Container" or use the command palette (F1) and select "Remote-Containers: Reopen in Container"
-
-The dev container includes:
-- Python 3.9+
-- AWS CLI
-- Azure CLI
-- Terraform
-- Virtual environment management
-
-### Option 3: Local Setup
-
-#### 1. Install Python and Virtual Environment
-
-**macOS (using Homebrew)**:
-```bash
-# Install Homebrew if not installed
-/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-
-# Install Python and Terraform
-brew install python terraform
-
-# Install virtualenv
-pip3 install virtualenv
-```
-
-**Windows**:
-```bash
-# Install Python from https://www.python.org/downloads/
-# During installation, check "Add Python to PATH"
-
-# Install virtualenv
-pip install virtualenv
-```
-
-#### 2. Install AWS CLI
-
-**macOS**:
-```bash
-brew install awscli
-```
-
-**Windows**:
-```bash
-# Download and run the MSI installer from:
-# https://awscli.amazonaws.com/AWSCLIV2.msi
-```
-
-#### 3. Install Azure CLI
-
-**macOS**:
-```bash
-brew install azure-cli
-```
-
-**Windows**:
-```bash
-# Download and run the MSI installer from:
-# https://aka.ms/installazurecliwindows
-```
-
-## Authentication Setup
-
-### AWS Authentication
-
-1. Configure AWS credentials:
+2. **Configure AWS Credentials:**
    ```bash
    aws configure
+   # Enter your AWS Access Key ID, Secret Access Key, and default region
+   
+   # Verify access
+   aws sts get-caller-identity
    ```
-   You'll need:
-   - AWS Access Key ID
-   - AWS Secret Access Key
-   - Default region (e.g., eu-west-3)
-   - Default output format (json)
 
-2. Or use environment variables:
+3. **Verify Terraform:**
    ```bash
-   export AWS_ACCESS_KEY_ID="your_access_key"
-   export AWS_SECRET_ACCESS_KEY="your_secret_key"
-   export AWS_DEFAULT_REGION="your_region"
+   terraform version  # Should be >= 1.0.0
    ```
 
-### Azure Authentication
+### Quick Start: Deploy a Complete Classroom
 
-1. Login to Azure:
-   ```bash
-   az login
-   ```
-   This will open a browser window for authentication.
-
-2. Set subscription:
-   ```bash
-   az account set --subscription "your-subscription-id"
-   ```
-
-## 📋 Complete Deployment Guide
-
-### Step-by-Step AWS Deployment
-
-#### 1. Prerequisites Setup
-
-**Install Required Tools:**
-```bash
-# macOS (using Homebrew)
-brew install terraform awscli
-
-# Or follow the Development Environment Setup section below
-```
-
-**Configure AWS Credentials:**
-```bash
-# Option 1: Interactive configuration
-aws configure
-
-# Option 2: Environment variables
-export AWS_ACCESS_KEY_ID="your_access_key"
-export AWS_SECRET_ACCESS_KEY="your_secret_key"
-export AWS_DEFAULT_REGION="eu-west-3"
-```
-
-**Verify Setup:**
-```bash
-# Test AWS access
-aws sts get-caller-identity
-
-# Test Terraform
-terraform version
-```
-
-#### 2. Deploy Your Classroom
-
-**🎓 For Teaching/Training (with EC2 instances):**
+**For Teaching/Training (with EC2 instances):**
 ```bash
 ./scripts/setup_classroom.sh \
-  --name production-class \
+  --name my-classroom \
   --cloud aws \
-  --region eu-west-3 \
+  --region eu-west-1 \
+  --environment dev \
   --with-pool \
-  --pool-size 15
+  --pool-size 10
 ```
 
-**💰 For Development/Testing (Lambda only):**
+**For Development/Testing (Lambda only, no EC2 costs):**
 ```bash
 ./scripts/setup_classroom.sh \
-  --name dev-class \
+  --name dev-test \
   --cloud aws \
-  --region eu-west-3
+  --region eu-west-1 \
+  --environment dev
 ```
 
-**Note:** Each workshop deployment creates its own DynamoDB table
-`instance-assignments-<workshop>-<env>` and SSM parameters under
-`/classroom/<workshop>/<env>/...`. If these are missing, the Lambdas
-cannot assign instances.
+### Step-by-Step Deployment Process
 
-#### 3. What Gets Created
+The `setup_classroom.sh` script automates the entire deployment process:
 
-**Terraform Backend (Automatic):**
-- 🪣 S3 Bucket: `terraform-state-{classroom}-{timestamp}`
-- 🔒 DynamoDB Table: `terraform-locks-{classroom}`
-- 🔐 Encryption and versioning enabled
+1. **Backend Setup** (Automatic):
+   - Creates S3 bucket for Terraform state: `terraform-state-classroom-shared-{region}`
+   - Creates DynamoDB table for state locking: `terraform-locks-classroom-shared`
+   - Enables encryption and versioning
 
-**Main Infrastructure:**
-- ⚡ Lambda Functions: User management, status checking, cleanup
-- 🖥️ EC2 Instances: Pre-configured with Dify AI (if `--with-pool`)
-- 👤 IAM Roles: Secure permissions for all services
-- 📊 DynamoDB Tables: Instance assignments and tracking
-- 🔧 SSM Parameters: Configuration storage
+2. **Lambda Packaging** (Automatic):
+   - Packages Python Lambda functions with dependencies
+   - Creates ZIP files in `functions/packages/`
 
-#### 4. Access Your Classroom
+3. **Infrastructure Deployment** (Automatic):
+   - Deploys common infrastructure (EC2 manager, API Gateway, CloudFront)
+   - Deploys workshop-specific infrastructure (user management, status functions)
+   - Creates EC2 instance pool (if `--with-pool` specified)
 
-After deployment, you'll receive:
+4. **Frontend Deployment** (Automatic):
+   - Builds React application
+   - Uploads to S3 bucket
+   - Invalidates CloudFront cache
+
+### Deployment Options
+
+**Environment Selection:**
 ```bash
-=== DEPLOYMENT SUCCESSFUL ===
+# Deploy to dev environment (default)
+./scripts/setup_classroom.sh --name my-class --cloud aws --environment dev
 
-User Management Lambda URL:
-https://abc123.lambda-url.eu-west-3.on.aws/
+# Deploy to staging environment
+./scripts/setup_classroom.sh --name my-class --cloud aws --environment staging
 
-Status Lambda URL:
-https://def456.lambda-url.eu-west-3.on.aws/
-
-Instance Manager Lambda URL:
-https://xyz789.lambda-url.eu-west-3.on.aws/
-  Frontend UI: https://xyz789.lambda-url.eu-west-3.on.aws/ui
-
-Custom Domain (CloudFront):
-https://ec2-management.testingfantasy.com
-  (Requires DNS configuration - see below)
-
-EC2 Pool Information:
-Pool Size: 15 instances
+# Deploy to production environment
+./scripts/setup_classroom.sh --name my-class --cloud aws --environment prod
 ```
 
-**🌐 Setting Up Custom Domain (CloudFront):**
+**Partial Deployments:**
+```bash
+# Deploy only common infrastructure (EC2 manager)
+./scripts/setup_classroom.sh --name my-class --cloud aws --only-common
 
-The Instance Manager is available via a custom domain `ec2-management.testingfantasy.com` using CloudFront. To complete the setup:
+# Deploy only workshop infrastructure
+./scripts/setup_classroom.sh --name my-class --cloud aws --only-workshop
+```
 
-1. **After first `terraform apply`, get the DNS validation records:**
+**Workshop Selection:**
+```bash
+# Deploy Testus Patronus workshop (default)
+./scripts/setup_classroom.sh --name my-class --cloud aws --workshop testus_patronus
+
+# Deploy Fellowship workshop
+./scripts/setup_classroom.sh --name my-class --cloud aws --workshop fellowship
+```
+
+### Post-Deployment: Setting Up Custom Domain
+
+After deployment, you'll need to configure DNS for the custom domain:
+
+1. **Get ACM Certificate Validation Records:**
    ```bash
-   cd iac/aws/workshops/testus_patronus
-   terraform output acm_certificate_validation_records
+   cd iac/aws
+   terraform output instance_manager_acm_certificate_validation_records
    ```
 
-2. **Add DNS validation record to GoDaddy:**
-   
-   **If the "Añadir un registro nuevo" button is greyed out:**
-   
-   **Option A: Check Domain Lock Status**
-   - Go to "Configuración de registro" (Registration configuration) tab
-   - Look for "Bloqueo de dominio" (Domain lock) or "Registro protegido" (Protected registration)
-   - If locked, temporarily unlock it to add DNS records
-   
-   **Option B: Use Direct DNS Management**
-   - Navigate to: `https://dcc.godaddy.com/manage/testingfantasy.com/dns`
-   - Or go to: Domain Settings → DNS → Manage DNS
-   - Click "Add" or "+" button to add a new record
-   
-   **Option C: Use GoDaddy API or Contact Support**
-   - If buttons remain greyed out, contact GoDaddy support
-   - Or use GoDaddy's API to add the record programmatically
-   
-   **Add the CNAME record:**
-   - **Type**: `CNAME`
-   - **Name**: `_add7b2dcf428fa760e92d0013697ce93.ec2-management` (from terraform output, remove trailing dot)
-   - **Value**: `_33d59d59fde28e92099116f13c9f1416.jkddzztszm.acm-validations.aws.` (from terraform output, include trailing dot)
-   - **TTL**: `600` (or 1 hour)
+2. **Add DNS Validation Record:**
+   - Add the CNAME record to your DNS provider (Route53/GoDaddy)
+   - Wait for certificate validation (5-40 minutes)
 
-3. **Wait for certificate validation (5-40 minutes), then run:**
+3. **Complete Deployment:**
    ```bash
-   terraform apply  # This will complete certificate validation
+   cd iac/aws
+   terraform apply  # Completes certificate validation
    ```
 
-4. **Get CloudFront domain name:**
+4. **Get CloudFront Domain:**
    ```bash
    terraform output instance_manager_cloudfront_domain
    ```
 
-5. **Add final CNAME record in GoDaddy:**
-   - **Name**: `ec2-management`
-   - **Value**: `<cloudfront-domain-from-step-4>` (e.g., `d1234567890.cloudfront.net`)
-   - **TTL**: 600
+5. **Add Final CNAME Record:**
+   - Name: `ec2-management-{environment}`
+   - Value: `<cloudfront-domain-from-step-4>`
 
-6. **Access your Instance Manager:**
+6. **Access Your Instance Manager:**
+   - URL: `https://ec2-management-{environment}.testingfantasy.com`
    - Wait 5-15 minutes for DNS propagation
-   - Visit: `https://ec2-management.testingfantasy.com/ui`
 
-#### 5. Manage Students
-
-**Create Student Accounts:**
-1. Visit the User Management Lambda URL
-2. Students get assigned EC2 instances automatically
-3. They receive Dify AI access credentials
-4. Monitor usage via Status Lambda URL
-
-#### 6. Cleanup When Done
+### Destroying Infrastructure
 
 ```bash
-# Destroy classroom (keeps backend for reuse)
-./scripts/setup_classroom.sh --name production-class --cloud aws --destroy
-
-# Optional: Clean up users if needed
-./scripts/cleanup_aws_users.sh
+# Destroy classroom infrastructure (keeps backend for reuse)
+./scripts/setup_classroom.sh \
+  --name my-classroom \
+  --cloud aws \
+  --region eu-west-1 \
+  --environment dev \
+  --destroy
 ```
 
-## 📋 Scripts Documentation
+## 📖 Usage Guide
 
-### Main Deployment Script
+### For Instructors: Managing Classrooms
+
+1. **Access the Instance Manager:**
+   - Navigate to: `https://ec2-management-{environment}.testingfantasy.com`
+   - Login with the password from AWS Secrets Manager
+
+2. **Create Tutorial Sessions:**
+   - Click "Create Tutorial Session"
+   - Configure pool size, admin count, cleanup days
+   - Session manages instance lifecycle automatically
+
+3. **Manage EC2 Instances:**
+   - View all instances (pool, admin, assigned)
+   - Create new instances on-demand
+   - Assign instances to students
+   - Enable HTTPS for individual instances
+   - Delete instances when no longer needed
+
+4. **Configure Timeout Settings:**
+   - Set stop timeout (default: 4 minutes)
+   - Set terminate timeout (default: 20 minutes)
+   - Set hard terminate timeout (default: 45 minutes)
+
+### For Students: Accessing Resources
+
+1. **Get User Account:**
+   - Visit the User Management Lambda URL (provided by instructor)
+   - Get assigned EC2 instance details
+   - Receive Dify AI or Jenkins access credentials
+
+2. **Access EC2 Instance:**
+   - Via HTTPS (if enabled): `https://{instance-id}.{workshop}.testingfantasy.com`
+   - Via SSH (if configured): Use provided credentials
+
+### API Usage
+
+The Instance Manager API can be accessed directly:
+
+**Base URLs:**
+- API Gateway: `https://ec2-management-api-{environment}.testingfantasy.com/api`
+- Lambda Function URL: `https://{function-id}.lambda-url.{region}.on.aws/api`
+
+**Authentication:**
+All endpoints (except `/api/health` and `/api/login`) require password authentication.
+
+**Example: List Instances**
+```bash
+curl -X GET "https://ec2-management-api-dev.testingfantasy.com/api/list?password=YOUR_PASSWORD"
+```
+
+**Example: Create Instance**
+```bash
+curl -X POST "https://ec2-management-api-dev.testingfantasy.com/api/create" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "password": "YOUR_PASSWORD",
+    "workshop_name": "testus_patronus",
+    "instance_type": "t3.small",
+    "count": 1
+  }'
+```
+
+## 🏗️ Terraform Structure
+
+### Directory Organization
+
+```
+iac/
+├── aws/                          # AWS Infrastructure (Root Module)
+│   ├── main.tf                   # Root module (includes common + workshops)
+│   ├── backend.tf                # Terraform backend configuration
+│   ├── variables.tf              # Root variables
+│   ├── outputs.tf                # Aggregate outputs
+│   ├── terraform.tfvars          # Configuration values
+│   ├── modules/                  # Reusable Terraform modules
+│   │   ├── common/               # Common infrastructure module
+│   │   │   ├── main.tf           # Module definition
+│   │   │   ├── variables.tf      # Module inputs
+│   │   │   ├── outputs.tf        # Module outputs
+│   │   │   └── ...               # Other module files
+│   │   ├── workshop/             # Parameterized workshop module
+│   │   ├── compute/              # EC2 and security groups
+│   │   ├── storage/              # DynamoDB, SSM, Secrets Manager
+│   │   ├── lambda/               # Lambda functions
+│   │   ├── api-gateway/          # API Gateway configuration
+│   │   ├── cloudfront/           # CloudFront distributions
+│   │   ├── s3/                   # S3 buckets
+│   │   ├── iam/                  # IAM roles and policies
+│   │   ├── iam-lambda/           # Lambda execution roles
+│   │   └── monitoring/           # EventBridge rules
+│   └── workshops/                # Workshop-specific files
+│       ├── fellowship/
+│       │   └── user_data.sh      # EC2 user data script
+│       └── testus_patronus/
+│           └── user_data.sh      # EC2 user data script
+├── backend/                      # Terraform Backend Setup
+│   ├── aws/                      # AWS backend (S3 + DynamoDB)
+│   │   ├── main.tf               # Backend resources
+│   │   ├── variables.tf          # Backend configuration
+│   │   └── terraform.tfvars.example
+│   └── azure/                    # Azure backend
+└── azure/                        # Azure Infrastructure
+```
+
+### Root Module Structure
+
+The `iac/aws/main.tf` file orchestrates all infrastructure:
+
+```hcl
+# Common Infrastructure Module
+module "common" {
+  source = "./modules/common"
+  # ... common infrastructure variables
+}
+
+# Fellowship Workshop Module
+module "workshop_fellowship" {
+  source = "./modules/workshop"
+  depends_on = [module.common]
+  # ... fellowship-specific variables
+}
+
+# Testus Patronus Workshop Module
+module "workshop_testus_patronus" {
+  source = "./modules/workshop"
+  depends_on = [module.common]
+  # ... testus_patronus-specific variables
+}
+```
+
+### Module Organization
+
+**Common Module** (`modules/common/`):
+- EC2 Instance Manager (Lambda, API Gateway, CloudFront)
+- Shared S3 bucket for frontend
+- Common security groups and IAM roles
+- Shared DynamoDB tables and SSM parameters
+
+**Workshop Module** (`modules/workshop/`):
+- User Management Lambda function
+- Status checking Lambda function
+- Workshop-specific CloudFront distributions
+- Workshop-specific DynamoDB tables
+- Workshop-specific SSM parameters
+
+**Reusable Modules**:
+- `compute/`: EC2 instances, security groups, instance profiles
+- `storage/`: DynamoDB tables, SSM parameters, Secrets Manager
+- `lambda/`: Lambda function definitions
+- `api-gateway/`: API Gateway REST API configuration
+- `cloudfront/`: CloudFront distributions and functions
+- `s3/`: S3 bucket configuration
+- `iam/`: IAM roles and policies
+- `monitoring/`: EventBridge scheduled rules
+
+### Backend Configuration
+
+Terraform state is stored remotely in S3:
+
+```hcl
+terraform {
+  backend "s3" {
+    bucket         = "terraform-state-classroom-shared-{region}"
+    key            = "classroom/{environment}/terraform.tfstate"
+    region         = "eu-west-1"
+    dynamodb_table = "terraform-locks-classroom-shared"
+    encrypt        = true
+  }
+}
+```
+
+**State Management:**
+- Separate state files per environment: `classroom/dev/terraform.tfstate`, `classroom/staging/terraform.tfstate`
+- State locking via DynamoDB prevents concurrent modifications
+- Versioning enabled for state file history
+
+### Variable Configuration
+
+**Root Variables** (`iac/aws/variables.tf`):
+- Environment configuration (dev, staging, prod)
+- Region and domain settings
+- Workshop-specific configurations
+- EC2 instance types and pool sizes
+- Timeout settings
+
+**Configuration File** (`iac/aws/terraform.tfvars`):
+```hcl
+environment = "dev"
+owner       = "admin"
+region      = "eu-west-1"
+```
+
+### Outputs
+
+**Root Outputs** (`iac/aws/outputs.tf`):
+- Instance Manager URLs (Lambda, API Gateway, CloudFront)
+- Workshop-specific Lambda URLs
+- S3 bucket names
+- Security group IDs
+- Template configurations
+
+**Access Outputs:**
+```bash
+cd iac/aws
+terraform output instance_manager_url
+terraform output instance_manager_custom_url
+terraform output testus_patronus_lambda_function_url
+```
+
+## 🔌 API Documentation
+
+### Instance Manager API
+
+The Instance Manager API provides RESTful endpoints for managing EC2 instances, tutorial sessions, and configurations.
+
+**Base URL:**
+- API Gateway: `https://ec2-management-api-{environment}.testingfantasy.com/api`
+- Lambda Function URL: `https://{function-id}.lambda-url.{region}.on.aws/api`
+
+**Authentication:**
+Most endpoints require password authentication via:
+- Query parameter: `?password=YOUR_PASSWORD` (GET requests)
+- Request body: `{"password": "YOUR_PASSWORD"}` (POST requests)
+
+### Endpoints
+
+#### Health Check
+```http
+GET /api/health
+```
+**Description:** Check if the API is healthy (no authentication required)
+
+**Response:**
+```json
+{
+  "status": "ok",
+  "timestamp": "2024-01-15T10:30:00Z",
+  "environment": "dev",
+  "workshop_name": "testus_patronus",
+  "region": "eu-west-1",
+  "message": "Instance Manager API is healthy"
+}
+```
+
+#### Login
+```http
+POST /api/login
+Content-Type: application/json
+
+{
+  "password": "YOUR_PASSWORD"
+}
+```
+**Description:** Authenticate with password (no authentication required for this endpoint)
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Authentication successful"
+}
+```
+
+#### Get Workshop Templates
+```http
+GET /api/templates
+```
+**Description:** Get available workshop templates from SSM Parameter Store
+
+**Response:**
+```json
+{
+  "success": true,
+  "templates": {
+    "testus_patronus": {
+      "workshop_name": "testus_patronus",
+      "ami_id": "ami-12345678",
+      "instance_type": "t3.small",
+      "app_port": 80,
+      "user_data_base64": "..."
+    },
+    "fellowship": {
+      "workshop_name": "fellowship",
+      "ami_id": "ami-87654321",
+      "instance_type": "t3.small",
+      "app_port": 8080,
+      "user_data_base64": "..."
+    }
+  }
+}
+```
+
+#### List Instances
+```http
+GET /api/list?password=YOUR_PASSWORD&include_terminated=false
+```
+**Description:** List all EC2 instances (requires authentication)
+
+**Query Parameters:**
+- `password` (required): Authentication password
+- `include_terminated` (optional): Include terminated instances (default: false)
+
+**Response:**
+```json
+{
+  "success": true,
+  "instances": [
+    {
+      "instance_id": "i-1234567890abcdef0",
+      "state": "running",
+      "instance_type": "t3.small",
+      "workshop_name": "testus_patronus",
+      "tags": {
+        "Type": "pool",
+        "WorkshopID": "testus_patronus"
+      },
+      "assigned_to": null,
+      "assigned_at": null
+    }
+  ]
+}
+```
+
+#### Create Instances
+```http
+POST /api/create
+Content-Type: application/json
+
+{
+  "password": "YOUR_PASSWORD",
+  "workshop_name": "testus_patronus",
+  "instance_type": "t3.small",
+  "count": 1
+}
+```
+**Description:** Create new EC2 instances (requires authentication)
+
+**Request Body:**
+- `password` (required): Authentication password
+- `workshop_name` (required): Workshop identifier
+- `instance_type` (optional): EC2 instance type (default: from template)
+- `count` (optional): Number of instances to create (default: 1)
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Created 1 instance(s)",
+  "instances": ["i-1234567890abcdef0"]
+}
+```
+
+#### Assign Instance
+```http
+POST /api/assign
+Content-Type: application/json
+
+{
+  "password": "YOUR_PASSWORD",
+  "instance_id": "i-1234567890abcdef0",
+  "student_name": "student-001"
+}
+```
+**Description:** Assign an EC2 instance to a student (requires authentication)
+
+**Request Body:**
+- `password` (required): Authentication password
+- `instance_id` (required): EC2 instance ID
+- `student_name` (required): Student identifier
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Instance assigned successfully",
+  "instance_id": "i-1234567890abcdef0",
+  "student_name": "student-001"
+}
+```
+
+#### Delete Instances
+```http
+POST /api/delete
+Content-Type: application/json
+
+{
+  "password": "YOUR_PASSWORD",
+  "instance_ids": ["i-1234567890abcdef0"]
+}
+```
+**Description:** Delete one or more EC2 instances (requires authentication)
+
+**Request Body:**
+- `password` (required): Authentication password
+- `instance_ids` (required): Array of EC2 instance IDs
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Deleted 1 instance(s)",
+  "deleted_instances": ["i-1234567890abcdef0"]
+}
+```
+
+#### Bulk Delete
+```http
+POST /api/bulk_delete
+Content-Type: application/json
+
+{
+  "password": "YOUR_PASSWORD",
+  "workshop_name": "testus_patronus",
+  "instance_type": "pool"
+}
+```
+**Description:** Bulk delete instances by criteria (requires authentication)
+
+**Request Body:**
+- `password` (required): Authentication password
+- `workshop_name` (optional): Filter by workshop
+- `instance_type` (optional): Filter by type (pool, admin, assigned)
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Deleted 5 instance(s)",
+  "deleted_instances": ["i-1234567890abcdef0", ...]
+}
+```
+
+#### Enable HTTPS
+```http
+POST /api/enable_https
+Content-Type: application/json
+
+{
+  "password": "YOUR_PASSWORD",
+  "instance_id": "i-1234567890abcdef0",
+  "workshop_name": "testus_patronus"
+}
+```
+**Description:** Enable HTTPS access for an EC2 instance via ALB (requires authentication)
+
+**Request Body:**
+- `password` (required): Authentication password
+- `instance_id` (required): EC2 instance ID
+- `workshop_name` (required): Workshop identifier
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "HTTPS enabled successfully",
+  "domain": "i-1234567890abcdef0.testus-patronus.testingfantasy.com"
+}
+```
+
+#### Disable HTTPS
+```http
+POST /api/delete_https
+Content-Type: application/json
+
+{
+  "password": "YOUR_PASSWORD",
+  "instance_id": "i-1234567890abcdef0"
+}
+```
+**Description:** Disable HTTPS access for an EC2 instance (requires authentication)
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "HTTPS disabled successfully"
+}
+```
+
+#### Get Timeout Settings
+```http
+GET /api/timeout_settings?password=YOUR_PASSWORD&workshop_name=testus_patronus
+```
+**Description:** Get timeout settings for a workshop (requires authentication)
+
+**Response:**
+```json
+{
+  "success": true,
+  "settings": {
+    "stop_timeout_minutes": 4,
+    "terminate_timeout_minutes": 20,
+    "hard_terminate_timeout_minutes": 45,
+    "admin_cleanup_interval_days": 7
+  }
+}
+```
+
+#### Update Timeout Settings
+```http
+POST /api/update_timeout_settings
+Content-Type: application/json
+
+{
+  "password": "YOUR_PASSWORD",
+  "workshop_name": "testus_patronus",
+  "stop_timeout_minutes": 10,
+  "terminate_timeout_minutes": 30
+}
+```
+**Description:** Update timeout settings for a workshop (requires authentication)
+
+**Response:**
+```json
+{
+  "success": true,
+  "message": "Timeout settings updated successfully"
+}
+```
+
+#### Tutorial Session Management
+
+**Create Tutorial Session:**
+```http
+POST /api/create_tutorial_session
+Content-Type: application/json
+
+{
+  "password": "YOUR_PASSWORD",
+  "workshop_name": "testus_patronus",
+  "pool_count": 10,
+  "admin_count": 2,
+  "cleanup_days": 7
+}
+```
+
+**List Tutorial Sessions:**
+```http
+GET /api/tutorial_sessions?password=YOUR_PASSWORD&workshop_name=testus_patronus
+```
+
+**Get Tutorial Session:**
+```http
+GET /api/tutorial_session/{session_id}?password=YOUR_PASSWORD
+```
+
+**Delete Tutorial Session:**
+```http
+DELETE /api/tutorial_session/{session_id}
+Content-Type: application/json
+
+{
+  "password": "YOUR_PASSWORD"
+}
+```
+
+### OpenAPI Specification
+
+The API provides an OpenAPI/Swagger specification:
+
+```http
+GET /api/swagger.json
+```
+
+Access the specification at: `https://ec2-management-api-{environment}.testingfantasy.com/api/swagger.json`
+
+## 🎨 Frontend Documentation
+
+### React Application Structure
+
+The frontend is a React Single Page Application (SPA) built with Vite and deployed to S3/CloudFront.
+
+**Directory Structure:**
+```
+frontend/ec2-manager/
+├── src/
+│   ├── pages/                    # Page components
+│   │   ├── Landing.jsx          # Landing page
+│   │   ├── Login.jsx            # Login page
+│   │   ├── WorkshopDashboard.jsx # Main dashboard
+│   │   ├── WorkshopConfig.jsx   # Workshop configuration
+│   │   ├── TutorialDashboard.jsx # Tutorial session dashboard
+│   │   └── TutorialSessionForm.jsx # Create/edit sessions
+│   ├── components/               # Reusable components
+│   │   ├── Header.jsx           # Navigation header
+│   │   └── SettingsModal.jsx   # Settings modal
+│   ├── services/                # API and authentication
+│   │   ├── api.js               # API client
+│   │   └── auth.jsx             # Authentication context
+│   ├── App.jsx                  # Main app component
+│   └── index.jsx                # Entry point
+├── package.json                 # Dependencies
+├── vite.config.js              # Vite configuration
+└── README.md                    # Frontend-specific docs
+```
+
+### Local Development
+
+1. **Install Dependencies:**
+   ```bash
+   cd frontend/ec2-manager
+   npm install
+   ```
+
+2. **Run Development Server:**
+   ```bash
+   npm run dev
+   ```
+   The app will be available at `http://localhost:5173`
+
+3. **Build for Production:**
+   ```bash
+   npm run build
+   ```
+   Creates optimized production build in `dist/` directory
+
+### Frontend Features
+
+**Pages:**
+- **Landing**: Welcome page with project information
+- **Login**: Password-based authentication
+- **Workshop Dashboard**: Main interface for managing instances
+  - View all instances (pool, admin, assigned)
+  - Create new instances
+  - Assign instances to students
+  - Enable/disable HTTPS
+  - Delete instances
+- **Workshop Config**: Configure workshop templates and settings
+- **Tutorial Dashboard**: Manage tutorial sessions
+- **Tutorial Session Form**: Create and edit tutorial sessions
+
+**Components:**
+- **Header**: Navigation and branding
+- **Settings Modal**: Configure timeout settings
+
+**Services:**
+- **API Client** (`api.js`): Handles all API requests
+  - Automatic password injection
+  - Error handling
+  - CORS support
+- **Authentication** (`auth.jsx`): Manages authentication state
+  - Session storage for password
+  - Automatic authentication check
+  - Login/logout functionality
+
+### Environment Variables
+
+**Build-time Variables:**
+- `VITE_API_URL`: API base URL (default: `/api` for relative paths)
+  - Production: `https://ec2-management-api-{environment}.testingfantasy.com/api`
+  - Development: `/api` (proxied through Vite dev server)
+
+**Example Build:**
+```bash
+export VITE_API_URL="https://ec2-management-api-dev.testingfantasy.com/api"
+npm run build
+```
+
+### Deployment
+
+The frontend is automatically deployed during infrastructure setup. Manual deployment:
+
+```bash
+./scripts/build_frontend.sh --environment dev --region eu-west-1
+```
+
+**Deployment Process:**
+1. Builds React application with production optimizations
+2. Uploads static files to S3 bucket
+3. Sets appropriate cache headers (immutable for assets, no-cache for HTML)
+4. Invalidates CloudFront cache
+
+## 📜 Scripts Documentation
+
+### Main Deployment Scripts
 
 #### `setup_classroom.sh` - Master Deployment Script
 
-This is the **main entry point** that orchestrates the entire deployment process.
+**Purpose:** Main entry point for deploying or destroying classroom infrastructure.
 
 **Usage:**
 ```bash
@@ -346,8 +1106,10 @@ This is the **main entry point** that orchestrates the entire deployment process
 - `--environment`: Environment name (`dev`, `staging`, `prod`, default: `dev`)
 - `--with-pool`: Create EC2 instance pool for students
 - `--pool-size`: Number of EC2 instances (default: 40)
+- `--workshop`: Workshop identifier (default: `testus_patronus`)
 - `--only-common`: Apply/destroy only the common stack
 - `--only-workshop`: Apply/destroy only the workshop stack
+- `--skip-packaging`: Skip Lambda packaging (use existing packages)
 
 **Common Options:**
 - `--destroy`: Destroy infrastructure instead of creating
@@ -356,135 +1118,153 @@ This is the **main entry point** that orchestrates the entire deployment process
 
 **Examples:**
 ```bash
-# Full classroom with 20 EC2 instances
-./scripts/setup_classroom.sh --name spring-2024 --cloud aws --region eu-west-3 --with-pool --pool-size 20
+# Full deployment with EC2 pool
+./scripts/setup_classroom.sh \
+  --name spring-2024 \
+  --cloud aws \
+  --region eu-west-1 \
+  --environment dev \
+  --with-pool \
+  --pool-size 20
 
-# Lambda-only deployment (no EC2 costs)
-./scripts/setup_classroom.sh --name dev-test --cloud aws --region eu-west-3
+# Lambda-only deployment
+./scripts/setup_classroom.sh \
+  --name dev-test \
+  --cloud aws \
+  --region eu-west-1 \
+  --environment dev
 
-# Staging environment (separate state)
-./scripts/setup_classroom.sh --name dev-test --cloud aws --region eu-west-3 --environment staging
-
-# Destroy everything
-./scripts/setup_classroom.sh --name spring-2024 --cloud aws --destroy
+# Destroy infrastructure
+./scripts/setup_classroom.sh \
+  --name spring-2024 \
+  --cloud aws \
+  --region eu-west-1 \
+  --environment dev \
+  --destroy
 ```
-
-### AWS-Specific Scripts
 
 #### `setup_aws.sh` - AWS Infrastructure Deployment
 
-**⚠️ Note:** This script is called automatically by `setup_classroom.sh`. You typically don't need to run it directly.
-
-Handles AWS-specific deployment including automated Terraform backend setup.
+**Purpose:** Handles AWS-specific deployment including backend setup, Lambda packaging, and infrastructure deployment.
 
 **Usage:**
 ```bash
 ./scripts/setup_aws.sh <classroom-name> <region> [create|destroy] [OPTIONS]
 ```
 
-**What it does automatically:**
+**What It Does:**
 
-1. **🏗️ Backend Setup** (First Time):
-   ```bash
-   # Creates in iac/backend/aws/
-   - S3 Bucket: terraform-state-classroom-shared
-   - DynamoDB Table: terraform-locks-classroom-shared
-   - S3 Bucket: terraform-state-{classroom}
-   - DynamoDB Table: terraform-locks-{classroom}
-   - Encryption and versioning enabled
-   ```
+1. **Backend Setup:**
+   - Creates S3 bucket: `terraform-state-classroom-shared-{region}`
+   - Creates DynamoDB table: `terraform-locks-classroom-shared`
+   - Enables encryption and versioning
 
-2. **📦 Lambda Packaging**:
-   ```bash
-   # Creates in functions/packages/
-   - classroom_user_management.zip
-   - testus_patronus_status.zip  
-   - classroom_stop_old_instances.zip
-   ```
+2. **Lambda Packaging:**
+   - Calls `package_lambda.sh` to create deployment packages
+   - Packages all Lambda functions with dependencies
 
-3. **🔧 Backend Configuration**:
-   ```bash
-   # Auto-generates iac/aws/workshops/<workshop>/backend.tf
-   terraform {
-     backend "s3" {
-       bucket         = "terraform-state-classroom-123456"
-      key            = "classroom/my-class/terraform.tfstate"  # dev (default)
-       region         = "eu-west-3"
-       dynamodb_table = "terraform-locks-my-class"
-       encrypt        = true
-     }
-   }
-   ```
-   For non-dev environments, the key becomes `classroom/my-class/<env>/terraform.tfstate`.
+3. **Backend Configuration:**
+   - Generates `iac/aws/backend.tf` with correct state path
+   - Configures remote state backend
 
-4. **🚀 Infrastructure Deployment**:
-   ```bash
-   # Deploys resources for the selected workshop
-   cd iac/aws/workshops/testus_patronus
-   terraform init
-   terraform apply -auto-approve
-   ```
+4. **Infrastructure Deployment:**
+   - Runs `terraform init` and `terraform apply`
+   - Deploys common and workshop infrastructure
 
 **Options:**
-- `--environment <dev|staging|prod>`: Environment name (default: `dev`)
-- `--only-common`: Apply/destroy only the common stack
-- `--only-workshop`: Apply/destroy only the workshop stack
+- `--environment <dev|staging|prod>`: Environment name
+- `--only-common`: Deploy only common infrastructure
+- `--only-workshop`: Deploy only workshop infrastructure
 - `--with-pool`: Include EC2 instance pool
-- `--pool-size <number>`: Number of EC2 instances (default: 4)
-- `--skip-packaging`: Skip Lambda function packaging (use existing packages)
-- `--workshop <name>`: Workshop root under `iac/aws/workshops` (default: `testus_patronus`)
+- `--pool-size <number>`: Number of EC2 instances
+- `--skip-packaging`: Skip Lambda packaging
+- `--workshop <name>`: Workshop identifier
 
-**Direct Usage Examples:**
+**Direct Usage:**
 ```bash
-# Full deployment with 15 instances
-./scripts/setup_aws.sh my-class eu-west-3 create --with-pool --pool-size 15
+# Full deployment
+./scripts/setup_aws.sh my-classroom eu-west-1 create \
+  --environment dev \
+  --with-pool \
+  --pool-size 15
 
-# Lambda-only deployment
-./scripts/setup_aws.sh my-class eu-west-3 create
-
-# Staging environment (separate state)
-./scripts/setup_aws.sh my-class eu-west-3 create --environment staging
-
-# Destroy infrastructure (preserves backend for reuse)
-./scripts/setup_aws.sh my-class eu-west-3 destroy
-
-# Skip packaging (faster if packages already exist)
-./scripts/setup_aws.sh my-class eu-west-3 create --skip-packaging
+# Destroy infrastructure
+./scripts/setup_aws.sh my-classroom eu-west-1 destroy --environment dev
 ```
 
 #### `package_lambda.sh` - Lambda Function Packaging
 
-**⚠️ Note:** This script is called automatically by `setup_aws.sh`. You rarely need to run it directly.
-
-Packages Python Lambda functions with their dependencies into deployment-ready ZIP files.
+**Purpose:** Packages Python Lambda functions with their dependencies into deployment-ready ZIP files.
 
 **Usage:**
 ```bash
-./scripts/package_lambda.sh --cloud aws
+./scripts/package_lambda.sh --cloud [aws|azure]
 ```
 
-**What it does:**
-1. **Creates Virtual Environment**: Isolates Python dependencies
-2. **Installs Dependencies**: From `functions/aws/requirements.txt`
-3. **Packages Functions**: Creates ZIP files with code + dependencies
-4. **Validates Packages**: Ensures all dependencies are included
+**What It Does:**
 
-**Output Files:**
-```bash
+1. **Creates Virtual Environment:** Isolates Python dependencies
+2. **Installs Dependencies:** From `functions/aws/requirements.txt` or `functions/azure/requirements.txt`
+3. **Packages Functions:** Creates ZIP files with code + dependencies
+4. **Validates Packages:** Ensures all dependencies are included
+
+**Packaged Functions (AWS):**
+- `classroom_user_management.zip`: Student account creation
+- `testus_patronus_status.zip`: Instance status checking
+- `classroom_stop_old_instances.zip`: Cleanup automation
+- `classroom_admin_cleanup.zip`: Admin instance cleanup
+- `classroom_instance_manager.zip`: Core instance management
+- `dify_jira_api.zip`: Dify Jira API integration
+
+**Output Location:**
+```
 functions/packages/
-├── classroom_user_management.zip    # Student account creation
-├── testus_patronus_status.zip             # Instance status checking  
-└── classroom_stop_old_instances.zip # Cleanup automation
+├── classroom_user_management.zip
+├── testus_patronus_status.zip
+├── classroom_stop_old_instances.zip
+├── classroom_admin_cleanup.zip
+├── classroom_instance_manager.zip
+└── dify_jira_api.zip
 ```
 
-**When to run manually:**
+**When to Run Manually:**
 - Testing Lambda function changes
 - Debugging packaging issues
 - Creating packages before `--skip-packaging` deployment
 
-## 🔄 Script Workflow & Dependencies
+**Dependencies:**
+- Python 3.9+
+- pip or pip3
+- zip utility
 
-### How Scripts Work Together
+#### `build_frontend.sh` - Frontend Build and Deployment
+
+**Purpose:** Builds the React application and deploys it to S3/CloudFront.
+
+**Usage:**
+```bash
+./scripts/build_frontend.sh [--environment dev] [--region eu-west-1]
+```
+
+**What It Does:**
+
+1. **Installs Dependencies:** Runs `npm install` if needed
+2. **Builds React App:** Creates production-optimized build
+3. **Uploads to S3:** Syncs files to S3 bucket with appropriate cache headers
+4. **Invalidates CloudFront:** Clears CDN cache for immediate updates
+
+**Options:**
+- `--environment`: Environment name (default: `dev`)
+- `--region`: AWS region (default: `eu-west-3`)
+
+**Example:**
+```bash
+./scripts/build_frontend.sh --environment dev --region eu-west-1
+```
+
+**Note:** Frontend deployment is normally handled automatically by `setup_aws.sh` during infrastructure deployment. Use this script for manual frontend updates.
+
+### Script Workflow
 
 ```mermaid
 graph TD
@@ -501,471 +1281,137 @@ graph TD
     I --> J[functions/packages/*.zip]
     
     C --> K[Infrastructure Deploy]
-    K --> L[iac/aws/workshops/testus_patronus/main.tf]
-    L --> M[Lambda + EC2 + IAM]
+    K --> L[iac/aws/main.tf]
+    L --> M[Common + Workshop Modules]
     
-    style A fill:#e1f5fe
-    style C fill:#f3e5f5
-    style E fill:#e8f5e8
-    style H fill:#fff3e0
-    style K fill:#fce4ec
+    C --> N[Frontend Deploy]
+    N --> O[build_frontend.sh]
+    O --> P[S3 + CloudFront]
 ```
 
-### Script Execution Order
+## 🔧 Development Environment Setup
 
-**1. Entry Point: `setup_classroom.sh`**
+### Option 1: Using GitHub Codespaces (Recommended)
+
+GitHub Codespaces provides a pre-configured development environment:
+
+1. Navigate to the repository on GitHub
+2. Click the green "Code" button
+3. Select "Create codespace on main"
+4. Wait for the environment to be created
+
+**Included Tools:**
+- Python 3.9+
+- AWS CLI
+- Azure CLI
+- Terraform
+- Node.js and npm
+- All required VS Code extensions
+
+### Option 2: Local Setup
+
+**macOS (using Homebrew):**
 ```bash
-# User runs this command
-./scripts/setup_classroom.sh --name my-class --cloud aws --region eu-west-3 --with-pool
+# Install Homebrew if not installed
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# Install required tools
+brew install python terraform awscli node
+
+# Install Python virtualenv
+pip3 install virtualenv
 ```
 
-**2. AWS Handler: `setup_aws.sh`**
+**Linux:**
 ```bash
-# Called automatically with parameters
-./scripts/setup_aws.sh my-class eu-west-3 create --with-pool --pool-size 40
+# Install required tools
+sudo apt-get update
+sudo apt-get install python3 python3-pip terraform awscli nodejs npm
+
+# Install Python virtualenv
+pip3 install virtualenv
 ```
 
-**3. Backend Setup (Automatic)**
+**Windows:**
+- Install Python from https://www.python.org/downloads/
+- Install Terraform from https://www.terraform.io/downloads
+- Install AWS CLI from https://awscli.amazonaws.com/AWSCLIV2.msi
+- Install Node.js from https://nodejs.org/
+
+### Authentication Setup
+
+**AWS:**
 ```bash
-cd iac/backend/aws
-terraform init && terraform apply -auto-approve
-# Creates: S3 bucket + DynamoDB table
-```
+aws configure
+# Enter AWS Access Key ID, Secret Access Key, default region, and output format
 
-**4. Lambda Packaging (Automatic)**
-```bash
-./scripts/package_lambda.sh --cloud aws
-# Creates: functions/packages/*.zip files
-```
-
-**5. Main Infrastructure (Automatic)**
-```bash
-cd iac/aws/workshops/testus_patronus
-terraform init && terraform apply -auto-approve
-# Creates: Lambda functions, EC2 instances, IAM roles for the workshop
-```
-
-**Shared/Common Infrastructure (Optional, once per account)**
-```bash
-cd iac/aws/common
-terraform init && terraform apply -auto-approve
-# Creates: EC2 manager control plane and shared EC2 IAM/SG
-```
-
-**Resource Grouping**
-- All workshop resources are tagged with `WorkshopID=<workshop_name>` and grouped via `aws_resourcegroups_group`.
-- Common resources use `WorkshopID=shared` (EC2 manager control plane).
-
-### File Dependencies
-
-**Configuration Files Created:**
-```bash
-iac/backend/aws/terraform.tfvars                 # Backend configuration
-iac/aws/common/backend.tf                         # Shared infrastructure backend
-iac/aws/workshops/testus_patronus/backend.tf      # Workshop backend
-iac/aws/workshops/testus_patronus/terraform.tfvars # Workshop config
-functions/packages/*.zip             # Lambda deployment packages
-```
-
-**Key Directories:**
-```bash
-scripts/                    # All automation scripts
-├── setup_classroom.sh     # Main entry point
-├── setup_aws.sh          # AWS-specific deployment
-├── package_lambda.sh     # Lambda packaging
-└── cleanup_*.sh          # Cleanup utilities
-
-iac/                       # Infrastructure as Code
-├── backend/aws/          # Terraform backend (S3 + DynamoDB)
-└── aws/                  # AWS IaC (common + workshops)
-
-iac/aws/                   # AWS Terraform roots
-├── common/               # Shared infrastructure
-└── workshops/            # Per-workshop infrastructure
-
-functions/                 # Lambda function code
-├── common/               # Shared EC2 manager functions
-├── aws/                  # Python source code
-│   └── testus_patronus/  # Workshop-specific functions
-└── packages/             # Compiled ZIP packages (auto-generated)
-```
-
-### Cleanup Scripts
-
-#### `cleanup_aws_users.sh` - AWS User Cleanup
-
-Removes all conference users and their resources.
-
-**Usage:**
-```bash
-./scripts/cleanup_aws_users.sh [--dry-run]
-```
-
-#### `delete_students.sh` - Student Resource Cleanup
-
-Removes specific student resources.
-
-**Usage:**
-```bash
-./scripts/delete_students.sh <student-id>
-```
-
-## 🏗️ Infrastructure Architecture
-
-### AWS Infrastructure Components
-
-#### Terraform Backend (`iac/backend/aws/`)
-- **S3 Bucket**: Stores Terraform state files with versioning and encryption
-- **DynamoDB Table**: Provides state locking mechanism
-- **KMS Key**: Encrypts state files
-
-#### Main Infrastructure (`iac/aws/workshops/<workshop>/`)
-- **Lambda Functions**: User management, status checking, instance cleanup
-- **IAM Roles & Policies**: Secure permissions for Lambda functions
-- **EC2 Instance Pool** (optional): Pre-configured instances with Dify
-- **DynamoDB Tables**: Instance assignments and user tracking
-- **SSM Parameters**: Configuration storage
-- **Security Groups**: Network access control
-
-### Deployment Flow
-
-```mermaid
-graph TD
-    A[setup_classroom.sh] --> B[setup_aws.sh]
-    B --> C[Backend Setup]
-    C --> D[S3 Bucket + DynamoDB]
-    D --> E[Lambda Packaging]
-    E --> F[package_lambda.sh]
-    F --> G[Terraform Apply]
-    G --> H[AWS Resources]
-    H --> I[Lambda URLs]
-```
-
-## 🚀 Complete AWS Deployment Walkthrough
-
-### Real-World Example: Setting Up "AI Workshop 2024"
-
-Let's walk through deploying a complete classroom for an AI workshop with 20 students.
-
-#### Step 1: Prepare Your Environment
-
-```bash
-# Clone the repository
-git clone https://github.com/your-org/cloud-classroom-provisioning.git
-cd cloud-classroom-provisioning
-
-# Verify AWS credentials
+# Verify access
 aws sts get-caller-identity
-# Should return your AWS account details
-
-# Verify Terraform
-terraform version
-# Should show Terraform v1.0+
 ```
 
-#### Step 2: Deploy the Classroom
-
+**Azure:**
 ```bash
-# Deploy complete classroom with EC2 instances for hands-on learning
-./scripts/setup_classroom.sh \
-  --name ai-workshop-2024 \
-  --cloud aws \
-  --region eu-west-3 \
-  --with-pool \
-  --pool-size 20
-```
-
-**What happens during deployment:**
-```bash
-Setting up Terraform backend...
-Backend created successfully:
-  S3 Bucket: terraform-state-ai-workshop-2024-1698765432
-  DynamoDB Table: terraform-locks-ai-workshop-2024
-
-Packaging Lambda function...
-✓ classroom_user_management.zip created
-✓ testus_patronus_status.zip created  
-✓ classroom_stop_old_instances.zip created
-
-Configuring main Terraform with remote backend...
-terraform init
-terraform apply -auto-approve
-
-=== DEPLOYMENT SUCCESSFUL ===
-
-User Management Lambda URL:
-https://abc123def456.lambda-url.eu-west-3.on.aws/
-
-Status Lambda URL:
-https://ghi789jkl012.lambda-url.eu-west-3.on.aws/
-
-EC2 Pool Information:
-Pool Size: 20 instances
-[
-  "i-0123456789abcdef0",
-  "i-0fedcba9876543210",
-  ...
-]
-```
-
-#### Step 3: Access Your Classroom Management
-
-**Student Registration:**
-1. Share the **User Management Lambda URL** with students
-2. Each student visits the URL and gets:
-   - Assigned EC2 instance
-   - Dify AI access credentials  
-   - Instance connection details
-
-**Monitor Your Classroom:**
-1. Use the **Status Lambda URL** to check:
-   - Which instances are assigned
-   - Student activity status
-   - Resource utilization
-
-#### Step 4: During the Workshop
-
-**For Students:**
-- Each gets a dedicated EC2 instance with Dify AI pre-installed
-- Access via web browser (no SSH needed)
-- Pre-configured environment ready for AI experiments
-
-**For Instructors:**
-- Monitor all instances from Status URL
-- See real-time assignments
-- Track usage patterns
-
-#### Step 5: After the Workshop
-
-```bash
-# Destroy the classroom (keeps backend for future workshops)
-./scripts/setup_classroom.sh \
-  --name ai-workshop-2024 \
-  --cloud aws \
-  --destroy
-
-# Optional: Clean up any remaining user resources
-./scripts/cleanup_aws_users.sh
-```
-
-### Alternative: Development/Testing Deployment
-
-For testing or development (no EC2 costs):
-
-```bash
-# Deploy Lambda functions only
-./scripts/setup_classroom.sh \
-  --name dev-test \
-  --cloud aws \
-  --region eu-west-3
-
-# Test the user management system
-# Students won't get EC2 instances, but user management works
-```
-
-## 🔧 Terraform Backend Architecture
-
-### How the Backend Works
-
-The project uses a **two-tier Terraform setup** for better state management:
-
-```
-📁 iac/
-├── 📁 backend/aws/          # Tier 1: Backend Infrastructure
-│   ├── main.tf              # S3 bucket + DynamoDB table
-│   ├── variables.tf         # Backend configuration
-│   └── outputs.tf           # Bucket/table names
-└── 📁 aws/                  # Tier 2: Main Infrastructure  
-    ├── main.tf              # Lambda, EC2, IAM resources
-    ├── backend.tf           # Points to Tier 1 backend
-    └── variables.tf         # Main configuration
-```
-
-### Automatic Backend Setup
-
-The `setup_aws.sh` script handles everything automatically:
-
-**Step 1: Create Backend Resources**
-```bash
-cd iac/backend/aws
-# Creates terraform.tfvars with unique names
-terraform init
-terraform apply -auto-approve
-# Result: S3 bucket + DynamoDB table created
-```
-
-**Step 2: Configure Main Infrastructure**
-```bash
-cd iac/aws/workshops/testus_patronus
-# Auto-generates backend.tf pointing to Step 1 resources
-terraform {
-  backend "s3" {
-    bucket         = "terraform-state-classroom-123456"
-    key            = "classroom/my-class/terraform.tfstate"
-    region         = "eu-west-3"
-    dynamodb_table = "terraform-locks-my-class"
-    encrypt        = true
-  }
-}
-```
-
-**Step 3: Deploy Main Infrastructure**
-```bash
-terraform init    # Connects to remote backend
-terraform apply   # Creates Lambda, EC2, IAM resources
-```
-
-### Backend Benefits
-
-- **🔒 State Locking**: Prevents concurrent modifications
-- **🔐 Encryption**: State files encrypted in S3
-- **📚 Versioning**: Full history of infrastructure changes
-- **👥 Team Sharing**: Multiple users can work on same infrastructure
-- **🔄 Reusability**: Backend persists across classroom deployments
-
-### Manual Backend Setup (Advanced Users)
-
-If you need custom backend configuration:
-
-```bash
-# Navigate to backend directory
-cd iac/backend/aws
-
-# Create custom configuration
-cat > terraform.tfvars << EOF
-aws_region         = "eu-west-3"
-state_bucket_name  = "my-custom-terraform-state"
-dynamodb_table_name = "my-custom-terraform-locks"
-EOF
-
-# Deploy backend
-terraform init
-terraform apply
-
-# Get outputs for main configuration
-BUCKET_NAME=$(terraform output -raw state_bucket_name)
-DYNAMODB_TABLE=$(terraform output -raw dynamodb_table_name)
-echo "Use these in your main backend.tf:"
-echo "  bucket = \"$BUCKET_NAME\""
-echo "  dynamodb_table = \"$DYNAMODB_TABLE\""
-```
-
-### Backend Cleanup
-
-**When destroying classrooms:**
-```bash
-# This destroys main infrastructure but KEEPS backend
-./scripts/setup_aws.sh my-class eu-west-3 destroy
-```
-
-**To destroy backend (advanced):**
-```bash
-# Only do this if you're sure you don't need the state history
-cd iac/backend/aws
-terraform destroy
-```
-
-## 📁 Project Structure
-
-```
-.
-├── iac/                           # Infrastructure as Code
-│   ├── aws/                      # AWS infrastructure
-│   │   ├── common/              # Shared/common resources
-│   │   ├── workshops/           # Per-workshop roots
-│   │   │   ├── testus_patronus/ # Testus Patronus workshop
-│   │   │   └── fellowship/      # Fellowship of the Build workshop
-│   │   ├── modules/             # Reusable AWS modules
-│   │   └── iam/                 # IAM policies and roles
-│   ├── backend/                 # Terraform backend setup
-│   │   ├── aws/                 # AWS backend (S3 + DynamoDB)
-│   │   └── azure/               # Azure backend (Storage Account)
-│   └── azure/                   # Azure infrastructure
-├── functions/                    # Cloud functions
-│   ├── common/                  # Shared EC2 manager functions
-│   ├── aws/                     # AWS Lambda functions
-│   │   └── testus_patronus/     # Workshop-specific functions
-│   │       ├── classroom_user_management.py
-│   │       ├── testus_patronus_status.py
-│   │       └── dify_jira_api.py
-│   ├── azure/                   # Azure Functions
-│   └── packages/                # Packaged functions (auto-generated)
-├── scripts/                     # Deployment and utility scripts
-│   ├── setup_classroom.sh      # Main deployment script
-│   ├── setup_aws.sh            # AWS-specific deployment
-│   ├── package_lambda.sh       # Lambda function packaging
-│   ├── cleanup_aws_users.sh    # User cleanup
-│   └── delete_students.sh      # Student resource cleanup
-└── README.md                    # This file
+az login
+az account set --subscription "your-subscription-id"
 ```
 
 ## 🛡️ Security Considerations
 
-1. **Access Control**:
+1. **Access Control:**
    - IAM roles follow principle of least privilege
    - Lambda functions have minimal required permissions
    - EC2 instances use instance profiles
 
-2. **State Management**:
+2. **State Management:**
    - Terraform state encrypted in S3
    - State locking prevents concurrent modifications
-   - Backend resources isolated per classroom
+   - Backend resources isolated per environment
 
-3. **Network Security**:
+3. **Network Security:**
    - Security groups restrict access to necessary ports
    - EC2 instances in default VPC with minimal exposure
-   - Lambda functions in VPC when needed
+   - HTTPS enabled for all public-facing endpoints
 
-4. **Credential Management**:
+4. **Credential Management:**
    - No hardcoded credentials in code
    - SSM Parameter Store for configuration
+   - Secrets Manager for sensitive values
    - Temporary credentials for student access
 
 ## 🔍 Troubleshooting
 
 ### Common Issues
 
-1. **Terraform State Locked**:
-   
-   This happens when a previous Terraform operation was interrupted. You have two options:
-   
-   **Option A: Manual Force Unlock (Quick Fix)**
+1. **Terraform State Locked:**
    ```bash
-   cd iac/aws/workshops/testus_patronus  # or iac/azure depending on your cloud provider
+   cd iac/aws
    terraform force-unlock <LOCK_ID>
-   # Use the lock ID shown in the error message
-   # Example: terraform force-unlock 2f359820-eb1b-6f33-0411-8ae0f94d6152
-   ```
-   
-   **Option B: Using the Setup Script**
-   ```bash
+   # Or use the script
    ./scripts/setup_classroom.sh --name my-class --cloud aws --force-unlock
    ```
-   
-   ⚠️ **Warning**: Only force-unlock if you're certain no other Terraform process is running. Otherwise, wait for the operation to complete.
 
-2. **Lambda Packaging Fails**:
+2. **Lambda Packaging Fails:**
    ```bash
    # Install missing dependencies
-   pip install virtualenv
+   pip3 install virtualenv
    ./scripts/package_lambda.sh --cloud aws
    ```
 
-3. **AWS Credentials Not Found**:
+3. **AWS Credentials Not Found:**
    ```bash
    aws configure
-   # or
+   # Or use environment variables
    export AWS_ACCESS_KEY_ID="your_key"
    export AWS_SECRET_ACCESS_KEY="your_secret"
    ```
 
-4. **Backend Already Exists**:
+4. **Backend Already Exists:**
    - The script handles existing backends gracefully
    - Use `--destroy` to clean up if needed
 
 ### Debug Mode
 
-Enable verbose output:
+Enable verbose Terraform output:
 ```bash
 export TF_LOG=DEBUG
 ./scripts/setup_classroom.sh --name debug-class --cloud aws
@@ -975,21 +1421,34 @@ export TF_LOG=DEBUG
 
 ### AWS Costs
 
-**With EC2 Pool (25 instances)**:
-- EC2 instances: ~$50-100/month
+**With EC2 Pool (10 instances, t3.small):**
+- EC2 instances: ~$50-100/month (when running)
 - Lambda functions: ~$1-5/month
 - Storage (S3, DynamoDB): ~$1-3/month
+- CloudFront: ~$1-2/month
+- **Total: ~$53-110/month**
 
-**Lambda-Only Deployment**:
+**Lambda-Only Deployment:**
 - Lambda functions: ~$1-5/month
 - Storage: ~$1-3/month
+- CloudFront: ~$1-2/month
+- **Total: ~$3-10/month**
 
 ### Cost-Saving Tips
 
-1. **Use smaller instance pool**: Start with 10-15 instances
+1. **Use smaller instance pool**: Start with 5-10 instances
 2. **Destroy when not in use**: Use `--destroy` between classes
-3. **Monitor usage**: Check AWS Cost Explorer regularly
-4. **Right-size instances**: Default t3.medium is usually sufficient
+3. **Optimize instance types**: Use t3.micro for development, t3.small for production
+4. **Monitor usage**: Check AWS Cost Explorer regularly
+5. **Enable auto-stop**: Instances automatically stop after idle timeout
+
+## 📚 Additional Resources
+
+- [AWS Lambda Documentation](https://docs.aws.amazon.com/lambda/)
+- [Terraform AWS Provider](https://registry.terraform.io/providers/hashicorp/aws/latest/docs)
+- [Dify Documentation](https://docs.dify.ai/)
+- [AWS IAM Best Practices](https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html)
+- [React Documentation](https://react.dev/)
 
 ## 🤝 Contributing
 
@@ -1011,12 +1470,3 @@ For support:
 3. Test with a small deployment first
 4. Open a detailed issue with logs and configuration
 5. Contact the maintainers
-
----
-
-## 📚 Additional Resources
-
-- [AWS Lambda Documentation](https://docs.aws.amazon.com/lambda/)
-- [Terraform AWS Provider](https://registry.terraform.io/providers/hashicorp/aws/latest/docs)
-- [Dify Documentation](https://docs.dify.ai/)
-- [AWS IAM Best Practices](https://docs.aws.amazon.com/IAM/latest/UserGuide/best-practices.html) 
