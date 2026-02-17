@@ -43,7 +43,7 @@
       height: 100%;
       z-index: 0;
       background: url("sky.png") center center / cover no-repeat;
-      filter: brightness(1.2) contrast(1.05) saturate(1.05);
+      filter: brightness(3.0) contrast(1) saturate(1);
     }
 
     #sky-overlay { display: none; }
@@ -59,7 +59,7 @@
       display: block;
       transition: all 1.5s ease-out;
       transform-origin: center bottom;
-      mix-blend-mode: lighten;
+      mix-blend-mode: normal;
     }
 
     canvas {
@@ -246,13 +246,15 @@
         centered.x = abs(centered.x);
         float angle = atan(centered.y, centered.x);
         float dist = length(centered);
+        float radialSpread = smoothstep(0.0, 1.0, dist);
+        float centerDark = smoothstep(0.12, 0.38, dist);
 
         float rayFlow = dist * 4.0 - uTime * 0.9;
         float rayNoise = fbm(vec3(angle * 20.0, dist * 6.0, rayFlow));
         float rayStrands = fbm(vec3(angle * 40.0 + rayNoise * 0.4, dist * 10.0, rayFlow * 1.5));
-        float radialNoise = smoothstep(0.2, 0.9, rayNoise + rayStrands * 1.1);
-        float flare = pow(radialNoise, 1.35);
-
+        float radialNoise = smoothstep(0.10, 0.9, rayNoise + rayStrands * 1.6);
+float streaks = pow(radialNoise, 2.3);
+float flare = mix(radialNoise, streaks, 0.85) * mix(0.7, 1.4, radialSpread);
         float sparkle = smoothstep(0.8, 1.0, hash(centered * 120.0 + uTime * 0.3));
         float embers = smoothstep(0.5, 1.0, fbm(vec3(centered * 18.0, uTime * 1.2)));
         float sparkles = step(0.9, hash(vUv * 80.0 + uTime));
@@ -263,24 +265,29 @@
         float sparkFlow = fbm(vec3(angle * 80.0, ellipseDist * 18.0, uTime * 2.2));
         float sparks = smoothstep(0.6, 1.0, sparkFlow) * (1.0 - smoothstep(0.18, 0.75, ellipseDist)) * hornDir;
 
-        vec3 pupilRim = vec3(3.0, 1.2, 0.2);
-        vec3 midRays = vec3(1.5, 0.4, 0.05);
-        vec3 edgeChar = vec3(0.04, 0.01, 0.01);
+        vec3 pupilRim = vec3(1.8, 0.75, 0.12);   // deep gold, less white
+        vec3 midRays  = vec3(1.1, 0.28, 0.06);   // darker fiery red/orange
+        vec3 edgeChar = vec3(0.18, 0.06, 0.03);  // warm dark brown
 
         float edgeFade = smoothstep(0.55, 0.92, dist);
         vec3 filamentColor = mix(midRays, pupilRim, flare);
+        filamentColor = mix(filamentColor * 0.85, filamentColor * 1.4, radialSpread);
+        filamentColor *= mix(0.6, 1.0, centerDark);
         filamentColor = mix(filamentColor, pupilRim, sparkle * 0.35);
         filamentColor = mix(filamentColor, vec3(1.6, 0.5, 0.08), embers * 0.25);
         filamentColor = mix(filamentColor, vec3(1.8, 0.7, 0.12), sparks * 0.45);
         filamentColor = mix(filamentColor, vec3(1.0, 0.8, 0.2), sparkles * 0.35);
         vec3 surfaceColor = mix(filamentColor, edgeChar, edgeFade);
 
-        float slit = smoothstep(uPupilWidth, uPupilWidth - 0.012, abs(centered.x));
-        float verticalClamp = smoothstep(0.5, 0.15, abs(centered.y));
-        float pupilMask = slit * verticalClamp;
-        float pupilFacing = smoothstep(0.2, 0.7, vNormalW.z);
-        pupilMask *= pupilFacing;
-        pupilMask = 1.0 - pupilMask;
+float leafY = abs(centered.y);
+float taper = mix(0.45, 0.10, smoothstep(0.0, 0.55, leafY)); // wide center → narrow tips
+float slit = smoothstep(uPupilWidth * taper, uPupilWidth * taper - 0.01, abs(centered.x));
+float verticalClamp = smoothstep(0.55, 0.12, leafY);
+float pupilMask = slit * verticalClamp;  
+ 
+float pupilFacing = smoothstep(0.2, 0.7, vNormalW.z);
+pupilMask *= pupilFacing;
+pupilMask = 1.0 - pupilMask;
 
         float rimNoise = fbm(vec3(angle * 8.0, dist * 6.0, uTime * 0.6)) * 0.04;
         float rimGlow = pow(
@@ -292,7 +299,7 @@
         float facing = smoothstep(-0.2, 0.8, vNormalW.z);
         color *= mix(0.85, 1.0, facing);
         color *= pupilMask;
-
+        color *= vec3(0.92, 0.82, 0.75);
         gl_FragColor = vec4(color, 1.0);
       }
     `;
@@ -305,15 +312,15 @@
     });
 
     const eyeMesh = new THREE.Mesh(geometry, material);
-    eyeMesh.scale.set(1.90, 0.77, 1.0);
+    eyeMesh.scale.set(1.0, 1, 1.2);
     const baseRotation = new THREE.Euler(0, -Math.PI / 2, 0);
     eyeMesh.rotation.copy(baseRotation);
     eyeGroup.add(eyeMesh);
 
     let isFocused = false;
-    let rotationVelocity = new THREE.Vector2(0, 0);
-    let rotationTarget = new THREE.Euler(0, 0, 0);
-    let rotationOffset = new THREE.Euler(0, 0, 0);
+    const rotationVelocity = new THREE.Vector2(0, 0);
+    const rotationTarget = new THREE.Euler(0, 0, 0);
+    const rotationOffset = new THREE.Euler(0, 0, 0);
     let nextIdleShift = 0;
     let lastManualRotation = 0;
     let currentZ = 0;
@@ -323,31 +330,28 @@
     let targetBloom = 2.6;
     let pupilWidthTarget = 0.8;
 
+    const pitchLimits = { min: -0.12, max: 0.28 };
+    const yawLimits = { min: -0.6, max: 0.6 };
+    const stepPitch = 0.045;
+    const stepYaw = 0.06;
+
     window.addEventListener("keydown", (event) => {
       switch (event.key) {
         case "ArrowUp":
-          rotationVelocity.y -= 0.02;
+          rotationTarget.x = THREE.MathUtils.clamp(rotationTarget.x - stepPitch, pitchLimits.min, pitchLimits.max);
           lastManualRotation = performance.now();
-          rotationTarget.x = rotationOffset.x;
-          rotationTarget.y = rotationOffset.y;
           break;
         case "ArrowDown":
-          rotationVelocity.y += 0.02;
+          rotationTarget.x = THREE.MathUtils.clamp(rotationTarget.x + stepPitch, pitchLimits.min, pitchLimits.max);
           lastManualRotation = performance.now();
-          rotationTarget.x = rotationOffset.x;
-          rotationTarget.y = rotationOffset.y;
           break;
         case "ArrowLeft":
-          rotationVelocity.x -= 0.02;
+          rotationTarget.y = THREE.MathUtils.clamp(rotationTarget.y - stepYaw, yawLimits.min, yawLimits.max);
           lastManualRotation = performance.now();
-          rotationTarget.x = rotationOffset.x;
-          rotationTarget.y = rotationOffset.y;
           break;
         case "ArrowRight":
-          rotationVelocity.x += 0.02;
+          rotationTarget.y = THREE.MathUtils.clamp(rotationTarget.y + stepYaw, yawLimits.min, yawLimits.max);
           lastManualRotation = performance.now();
-          rotationTarget.x = rotationOffset.x;
-          rotationTarget.y = rotationOffset.y;
           break;
         case " ":
           isFocused = true;
@@ -474,14 +478,14 @@
   towerImage.style.zIndex = "10";
 }
 
-const idleAllowed = !isFocused && performance.now() - lastManualRotation > 6000;
+      const idleAllowed = !isFocused && performance.now() - lastManualRotation > 4000;
 
-if (idleAllowed && elapsed > nextIdleShift) {
-  // slight downward bias (positive pitch) and gentle lateral sweep
-  rotationTarget.x = 0.14 + (Math.random() - 0.5) * 0.10; // 0.05..0.15
-  rotationTarget.y = (Math.random() - 0.5) * 0.35;        // left/right
-  nextIdleShift = elapsed + 2.0 + Math.random() * 2.0;
-}
+      if (idleAllowed && elapsed > nextIdleShift) {
+        // slight downward bias and gentle lateral sweep
+        rotationTarget.x = 0.12 + (Math.random() - 0.5) * 0.08;
+        rotationTarget.y = (Math.random() - 0.5) * 0.30;
+        nextIdleShift = elapsed + 2.0 + Math.random() * 2.0;
+      }
 
       const damp = 1.0 - Math.exp(-delta * 2.5);
       currentZ += (targetZ - currentZ) * damp;
@@ -489,12 +493,13 @@ if (idleAllowed && elapsed > nextIdleShift) {
       eyeGroup.position.z = currentZ;
       eyeGroup.position.y = currentY;
 
-      rotationVelocity.multiplyScalar(0.85);
-      rotationOffset.x += rotationVelocity.y;
-      rotationOffset.y += rotationVelocity.x;
-
-      rotationOffset.x += (rotationTarget.x - rotationOffset.x) * damp * 0.8;
-      rotationOffset.y += (rotationTarget.y - rotationOffset.y) * damp * 0.8;
+      const stiffness = isFocused ? 8.0 : 10.0;
+      const damping = 5.5;
+      rotationVelocity.x += (rotationTarget.x - rotationOffset.x) * stiffness * delta;
+      rotationVelocity.y += (rotationTarget.y - rotationOffset.y) * stiffness * delta;
+      rotationVelocity.multiplyScalar(Math.exp(-damping * delta));
+      rotationOffset.x += rotationVelocity.x * delta;
+      rotationOffset.y += rotationVelocity.y * delta;
 
       eyeMesh.rotation.x = baseRotation.x + rotationOffset.x;
       eyeMesh.rotation.y = baseRotation.y + rotationOffset.y;
