@@ -52,6 +52,9 @@ obj/
 .terraformrc
 terraform.rc
 errored.tfstate
+# Note: .terraform.lock.hcl files should be COMMITTED for provider version consistency
+# Only ignore state-related .hcl files, not lock files
+iac/azure/state/*.hcl
 
 # Docusaurus
 website/build/
@@ -63,12 +66,6 @@ website/node_modules/
 logs/
 functions/azure/.venv-py39/pyvenv.cfg
 venv-py39/pyvenv.cfg
-# Terraform state files (HCL format)
-iac/azure/state/*.hcl
-iac/azure/state/*.lock.hcl
-
-# Note: .terraform.lock.hcl files should be COMMITTED to ensure consistent provider versions
-# Remove any .terraform.lock.hcl entries from gitignore if present
 
 # Temporary files
 users_e2e_qs_2025.txt
