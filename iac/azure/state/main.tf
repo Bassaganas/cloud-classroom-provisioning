@@ -19,6 +19,7 @@ resource "azurerm_resource_group" "terraform_state" {
     Environment = "management"
     Owner       = "terraform"
     Project     = "classroom-provisioning"
+    Company     = "TestingFantasy"
   }
 }
 

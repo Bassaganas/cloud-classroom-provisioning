@@ -1,118 +1,183 @@
-# User Cleanup Scripts
+# Scripts Directory
 
-This directory contains scripts to clean up users and their associated resources in both AWS and Azure environments.
+This directory contains all deployment and utility scripts for the cloud classroom provisioning system.
 
-## AWS Cleanup Script (`cleanup_aws_users.sh`)
+## 🚀 Core Deployment Scripts
 
-This script deletes AWS IAM users and their associated resources, including:
+### `setup_classroom.sh`
+**Main entry point for all deployments**
+
+```bash
+# Deploy AWS classroom
+./scripts/setup_classroom.sh --name my-classroom --cloud aws --region eu-west-3
+
+# Deploy with specific workshop
+./scripts/setup_classroom.sh --name my-classroom --cloud aws --region eu-west-3 --workshop fellowship
+
+# Destroy infrastructure
+./scripts/setup_classroom.sh --name my-classroom --cloud aws --region eu-west-3 --destroy
+```
+
+**Features:**
+- Handles both AWS and Azure deployments
+- Automatically infers workshop name from classroom name
+- Supports `--only-common` and `--only-workshop` for partial deployments
+- Clean Terraform workflow (no manual imports needed)
+
+### `setup_aws.sh`
+**AWS-specific deployment logic**
+
+Called automatically by `setup_classroom.sh`. Handles:
+- Terraform backend setup
+- Lambda packaging (via `package_lambda.sh`)
+- Frontend build and deployment (via `build_frontend.sh`)
+- Workshop template map publishing
+
+### `package_lambda.sh`
+**Packages Lambda functions for deployment**
+
+```bash
+./scripts/package_lambda.sh --cloud aws
+```
+
+Creates deployment packages in `functions/packages/` directory.
+
+### `build_frontend.sh`
+**Builds and deploys React frontend to S3**
+
+```bash
+./scripts/build_frontend.sh --environment dev --region eu-west-3
+```
+
+Usually called automatically by `setup_aws.sh`, but can be run standalone for frontend-only updates.
+
+---
+
+## 🧪 Development & Testing
+
+### `test_local.sh`
+**Local development environment setup**
+
+```bash
+./scripts/test_local.sh
+```
+
+Starts:
+- Mock API server (option 1) OR connects to real Lambda API (option 2)
+- React development server on `http://localhost:5173`
+
+The script automatically detects Lambda URL from Terraform outputs if using real API.
+
+### `mock_api_server.py`
+**Mock API server for local frontend development**
+
+Used by `test_local.sh` when testing without deployed infrastructure.
+
+---
+
+## 🧹 Cleanup Scripts
+
+### `cleanup_aws_users.sh`
+**Clean up AWS IAM users and associated resources**
+
+```bash
+./scripts/cleanup_aws_users.sh
+```
+
+Deletes:
 - Login profiles
 - Access keys
 - Attached policies
 - Inline policies
+- The user itself
 
-### Prerequisites
-- AWS CLI installed and configured
-- Appropriate AWS permissions to manage IAM users
+### `cleanup_azure_users.sh`
+**Clean up Azure AD users and associated resources**
 
-### Usage
 ```bash
-./cleanup_aws_users.sh
+./scripts/cleanup_azure_users.sh
 ```
 
-### What it does
-1. Finds all users with names starting with:
-   - `service-conference-user-*` (service users)
-   - `conference-user-*` (conference users)
-2. For each user:
-   - Deletes login profile (if exists)
-   - Deletes all access keys
-   - Detaches all attached policies
-   - Deletes all inline policies
-   - Deletes the user
-
-## Azure Cleanup Script (`cleanup_azure_users.sh`)
-
-This script deletes Azure AD users and their associated resources, including:
+Deletes:
 - Service principals
 - Resource groups
 - Role assignments
+- The user itself
 
-### Prerequisites
-- Azure CLI installed and configured
-- Appropriate Azure permissions to manage AD users and resources
+### `delete_students.sh`
+**Delete student users (Azure)**
 
-### Usage
 ```bash
-./cleanup_azure_users.sh
+./scripts/delete_students.sh
 ```
 
-### What it does
-1. Finds all users with names starting with:
-   - `service-conference-user-*` (service users)
-   - `conference-user-*` (conference users)
-2. For each user:
-   - Deletes associated service principal (if exists)
-   - Deletes associated resource group (if exists)
-   - Removes all role assignments
-   - Deletes the user
+---
 
-## Important Notes
+## ☁️ Azure Scripts (if using Azure)
 
-1. **Backup**: Before running these scripts, ensure you have backed up any important data or configurations.
+### `setup_azure.sh`
+**Azure-specific deployment**
 
-2. **Permissions**: The scripts require appropriate permissions in both AWS and Azure:
-   - AWS: IAM permissions to manage users, policies, and access keys
-   - Azure: AD permissions to manage users and service principals, plus resource management permissions
+Called automatically by `setup_classroom.sh` for Azure deployments.
 
-3. **Resource Cleanup**:
-   - AWS: Focuses on IAM resources (users, policies, keys)
-   - Azure: Also cleans up resource groups and service principals
+### `setup_azure_rbac.sh`
+**Setup Azure RBAC roles**
 
-4. **Error Handling**:
-   - Both scripts include error handling and will continue processing even if individual operations fail
-   - Check the output for any errors or skipped operations
-
-5. **Dry Run**: Consider adding a `--dry-run` flag if you want to preview changes before executing them.
-
-## Security Considerations
-
-1. **Access Control**: Ensure only authorized administrators can run these scripts
-2. **Audit Logging**: Consider enabling audit logging in both AWS and Azure
-3. **Resource Protection**: Consider adding resource tags or locks to prevent accidental deletion
-4. **Backup Strategy**: Implement a backup strategy for critical resources
-
-## Example Output
-
-```
-Fetching service conference users...
-Processing service conference users...
-Processing user: service-conference-user-1
-  Deleting login profile...
-  Deleting access keys...
-    Deleting access key: AKIAXXXXXXXXXXXXXXXX
-  Detaching policies...
-    Detaching policy: arn:aws:iam::XXXXXXXXXXXX:policy/UserRestrictedPolicy
-  Deleting inline policies...
-  Deleting user...
-Completed processing user: service-conference-user-1
-----------------------------------------
+```bash
+./scripts/setup_azure_rbac.sh
 ```
 
-## Troubleshooting
+### `deploy_azure_function.sh`
+**Deploy Azure Functions**
 
-1. **Permission Issues**:
-   - Check AWS IAM permissions
-   - Verify Azure AD permissions
-   - Ensure proper role assignments
+```bash
+./scripts/deploy_azure_function.sh
+```
 
-2. **Resource Dependencies**:
-   - Some resources might have dependencies that prevent deletion
-   - Check for resource locks or protection policies
+### `test_azure_config.sh`
+**Test Azure configuration**
 
-3. **API Rate Limits**:
-   - Be aware of API rate limits in both platforms
-   - Consider adding delays between operations if needed
+```bash
+./scripts/test_azure_config.sh
+```
 
-## Contributing
+---
 
-Feel free to submit issues and enhancement requests! 
+## 🎯 Quick Start
+
+**For new deployments:**
+```bash
+./scripts/setup_classroom.sh --name my-classroom --cloud aws --region eu-west-3
+```
+
+**For local development:**
+```bash
+./scripts/test_local.sh
+```
+
+**For frontend-only updates:**
+```bash
+./scripts/build_frontend.sh --environment dev --region eu-west-3
+```
+
+---
+
+## 📝 Notes
+
+- All scripts use relative paths and can be run from the project root
+- Terraform manages state automatically - no manual imports needed
+- Frontend deployment is integrated into the main deployment flow
+- Lambda packaging is automatic unless `--skip-packaging` is used
+- For clean deployments, see `CLEAN_DEPLOYMENT.md` in the project root
+
+---
+
+## 🔄 Clean Deployment Workflow
+
+The deployment system is designed to work cleanly without manual state management:
+
+1. **First deployment**: Run `setup_classroom.sh` - Terraform creates everything
+2. **Updates**: Run `setup_classroom.sh` again - Terraform updates existing resources
+3. **Clean slate**: Use `--destroy` then redeploy for a fresh start
+
+No import scripts or state patching needed - Terraform handles it all.

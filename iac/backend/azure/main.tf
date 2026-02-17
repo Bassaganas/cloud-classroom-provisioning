@@ -16,6 +16,12 @@ provider "azurerm" {
 resource "azurerm_resource_group" "terraform_state" {
   name     = var.resource_group_name
   location = var.location
+  tags = {
+    Environment = "production"
+    Owner       = "terraform"
+    Project     = "classroom-provisioning"
+    Company     = "TestingFantasy"
+  }
 }
 
 # Storage Account for storing Terraform state
@@ -26,6 +32,13 @@ resource "azurerm_storage_account" "terraform_state" {
   account_tier             = "Standard"
   account_replication_type = "GRS"
   min_tls_version          = "TLS1_2"
+
+  tags = {
+    Environment = "production"
+    Owner       = "terraform"
+    Project     = "classroom-provisioning"
+    Company     = "TestingFantasy"
+  }
 
   blob_properties {
     versioning_enabled = true
@@ -50,7 +63,10 @@ resource "azurerm_key_vault" "terraform_state" {
   purge_protection_enabled = true
 
   tags = {
-    environment = "production"
+    Environment = "production"
+    Owner       = "terraform"
+    Project     = "classroom-provisioning"
+    Company     = "TestingFantasy"
   }
 }
 
