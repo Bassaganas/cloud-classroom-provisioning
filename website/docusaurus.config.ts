@@ -54,6 +54,8 @@ const config: Config = {
       logo: {
         alt: 'Cloud Classroom Logo',
         src: 'img/logo.svg',
+        width: 32,
+        height: 32,
       },
       items: [
         {
