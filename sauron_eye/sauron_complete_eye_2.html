@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Eye of Sauron - Cinematic Container</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #020000;
+        font-family: Arial, sans-serif;
+      }
+
+      #scene-container {
+        width: 1920px;
+        height: 1080px;
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform-origin: center center;
+        background: #020000;
+      }
+
+      #tower-layer {
+        position: absolute;
+        inset: 0;
+        z-index: 5;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        display: block;
+        pointer-events: none;
+      }
+
+      #eye-layer {
+        position: absolute;
+        inset: 0;
+        z-index: 10;
+        pointer-events: none;
+      }
+
+      #overlay-hint {
+        position: absolute;
+        left: 24px;
+        bottom: 24px;
+        z-index: 20;
+        color: rgba(255, 255, 255, 0.6);
+        font-size: 14px;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="scene-container">
+      <img id="tower-layer" src="./Tower.png" alt="Tower" />
+      <div id="eye-layer"></div>
+      <div id="overlay-hint">Arrows: Rotate | Space: Focus</div>
+    </div>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+      }
+    </script>
+    <script type="module">
+      import * as THREE from "three";
+      import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+      import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+      import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+
+      const container = document.getElementById("scene-container");
+      const eyeLayer = document.getElementById("eye-layer");
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+      renderer.setSize(1920, 1080);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setClearColor(0x000000, 0);
+      renderer.setClearAlpha(0);
+      eyeLayer.appendChild(renderer.domElement);
+
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(35, 1920 / 1080, 0.1, 50);
+      camera.position.set(0, 0, 6.5);
+
+      const geometry = new THREE.SphereGeometry(1.4, 256, 256);
+      const uniforms = {
+        uTime: { value: 0 },
+        uPupil: { value: 0.16 },
+        uFocus: { value: 0 },
+      };
+
+      const material = new THREE.ShaderMaterial({
+        uniforms,
+        transparent: true,
+        side: THREE.DoubleSide,
+        vertexShader: `
+          varying vec2 vUv;
+          varying vec3 vNormal;
+
+          void main() {
+            vUv = uv;
+            vNormal = normalize(normalMatrix * normal);
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+          }
+        `,
+        fragmentShader: `
+          precision highp float;
+
+          varying vec2 vUv;
+          varying vec3 vNormal;
+
+          uniform float uTime;
+          uniform float uPupil;
+          uniform float uFocus;
+
+          vec3 paletteFire(float t) {
+            vec3 deepRed = vec3(0.4, 0.05, 0.02);
+            vec3 orange = vec3(1.5, 0.3, 0.05);
+            vec3 yellow = vec3(3.0, 2.4, 1.1);
+            return mix(deepRed, orange, smoothstep(0.0, 0.6, t)) +
+                   mix(vec3(0.0), yellow, smoothstep(0.6, 1.0, t));
+          }
+
+          float hash(vec2 p) {
+            return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+          }
+
+          float noise(vec2 p) {
+            vec2 i = floor(p);
+            vec2 f = fract(p);
+            vec2 u = f * f * (3.0 - 2.0 * f);
+            return mix(
+              mix(hash(i + vec2(0.0, 0.0)), hash(i + vec2(1.0, 0.0)), u.x),
+              mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x),
+              u.y
+            );
+          }
+
+          float fbm(vec2 p) {
+            float total = 0.0;
+            float amp = 0.5;
+            for (int i = 0; i < 5; i++) {
+              total += amp * noise(p);
+              p *= 2.0;
+              amp *= 0.5;
+            }
+            return total;
+          }
+
+          void main() {
+            vec2 centeredUv = vUv - 0.5;
+            float dist = length(centeredUv);
+            float angle = atan(centeredUv.y, centeredUv.x);
+
+            float radialNoise = fbm(vec2(angle * 20.0, dist * 6.0 - uTime * (1.0 + uFocus)));
+            float filaments = smoothstep(0.2, 0.85, radialNoise);
+            float radialFalloff = smoothstep(0.65, 0.2, dist);
+
+            float rim = smoothstep(0.2, 0.1, abs(dist - 0.22));
+
+            float pupilWidth = mix(uPupil * 0.55, 0.02, uFocus);
+            float pupilHeight = 0.46;
+            float slit = smoothstep(pupilWidth, pupilWidth - 0.006, abs(centeredUv.x) * 2.2)
+              * smoothstep(pupilHeight, 0.2, abs(centeredUv.y));
+
+            float pupilMask = 1.0 - slit;
+
+            vec3 fire = paletteFire(filaments) * radialFalloff;
+            fire *= mix(0.6, 1.05, rim);
+
+            vec3 pupilGlow = vec3(1.4, 1.2, 0.6) * rim;
+            vec3 color = fire + pupilGlow;
+
+            color *= pupilMask;
+
+            float edgeChar = smoothstep(0.52, 0.62, dist);
+            color = mix(color, vec3(0.01, 0.0, 0.0), edgeChar);
+
+            float normalGlow = pow(abs(vNormal.z), 1.5);
+            color *= (0.7 + 0.6 * normalGlow);
+
+            float alpha = smoothstep(0.55, 0.23, dist);
+            gl_FragColor = vec4(color, alpha);
+          }
+        `,
+      });
+
+      const eyeMesh = new THREE.Mesh(geometry, material);
+      eyeMesh.scale.set(1.3, 1.0, 1.0);
+      eyeMesh.rotation.y = -Math.PI / 2;
+      eyeMesh.position.set(0, 0.2, 0);
+      scene.add(eyeMesh);
+
+      const renderTarget = new THREE.WebGLRenderTarget(1920, 1080, {
+        format: THREE.RGBAFormat,
+        type: THREE.UnsignedByteType,
+        depthBuffer: true,
+        stencilBuffer: false,
+      });
+      const composer = new EffectComposer(renderer, renderTarget);
+      composer.addPass(new RenderPass(scene, camera));
+      const bloom = new UnrealBloomPass(new THREE.Vector2(1920, 1080), 2.0, 0.45, 0.7);
+      composer.addPass(bloom);
+
+      let focus = 0;
+      let targetFocus = 0;
+      let targetRotation = eyeMesh.rotation.y;
+
+      const updateScale = () => {
+        const scale = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
+        container.style.transform = `translate(-50%, -50%) scale(${scale})`;
+      };
+
+      window.addEventListener("resize", () => {
+        updateScale();
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      });
+
+      updateScale();
+
+      window.addEventListener("keydown", (event) => {
+        if (event.code === "ArrowLeft") {
+          targetRotation += 0.08;
+        }
+        if (event.code === "ArrowRight") {
+          targetRotation -= 0.08;
+        }
+        if (event.code === "Space") {
+          targetFocus = 1;
+        }
+      });
+
+      window.addEventListener("keyup", (event) => {
+        if (event.code === "Space") {
+          targetFocus = 0;
+        }
+      });
+
+      const clock = new THREE.Clock();
+
+      const animate = () => {
+        requestAnimationFrame(animate);
+        const elapsed = clock.getElapsedTime();
+        uniforms.uTime.value = elapsed * 0.7;
+
+        focus += (targetFocus - focus) * 0.05;
+        uniforms.uFocus.value = focus;
+        uniforms.uPupil.value = 0.14 + Math.sin(elapsed * 1.2) * 0.02;
+
+        eyeMesh.rotation.y += (targetRotation - eyeMesh.rotation.y) * 0.08;
+        eyeMesh.position.z = THREE.MathUtils.lerp(0.0, 1.2, focus);
+
+        composer.render();
+      };
+
+      animate();
+    </script>
+  </body>
+</html>

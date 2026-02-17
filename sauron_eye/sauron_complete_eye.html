@@ -1,0 +1,389 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sauron's Eye - Ultimate Edition</title>
+    <style>
+      html, body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #020000;
+        font-family: 'Segoe UI', sans-serif;
+      }
+
+      /* THE CINEMATIC CONTAINER (1920x1080) */
+      #scene-container {
+        width: 1920px;
+        height: 1080px;
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform-origin: center center;
+        background: #020000; /* Void behind everything */
+      }
+
+      /* LAYER 1: THE TOWER (Background Layer) */
+      /* Note: User requested Eye on TOP (Layer 2) so it covers horns when zooming in */
+      #tower-layer {
+        position: absolute;
+        inset: 0;
+        z-index: 5; 
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        pointer-events: none;
+        opacity: 1.0; 
+      }
+
+      /* LAYER 2: THE EYE (Foreground Layer) */
+      #eye-layer {
+        position: absolute;
+        inset: 0;
+        z-index: 10; /* Sits visually on top to allow "pop out" effect */
+        pointer-events: none; /* Let clicks pass if needed */
+      }
+
+      /* UI HINTS */
+      #ui-layer {
+        position: absolute;
+        bottom: 30px;
+        width: 100%;
+        text-align: center;
+        z-index: 20;
+        color: #842;
+        font-size: 14px;
+        letter-spacing: 0.2em;
+        text-transform: uppercase;
+        text-shadow: 0 0 10px #f00;
+        opacity: 0.7;
+      }
+    </style>
+  </head>
+  <body>
+    
+    <div id="scene-container">
+      <img id="tower-layer" src="Tower.png" alt="Barad-dûr" />
+      <div id="eye-layer"></div>
+      <div id="ui-layer">Arrows to Look  |  Space to Focus</div>
+    </div>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+          "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+        }
+      }
+    </script>
+
+    <script type="module">
+      import * as THREE from "three";
+      import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+      import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+      import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+
+      // --- CONFIGURATION ---
+      const CONTAINER = document.getElementById("scene-container");
+      const EYE_CONTAINER = document.getElementById("eye-layer");
+      
+      // --- SCENE SETUP ---
+      const renderer = new THREE.WebGLRenderer({ 
+        antialias: false, // Bloom handles AA look
+        alpha: true       // Allow transparent background
+      });
+      renderer.setSize(1920, 1080);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      EYE_CONTAINER.appendChild(renderer.domElement);
+
+      const scene = new THREE.Scene();
+      // Camera positioned to frame the eye within the tower gap at Z=0
+      const camera = new THREE.PerspectiveCamera(40, 1920 / 1080, 0.1, 100);
+      camera.position.set(0, 0, 7.5); 
+
+      // --- THE EYE GEOMETRY (Oblate Spheroid) ---
+      // High poly count for vertex displacement
+      const geometry = new THREE.SphereGeometry(1.4, 256, 256); 
+
+      const uniforms = {
+        uTime: { value: 0 },
+        uPupilScale: { value: 0.08 }, // Controls pupil width (0 to 1)
+        uFocus: { value: 0 },         // 0 (Idle) to 1 (Attack)
+      };
+
+      // --- THE SHADER (Solar Filaments) ---
+      const material = new THREE.ShaderMaterial({
+        uniforms,
+        transparent: true,
+        vertexShader: `
+          varying vec2 vUv;
+          varying vec3 vPos;
+          varying vec3 vNormal;
+          
+          uniform float uTime;
+
+          // Simplex Noise for displacement
+          vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+          vec4 mod289(vec4 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+          vec4 permute(vec4 x) { return mod289(((x*34.0)+1.0)*x); }
+          vec4 taylorInvSqrt(vec4 r) { return 1.79284291400159 - 0.85373472095314 * r; }
+          float snoise(vec3 v) {
+            const vec2  C = vec2(1.0/6.0, 1.0/3.0);
+            const vec4  D = vec4(0.0, 0.5, 1.0, 2.0);
+            vec3 i  = floor(v + dot(v, C.yyy));
+            vec3 x0 = v - i + dot(i, C.xxx);
+            vec3 g = step(x0.yzx, x0.xyz);
+            vec3 l = 1.0 - g;
+            vec3 i1 = min(g.xyz, l.zxy);
+            vec3 i2 = max(g.xyz, l.zxy);
+            vec3 x1 = x0 - i1 + C.xxx;
+            vec3 x2 = x0 - i2 + C.yyy;
+            vec3 x3 = x0 - D.yyy;
+            i = mod289(i);
+            vec4 p = permute(permute(permute(
+                  i.z + vec4(0.0, i1.z, i2.z, 1.0))
+                + i.y + vec4(0.0, i1.y, i2.y, 1.0))
+                + i.x + vec4(0.0, i1.x, i2.x, 1.0));
+            float n_ = 0.142857142857;
+            vec3  ns = n_ * D.wyz - D.xzx;
+            vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+            vec4 x_ = floor(j * ns.z);
+            vec4 y_ = floor(j - 7.0 * x_);
+            vec4 x = x_ * ns.x + ns.yyyy;
+            vec4 y = y_ * ns.x + ns.yyyy;
+            vec4 h = 1.0 - abs(x) - abs(y);
+            vec4 b0 = vec4(x.xy, y.xy);
+            vec4 b1 = vec4(x.zw, y.zw);
+            vec4 s0 = floor(b0) * 2.0 + 1.0;
+            vec4 s1 = floor(b1) * 2.0 + 1.0;
+            vec4 sh = -step(h, vec4(0.0));
+            vec4 a0 = b0.xzyw + s0.xzyw * sh.xxyy;
+            vec4 a1 = b1.xzyw + s1.xzyw * sh.zzww;
+            vec3 p0 = vec3(a0.xy, h.x);
+            vec3 p1 = vec3(a0.zw, h.y);
+            vec3 p2 = vec3(a1.xy, h.z);
+            vec3 p3 = vec3(a1.zw, h.w);
+            vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3)));
+            p0 *= norm.x;
+            p1 *= norm.y;
+            p2 *= norm.z;
+            p3 *= norm.w;
+            vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
+            m = m * m;
+            return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
+          }
+
+          void main() {
+            vUv = uv;
+            vNormal = normalize(normalMatrix * normal);
+            vPos = position;
+
+          // Physical Displacement (Subtle Solar Turbulence)
+          float noise = snoise(position * 2.5 + vec3(uTime * 0.6));
+          float displacement = noise * 0.04; 
+
+            vec3 newPos = position + normal * displacement;
+            gl_Position = projectionMatrix * modelViewMatrix * vec4(newPos, 1.0);
+          }
+        `,
+        fragmentShader: `
+          uniform float uTime;
+          uniform float uPupilScale;
+          uniform float uFocus;
+
+          varying vec2 vUv;
+          varying vec3 vPos;
+          varying vec3 vNormal;
+
+          // --- NOISE FUNCTIONS ---
+          float hash(vec2 p) {
+            return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+          }
+          float noise(vec2 p) {
+            vec2 i = floor(p);
+            vec2 f = fract(p);
+            vec2 u = f*f*(3.0-2.0*f);
+            return mix( mix( hash( i + vec2(0.0,0.0) ), hash( i + vec2(1.0,0.0) ), u.x),
+                        mix( hash( i + vec2(0.0,1.0) ), hash( i + vec2(1.0,1.0) ), u.x), u.y);
+          }
+          float fbm(vec2 p) {
+            float f = 0.0;
+            f += 0.50000*noise( p ); p = p*2.02;
+            f += 0.25000*noise( p ); p = p*2.03;
+            f += 0.12500*noise( p ); p = p*2.01;
+            f += 0.06250*noise( p );
+            return f;
+          }
+
+          void main() {
+            // 1. COORDINATES
+            vec3 n = normalize(vNormal);
+            vec2 centered = vUv - 0.5;
+            float angle = atan(centered.y, centered.x);
+            float dist = length(centered);
+            float radial = dist;
+            float wrapAngle = atan(n.y, n.x);
+            float wrapDist = length(vec2(n.x, n.y));
+            float frontFactor = smoothstep(0.0, 0.5, n.z);
+            float fireAngle = mix(wrapAngle, angle, frontFactor);
+            float fireRadial = mix(wrapDist, radial, frontFactor);
+
+            // 2. THE FIRE TEXTURE (Solar Filaments)
+            float speed = uTime * (0.6 + uFocus * 1.6);
+            float rays = fbm(vec2(fireAngle * 20.0, fireRadial - speed));
+            float streaks = fbm(vec2(fireAngle * 40.0 + speed, fireRadial * 3.0));
+            float fireIntensity = rays + streaks * 0.6;
+
+            // 3. COLOR PALETTE (Solar Surface)
+            vec3 colPupilRim = vec3(3.0, 1.5, 0.2);
+            vec3 colMid      = vec3(2.2, 0.6, 0.1);
+            vec3 colRays     = vec3(1.2, 0.1, 0.0);
+            vec3 colChar     = vec3(0.0, 0.0, 0.0);
+
+            vec3 color = mix(colPupilRim, colMid, smoothstep(0.0, 0.5, fireRadial));
+            color = mix(color, colRays, smoothstep(0.2, 0.8, fireRadial + fireIntensity * 0.35));
+            color = mix(color, colChar, smoothstep(0.6, 1.0, fireRadial + fireIntensity * 0.25));
+
+            // Sparkles: high-frequency noise highlights
+            float sparkleNoise = noise(vec2(fireAngle * 30.0 + speed * 2.0, fireRadial * 6.0));
+            float sparkleMask = step(0.92, sparkleNoise) * (1.0 - smoothstep(0.35, 0.7, fireRadial));
+            color += vec3(1.8, 1.0, 0.3) * sparkleMask;
+
+            // 4. THE PUPIL (Void)
+            float pW = uPupilScale * 0.5; // Width
+            float pH = 0.45;              // Height
+            float pupilShape = pow(abs(centered.x / pW), 2.0) + pow(abs(centered.y / pH), 2.0);
+            float pupilMask = 1.0 - smoothstep(0.92, 1.0, pupilShape);
+            float facing = smoothstep(0.0, 0.2, n.z);
+            color *= (1.0 - pupilMask * facing);
+
+            // Pupil rim glow
+            float rim = smoothstep(0.92, 0.98, pupilShape) * facing;
+            color += colPupilRim * rim;
+
+            // 5. RIM GLOW (Atmosphere)
+            float fresnel = pow(1.0 - dot(n, vec3(0.0, 0.0, 1.0)), 3.0);
+            color += vec3(0.6, 0.15, 0.02) * fresnel * 0.5;
+
+            gl_FragColor = vec4(color, 1.0);
+          }
+        `,
+      });
+
+      // Create Mesh
+      const eyeMesh = new THREE.Mesh(geometry, material);
+      
+      // SQUASH IT: Make it an ellipsoid (Cat-eye)
+      eyeMesh.scale.set(1.35, 1.0, 1.0);
+      
+      // ROTATION: Initialize so texture front faces camera
+      // We will rotate this MESH with arrow keys to move the pupil
+      eyeMesh.rotation.y = -Math.PI / 2; 
+      
+      scene.add(eyeMesh);
+
+      // --- POST PROCESSING (BLOOM) ---
+      const renderScene = new RenderPass(scene, camera);
+      
+      // Resolution, Strength, Radius, Threshold
+      const bloomPass = new UnrealBloomPass(
+        new THREE.Vector2(1920, 1080),
+        2.2,  // Strength (High for blinding fire)
+        0.5,  // Radius
+        0.1   // Threshold (Low so orange parts glow too)
+      );
+
+      const composer = new EffectComposer(renderer);
+      composer.setSize(1920, 1080);
+      composer.addPass(renderScene);
+      composer.addPass(bloomPass);
+
+      // --- ANIMATION STATE ---
+      let targetRotationY = -Math.PI / 2;
+      let targetRotationX = 0;
+      let targetFocus = 0; // 0 = Idle, 1 = Attack
+      let currentFocus = 0;
+      
+      // --- RESIZE LOGIC (Cinematic Scaling) ---
+      function handleResize() {
+        const scale = Math.min(window.innerWidth / 1920, window.innerHeight / 1080);
+        CONTAINER.style.transform = `translate(-50%, -50%) scale(${scale})`;
+      }
+      window.addEventListener("resize", handleResize);
+      handleResize();
+
+      // --- INPUT HANDLING ---
+      const keys = { ArrowUp: false, ArrowDown: false, ArrowLeft: false, ArrowRight: false, Space: false };
+      
+      window.addEventListener("keydown", (e) => {
+        if(keys.hasOwnProperty(e.code)) keys[e.code] = true;
+        if(e.code === "Space") targetFocus = 1;
+      });
+      
+      window.addEventListener("keyup", (e) => {
+        if(keys.hasOwnProperty(e.code)) keys[e.code] = false;
+        if(e.code === "Space") targetFocus = 0;
+      });
+
+      // --- MAIN LOOP ---
+      const clock = new THREE.Clock();
+
+      function animate() {
+        requestAnimationFrame(animate);
+        
+        const dt = clock.getDelta();
+        const elapsed = clock.getElapsedTime();
+
+        // 1. UPDATE SHADER UNIFORMS
+        material.uniforms.uTime.value = elapsed;
+        
+        // Smoothly interpolate focus state
+        currentFocus += (targetFocus - currentFocus) * 0.1;
+        material.uniforms.uFocus.value = currentFocus;
+        bloomPass.strength = THREE.MathUtils.lerp(2.2, 3.2, currentFocus);
+
+        // 2. PUPIL DYNAMICS
+        // Idle: Breathe (Sine wave)
+        // Focus: Shrink to slit (Lerp to 0.01)
+        const breathe = 0.08 + Math.sin(elapsed * 1.5) * 0.01;
+        const slit = 0.01;
+        const currentPupil = THREE.MathUtils.lerp(breathe, slit, currentFocus);
+        material.uniforms.uPupilScale.value = currentPupil;
+
+        // 3. EYE MOVEMENT (Mesh Rotation)
+        // Manual Controls
+        const speed = 2.0 * dt;
+        if (keys.ArrowLeft) targetRotationY += speed;
+        if (keys.ArrowRight) targetRotationY -= speed;
+        if (keys.ArrowUp) targetRotationX -= speed;
+        if (keys.ArrowDown) targetRotationX += speed;
+
+        // Auto-Scan (Noise) if Idle
+        if (currentFocus < 0.1 && !keys.ArrowLeft && !keys.ArrowRight) {
+            targetRotationY += (Math.sin(elapsed * 0.5) * 0.001); 
+        }
+        if (currentFocus < 0.1 && !keys.ArrowUp && !keys.ArrowDown) {
+            targetRotationX += (Math.cos(elapsed * 0.4) * 0.0006);
+        }
+
+        // Apply Smoothing
+        eyeMesh.rotation.y += (targetRotationY - eyeMesh.rotation.y) * 0.1;
+        eyeMesh.rotation.x += (targetRotationX - eyeMesh.rotation.x) * 0.1;
+
+        // 4. THE "LEAN" (Z-Axis Move)
+        // Idle Z = 0. Focus Z = 2.0 (Moves closer/through tower gap)
+        const zPos = THREE.MathUtils.lerp(0, 2.5, currentFocus);
+        eyeMesh.position.z = zPos;
+
+        // Render
+        composer.render();
+      }
+
+      animate();
+
+    </script>
+  </body>
+</html>

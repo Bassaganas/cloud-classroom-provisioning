@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>The Eye of Barad-dûr</title>
+    <style>
+        :root {
+            --eye-width: 600px;
+            --eye-height: 280px;
+            --pupil-color: #000;
+            --fire-core: #ffcc00;
+            --fire-mid: #ff4400;
+            --fire-dark: #550000;
+            
+            /* Dynamic Variables set by JS */
+            --look-x: 0;      
+            --look-y: 0;      
+            --squint: 0;      
+        }
+
+        body {
+            margin: 0;
+            background-color: #050000;
+            height: 100vh;
+            width: 100vw;
+            display: flex;
+            justify-content: center;
+            align-items: center; /* FIXED: Centered Vertically */
+            overflow: hidden;
+            font-family: 'Courier New', monospace;
+        }
+
+        /* === 1. THE SCENE CONTAINER === */
+        .scene-container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center; /* Center the content */
+            
+            /* Scale slightly if screen is small */
+            transform: scale(0.85); 
+        }
+
+        /* === 2. THE TOWER (Anchored below the eye) === */
+        .tower-group {
+            position: absolute;
+            top: 50%; /* Start exactly at center line */
+            left: 50%;
+            transform: translate(-50%, 0); /* Center X, Start Y at middle */
+            z-index: 1;
+            display: flex;
+            justify-content: center;
+        }
+
+        .tower-silhouette {
+            width: 360px;
+            height: 100vh; /* Extends down off-screen */
+            background: linear-gradient(to top, #000 0%, #0a0505 80%, #150505 100%);
+            
+            /* Jagged Shape */
+            clip-path: polygon(
+                20% 100%, 15% 60%, 5% 40%, 15% 30%, 10% 5%, /* Left jagged */
+                30% 0%, 70% 0%, /* Flat top for eye */
+                90% 5%, 85% 30%, 95% 40%, 85% 60%, 80% 100% /* Right jagged */
+            );
+            box-shadow: 0 0 50px rgba(0,0,0,0.9);
+        }
+
+        .tower-horns {
+            position: absolute;
+            top: -50px; /* Curve up around the eye */
+            width: 500px;
+            height: 200px;
+            background: #0a0505;
+            z-index: 2;
+            clip-path: polygon(
+                0% 0%, 10% 20%, 20% 80%, 30% 100%, 
+                70% 100%, 80% 80%, 90% 20%, 100% 0%, 
+                85% 30%, 50% 90%, 15% 30% 
+            );
+        }
+
+        /* === 3. THE LIVING EYE (Centered) === */
+        .eye-anchor {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) scale(calc(1 - var(--squint) * 0.05));
+            z-index: 10;
+            transition: transform 0.2s ease-out;
+            /* Adjust this to sit "in" the tower horns perfectly */
+            margin-top: -60px; 
+        }
+
+        .eye-shape {
+            position: relative;
+            width: var(--eye-width);
+            height: calc(var(--eye-height) * (1 - var(--squint) * 0.4));
+            
+            /* MORPHING SHAPE based on look direction */
+            border-radius: 
+                calc(50% - var(--look-x) * 10%) calc(50% + var(--look-x) * 10%) 
+                calc(50% + var(--look-x) * 10%) calc(50% - var(--look-x) * 10%) / 50%;
+            
+            background: #000;
+            overflow: hidden; 
+            box-shadow: 0 0 100px var(--fire-mid);
+            transition: border-radius 0.2s ease-out, height 0.3s ease-out;
+        }
+
+        /* === THE FIRE TEXTURE (FIXED: NO SPINNING) === */
+        .eye-fire {
+            position: absolute;
+            top: -20%; left: -20%;
+            width: 140%; height: 140%;
+            
+            /* Parallax Movement (Opposite to pupil) */
+            transform: translate(calc(var(--look-x) * -20px), calc(var(--look-y) * -10px));
+            
+            background: radial-gradient(circle at center, 
+                var(--fire-core) 20%, 
+                var(--fire-mid) 50%, 
+                var(--fire-dark) 80%, 
+                #000 100%);
+            
+            mix-blend-mode: screen;
+            filter: blur(5px) contrast(1.4);
+            
+            /* FIXED: Replaced 'rotate' with 'scale' pulse */
+            animation: burn-pulse 3s infinite alternate ease-in-out;
+        }
+
+        /* Turbulence Layer */
+        .eye-fire::after {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            /* Random noise gradient */
+            background: radial-gradient(circle at 30% 30%, rgba(255,200,0,0.3), transparent 60%),
+                        radial-gradient(circle at 70% 70%, rgba(255,50,0,0.3), transparent 60%);
+            /* FIXED: 'shift-fire' does not rotate anymore */
+            animation: shift-fire 4s infinite ease-in-out alternate;
+        }
+
+        @keyframes burn-pulse {
+            0% { opacity: 0.9; transform: scale(1); }
+            100% { opacity: 1; transform: scale(1.05); }
+        }
+
+        @keyframes shift-fire {
+            0% { transform: scale(1) translate(0, 0); }
+            33% { transform: scale(1.02) translate(10px, 5px); }
+            66% { transform: scale(0.98) translate(-5px, -5px); }
+            100% { transform: scale(1) translate(0, 0); }
+        }
+
+        /* Inner Shadow overlay */
+        .eye-shadow-overlay {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            border-radius: inherit;
+            /* Dynamic shadow */
+            box-shadow: 
+                inset calc(var(--look-x) * 40px) calc(var(--look-y) * 20px) 80px rgba(0,0,0,0.8),
+                inset 0 0 30px #ff0000;
+            z-index: 5;
+            pointer-events: none;
+        }
+
+        /* The Pupil */
+        .pupil {
+            position: absolute;
+            top: 50%; left: 50%;
+            width: calc(18px + (1 - var(--squint)) * 12px); 
+            height: 90%; 
+            background: var(--pupil-color);
+            transform: translate(-50%, -50%) skewX(calc(var(--look-x) * -15deg));
+            border-radius: 50%;
+            box-shadow: 0 0 50px var(--fire-core), 0 0 15px #ffffaa inset;
+            z-index: 6;
+            filter: blur(1px);
+        }
+
+        /* Eyelids */
+        .lids {
+            position: absolute;
+            top: 0; left: 0; width: 100%; height: 100%;
+            border-radius: inherit;
+            box-shadow: inset 0 0 40px 25px #000;
+            z-index: 20;
+        }
+
+        /* UI Text */
+        .status-text {
+            position: fixed;
+            bottom: 30px;
+            width: 100%;
+            text-align: center;
+            font-size: 24px;
+            color: #550000;
+            letter-spacing: 5px;
+            text-shadow: 0 0 10px #ff0000;
+            z-index: 50;
+            pointer-events: none;
+        }
+        
+        .controls-hint {
+            position: fixed; top: 20px; right: 20px;
+            color: #444; font-size: 14px; z-index: 50;
+            font-family: sans-serif;
+            pointer-events: none;
+        }
+
+    </style>
+</head>
+<body>
+
+    <div class="controls-hint">ARROWS to Control | SPACE to Focus</div>
+
+    <div class="scene-container">
+        <div class="tower-group">
+            <div class="tower-silhouette"></div>
+            <div class="tower-horns"></div>
+        </div>
+
+        <div class="eye-anchor">
+            <div class="eye-shape" id="eye">
+                <div class="eye-fire"></div>
+                <div class="pupil" id="pupil"></div>
+                <div class="eye-shadow-overlay"></div>
+                <div class="lids"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="status-text" id="status">WATCHING</div>
+
+    <script>
+        const root = document.documentElement;
+        const pupil = document.getElementById('pupil');
+        const statusText = document.getElementById('status');
+
+        const MAX_X = 220;
+        const MAX_Y = 40;  
+        
+        let state = {
+            x: 0,
+            y: 0,
+            squint: 0, 
+            mode: 'AUTO' 
+        };
+
+        let autoTimer;
+
+        // --- RENDER ---
+        function render() {
+            pupil.style.left = `calc(50% + ${state.x}px)`;
+            pupil.style.top = `calc(50% + ${state.y}px)`;
+
+            const normX = state.x / MAX_X; 
+            const normY = state.y / MAX_Y;
+
+            root.style.setProperty('--look-x', normX);
+            root.style.setProperty('--look-y', normY);
+            root.style.setProperty('--squint', state.squint);
+        }
+
+        // --- AUTO AI ---
+        function triggerAutoBehavior() {
+            if (state.mode === 'MANUAL') return;
+
+            const roll = Math.random();
+
+            if (roll > 0.75) {
+                // Focus
+                state.squint = 1;
+                statusText.innerText = "I SEE YOU";
+                statusText.style.color = "#ff3300";
+                
+                setTimeout(() => {
+                    state.squint = 0;
+                    statusText.innerText = "SEARCHING...";
+                    statusText.style.color = "#550000";
+                    triggerAutoBehavior();
+                }, Math.random() * 2000 + 1500);
+
+            } else {
+                // Look Around
+                state.x = (Math.random() - 0.5) * 2 * (MAX_X * 0.8);
+                state.y = (Math.random() - 0.5) * 2 * (MAX_Y * 0.8);
+                render();
+                
+                setTimeout(triggerAutoBehavior, Math.random() * 1500 + 500);
+            }
+        }
+
+        // --- MANUAL CONTROL ---
+        document.addEventListener('keydown', (e) => {
+            if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(e.key)) {
+                state.mode = 'MANUAL';
+                statusText.innerText = "MANUAL OVERRIDE";
+                statusText.style.color = "#ffaa00";
+                clearTimeout(autoTimer);
+            }
+
+            const step = 25;
+
+            switch(e.key) {
+                case "ArrowUp": state.y -= step; break;
+                case "ArrowDown": state.y += step; break;
+                case "ArrowLeft": state.x -= step; break;
+                case "ArrowRight": state.x += step; break;
+                case " ": state.squint = 1; break; 
+            }
+
+            state.x = Math.max(-MAX_X, Math.min(state.x, MAX_X));
+            state.y = Math.max(-MAX_Y, Math.min(state.y, MAX_Y));
+            
+            render();
+        });
+
+        document.addEventListener('keyup', (e) => {
+            if (e.key === " ") state.squint = 0; 
+            render();
+
+            if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(e.key)) {
+                clearTimeout(autoTimer);
+                autoTimer = setTimeout(() => {
+                    state.mode = 'AUTO';
+                    statusText.innerText = "RESUMING WATCH";
+                    triggerAutoBehavior();
+                }, 2000);
+            }
+        });
+
+        // Start
+        render();
+        triggerAutoBehavior();
+
+    </script>
+</body>
+</html>

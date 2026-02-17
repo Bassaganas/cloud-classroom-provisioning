@@ -1,0 +1,554 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Ultimate Sauron's Eye</title>
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #020000;
+      font-family: "Segoe UI", Tahoma, sans-serif;
+    }
+
+    #stage {
+      position: relative;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+    }
+
+    #scene-container {
+      position: absolute;
+      width: 1920px;
+      height: 1080px;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%) scale(1);
+      transform-origin: center center;
+    }
+
+    canvas {
+      display: block;
+      width: 100%;
+      height: 100%;
+    }
+
+    #tower-overlay {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 10;
+      pointer-events: none;
+    }
+
+    #tower-overlay svg {
+      width: 100%;
+      height: 100%;
+    }
+
+    .hud {
+      position: absolute;
+      z-index: 20;
+      color: #5a2a1a;
+      letter-spacing: 4px;
+      font-size: 14px;
+      text-transform: uppercase;
+      text-shadow: 0 0 8px rgba(255, 80, 20, 0.4);
+      pointer-events: none;
+    }
+
+    #mode-label {
+      bottom: 24px;
+      width: 100%;
+      text-align: center;
+      font-size: 18px;
+    }
+
+    #controls-label {
+      top: 20px;
+      right: 24px;
+      letter-spacing: 2px;
+      opacity: 0.7;
+    }
+  </style>
+</head>
+<body>
+  <div id="stage">
+    <div id="scene-container">
+      <canvas id="gl"></canvas>
+      <div id="tower-overlay">
+        <svg viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice">
+          <defs>
+            <linearGradient id="towerGradient" x1="0" y1="1" x2="0" y2="0">
+              <stop offset="0%" stop-color="#4a4a40" />
+              <stop offset="100%" stop-color="#6b6b5c" />
+            </linearGradient>
+            <filter id="rocky" x="-20%" y="-20%" width="140%" height="140%">
+              <feTurbulence type="fractalNoise" baseFrequency="0.5" numOctaves="3" seed="2" result="noise" />
+              <feDisplacementMap in="SourceGraphic" in2="noise" scale="6" xChannelSelector="R" yChannelSelector="G" />
+              <feDiffuseLighting in="noise" lighting-color="#6b6b5c" surfaceScale="2.2" result="light">
+                <feDistantLight azimuth="210" elevation="40" />
+              </feDiffuseLighting>
+              <feComposite in="SourceGraphic" in2="light" operator="arithmetic" k1="1" k2="0.4" k3="0.4" k4="0" />
+            </filter>
+          </defs>
+          <path
+            d="M0,1080 L0,620 Q40,420 160,260 Q260,150 360,40 Q380,10 420,0 Q380,120 340,260 Q280,420 260,600 Q240,800 280,1080 Z"
+            fill="url(#towerGradient)"
+            filter="url(#rocky)"
+          />
+          <path
+            d="M1920,1080 L1920,620 Q1880,420 1760,260 Q1660,150 1560,40 Q1540,10 1500,0 Q1540,120 1580,260 Q1640,420 1660,600 Q1680,800 1640,1080 Z"
+            fill="url(#towerGradient)"
+            filter="url(#rocky)"
+          />
+        </svg>
+      </div>
+      <div id="controls-label" class="hud">Arrows = Scan | Space = Focus</div>
+      <div id="mode-label" class="hud">SEARCHING</div>
+    </div>
+  </div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.159.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.159.0/examples/jsm/"
+      }
+    }
+  </script>
+  <script type="module">
+    import * as THREE from "three";
+    import { EffectComposer } from "three/addons/postprocessing/EffectComposer.js";
+    import { RenderPass } from "three/addons/postprocessing/RenderPass.js";
+    import { UnrealBloomPass } from "three/addons/postprocessing/UnrealBloomPass.js";
+
+    const canvas = document.getElementById("gl");
+    const sceneContainer = document.getElementById("scene-container");
+    const modeLabel = document.getElementById("mode-label");
+
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x020000);
+
+    const DESIGN_WIDTH = 1920;
+    const DESIGN_HEIGHT = 1080;
+    const camera = new THREE.PerspectiveCamera(40, DESIGN_WIDTH / DESIGN_HEIGHT, 0.1, 100);
+    camera.position.set(0, 0, 6.5);
+
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(DESIGN_WIDTH, DESIGN_HEIGHT, false);
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.2;
+
+    const composer = new EffectComposer(renderer);
+    composer.addPass(new RenderPass(scene, camera));
+    const bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(DESIGN_WIDTH, DESIGN_HEIGHT),
+      2.5,
+      0.6,
+      0.8
+    );
+    composer.addPass(bloomPass);
+
+    const eyeGroup = new THREE.Group();
+    scene.add(eyeGroup);
+    const eyeAnchorY = 0.0;
+    eyeGroup.position.y = eyeAnchorY;
+
+    const geometry = new THREE.SphereGeometry(1.4, 200, 200);
+
+    const uniforms = {
+      uTime: { value: 0 },
+      uDisplace: { value: 0.25 },
+      uPupilWidth: { value: 0.12 },
+      uFocus: { value: 0 },
+      uParallax: { value: 0.5 }
+    };
+
+    const vertexShader = `
+      varying vec3 vNormalW;
+      varying vec3 vViewNormal;
+      varying vec3 vWorldPosition;
+      varying vec2 vUv;
+
+      uniform float uTime;
+      uniform float uDisplace;
+
+      vec3 mod289(vec3 x){return x - floor(x * (1.0 / 289.0)) * 289.0;}
+      vec4 mod289(vec4 x){return x - floor(x * (1.0 / 289.0)) * 289.0;}
+      vec4 permute(vec4 x){return mod289(((x*34.0)+1.0)*x);}
+      vec4 taylorInvSqrt(vec4 r){return 1.79284291400159 - 0.85373472095314 * r;}
+
+      float snoise(vec3 v){
+        const vec2  C = vec2(1.0/6.0, 1.0/3.0);
+        const vec4  D = vec4(0.0, 0.5, 1.0, 2.0);
+        vec3 i  = floor(v + dot(v, C.yyy));
+        vec3 x0 = v - i + dot(i, C.xxx);
+        vec3 g = step(x0.yzx, x0.xyz);
+        vec3 l = 1.0 - g;
+        vec3 i1 = min(g.xyz, l.zxy);
+        vec3 i2 = max(g.xyz, l.zxy);
+        vec3 x1 = x0 - i1 + C.xxx;
+        vec3 x2 = x0 - i2 + C.yyy;
+        vec3 x3 = x0 - D.yyy;
+        i = mod289(i);
+        vec4 p = permute(permute(permute(
+                i.z + vec4(0.0, i1.z, i2.z, 1.0))
+              + i.y + vec4(0.0, i1.y, i2.y, 1.0))
+              + i.x + vec4(0.0, i1.x, i2.x, 1.0));
+        float n_ = 0.142857142857;
+        vec3  ns = n_ * D.wyz - D.xzx;
+        vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+        vec4 x_ = floor(j * ns.z);
+        vec4 y_ = floor(j - 7.0 * x_);
+        vec4 x = x_ * ns.x + ns.yyyy;
+        vec4 y = y_ * ns.x + ns.yyyy;
+        vec4 h = 1.0 - abs(x) - abs(y);
+        vec4 b0 = vec4(x.xy, y.xy);
+        vec4 b1 = vec4(x.zw, y.zw);
+        vec4 s0 = floor(b0) * 2.0 + 1.0;
+        vec4 s1 = floor(b1) * 2.0 + 1.0;
+        vec4 sh = -step(h, vec4(0.0));
+        vec4 a0 = b0.xzyw + s0.xzyw * sh.xxyy;
+        vec4 a1 = b1.xzyw + s1.xzyw * sh.zzww;
+        vec3 p0 = vec3(a0.xy, h.x);
+        vec3 p1 = vec3(a0.zw, h.y);
+        vec3 p2 = vec3(a1.xy, h.z);
+        vec3 p3 = vec3(a1.zw, h.w);
+        vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3)));
+        p0 *= norm.x;
+        p1 *= norm.y;
+        p2 *= norm.z;
+        p3 *= norm.w;
+        vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
+        m = m * m;
+        return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
+      }
+
+      float fbm(vec3 p){
+        float f = 0.0;
+        float a = 0.6;
+        for(int i=0; i<5; i++){
+          f += a * snoise(p);
+          p *= 2.0;
+          a *= 0.5;
+        }
+        return f;
+      }
+
+      void main() {
+        vUv = uv;
+        vNormalW = normalize(normalMatrix * normal);
+        vViewNormal = normalize(normalMatrix * normal);
+
+        vec3 p = position * 1.2;
+        float ripple = fbm(p + vec3(0.0, uTime * 0.4, uTime * 0.2));
+        float bubble = fbm(p * 2.3 - vec3(uTime * 0.15));
+        float displacement = (ripple * 0.6 + bubble * 0.4) * uDisplace;
+
+        vec3 displaced = position + normal * displacement;
+        vec4 worldPosition = modelMatrix * vec4(displaced, 1.0);
+        vWorldPosition = worldPosition.xyz;
+
+        gl_Position = projectionMatrix * viewMatrix * worldPosition;
+      }
+    `;
+
+    const fragmentShader = `
+      varying vec3 vNormalW;
+      varying vec3 vViewNormal;
+      varying vec3 vWorldPosition;
+      varying vec2 vUv;
+
+      uniform float uTime;
+      uniform float uPupilWidth;
+      uniform float uFocus;
+      uniform float uParallax;
+
+      vec3 mod289(vec3 x){return x - floor(x * (1.0 / 289.0)) * 289.0;}
+      vec4 mod289(vec4 x){return x - floor(x * (1.0 / 289.0)) * 289.0;}
+      vec4 permute(vec4 x){return mod289(((x*34.0)+1.0)*x);}
+      vec4 taylorInvSqrt(vec4 r){return 1.79284291400159 - 0.85373472095314 * r;}
+
+      float snoise(vec3 v){
+        const vec2  C = vec2(1.0/6.0, 1.0/3.0);
+        const vec4  D = vec4(0.0, 0.5, 1.0, 2.0);
+        vec3 i  = floor(v + dot(v, C.yyy));
+        vec3 x0 = v - i + dot(i, C.xxx);
+        vec3 g = step(x0.yzx, x0.xyz);
+        vec3 l = 1.0 - g;
+        vec3 i1 = min(g.xyz, l.zxy);
+        vec3 i2 = max(g.xyz, l.zxy);
+        vec3 x1 = x0 - i1 + C.xxx;
+        vec3 x2 = x0 - i2 + C.yyy;
+        vec3 x3 = x0 - D.yyy;
+        i = mod289(i);
+        vec4 p = permute(permute(permute(
+                i.z + vec4(0.0, i1.z, i2.z, 1.0))
+              + i.y + vec4(0.0, i1.y, i2.y, 1.0))
+              + i.x + vec4(0.0, i1.x, i2.x, 1.0));
+        float n_ = 0.142857142857;
+        vec3  ns = n_ * D.wyz - D.xzx;
+        vec4 j = p - 49.0 * floor(p * ns.z * ns.z);
+        vec4 x_ = floor(j * ns.z);
+        vec4 y_ = floor(j - 7.0 * x_);
+        vec4 x = x_ * ns.x + ns.yyyy;
+        vec4 y = y_ * ns.x + ns.yyyy;
+        vec4 h = 1.0 - abs(x) - abs(y);
+        vec4 b0 = vec4(x.xy, y.xy);
+        vec4 b1 = vec4(x.zw, y.zw);
+        vec4 s0 = floor(b0) * 2.0 + 1.0;
+        vec4 s1 = floor(b1) * 2.0 + 1.0;
+        vec4 sh = -step(h, vec4(0.0));
+        vec4 a0 = b0.xzyw + s0.xzyw * sh.xxyy;
+        vec4 a1 = b1.xzyw + s1.xzyw * sh.zzww;
+        vec3 p0 = vec3(a0.xy, h.x);
+        vec3 p1 = vec3(a0.zw, h.y);
+        vec3 p2 = vec3(a1.xy, h.z);
+        vec3 p3 = vec3(a1.zw, h.w);
+        vec4 norm = taylorInvSqrt(vec4(dot(p0,p0), dot(p1,p1), dot(p2,p2), dot(p3,p3)));
+        p0 *= norm.x;
+        p1 *= norm.y;
+        p2 *= norm.z;
+        p3 *= norm.w;
+        vec4 m = max(0.6 - vec4(dot(x0,x0), dot(x1,x1), dot(x2,x2), dot(x3,x3)), 0.0);
+        m = m * m;
+        return 42.0 * dot(m*m, vec4(dot(p0,x0), dot(p1,x1), dot(p2,x2), dot(p3,x3)));
+      }
+
+      float fbm(vec3 p){
+        float f = 0.0;
+        float a = 0.6;
+        for(int i=0; i<5; i++){
+          f += a * snoise(p);
+          p *= 2.0;
+          a *= 0.5;
+        }
+        return f;
+      }
+
+      float hash(vec2 p) {
+        p = fract(p * vec2(123.34, 456.21));
+        p += dot(p, p + 45.32);
+        return fract(p.x * p.y);
+      }
+
+      float voronoi(vec2 x) {
+        vec2 n = floor(x);
+        vec2 f = fract(x);
+        float md = 8.0;
+        for (int j=-1; j<=1; j++) {
+          for (int i=-1; i<=1; i++) {
+            vec2 g = vec2(float(i), float(j));
+            vec2 o = vec2(hash(n + g), hash(n + g + 1.3));
+            vec2 r = g + o - f;
+            float d = dot(r, r);
+            md = min(md, d);
+          }
+        }
+        return md;
+      }
+
+      void main() {
+        vec3 viewNormal = normalize(vViewNormal);
+        float facing = smoothstep(0.1, 0.9, viewNormal.z);
+
+        vec2 pupilUv = vUv - vec2(0.5);
+        float dist = length(pupilUv);
+        float angle = atan(pupilUv.y, pupilUv.x);
+        float flow = dist * 4.0 - uTime * 0.9;
+
+        vec3 magmaPos = vec3(pupilUv * 4.0, flow);
+        float radialNoise = fbm(magmaPos + vec3(cos(angle) * 0.6, sin(angle) * 0.6, flow));
+        float streaks = fbm(vec3(pupilUv * 10.0 + vec2(cos(angle), sin(angle)) * flow, uTime * 0.4));
+
+        float heat = smoothstep(0.05, 0.95, radialNoise + streaks * 0.55 + (1.0 - dist));
+        vec3 core = vec3(3.2, 2.6, 0.9);
+        vec3 mid = vec3(2.1, 0.7, 0.15);
+        vec3 crust = vec3(0.08, 0.02, 0.02);
+
+        vec2 crustUv = vUv * 9.5 + vec2(uTime * 0.05, uTime * 0.02);
+        float crack = smoothstep(0.05, 0.28, voronoi(crustUv));
+        vec3 lavaColor = mix(mid, core, heat);
+        vec3 surfaceColor = mix(crust, lavaColor, crack);
+
+        float rim = pow(1.0 - max(dot(viewNormal, vec3(0.0, 0.0, 1.0)), 0.0), 2.5);
+        vec3 rimGlow = vec3(1.2, 0.45, 0.1) * rim * 0.9;
+
+        float slitWidth = uPupilWidth;
+        float slit = smoothstep(slitWidth, slitWidth - 0.012, abs(pupilUv.x));
+        float verticalClamp = smoothstep(0.5, 0.18, abs(pupilUv.y));
+        float pupilMask = slit * verticalClamp * facing;
+
+        vec3 color = surfaceColor + rimGlow;
+        color = mix(color, vec3(0.0), pupilMask);
+
+        gl_FragColor = vec4(color, 1.0);
+      }
+    `;
+
+    const material = new THREE.ShaderMaterial({
+      uniforms,
+      vertexShader,
+      fragmentShader
+    });
+
+    const eyeMesh = new THREE.Mesh(geometry, material);
+    eyeMesh.rotation.y = Math.PI;
+    eyeGroup.add(eyeMesh);
+
+    let targetState = "SEARCH";
+    let manualOverride = false;
+    let lastManualInput = 0;
+
+    let targetZ = 0;
+    let currentZ = 0;
+    let pupilWidth = 0.12;
+    let rotationTarget = new THREE.Euler(0, 0, 0);
+    let rotationVelocity = new THREE.Vector2(0, 0);
+    let nextScanChange = 0;
+
+    function setModeLabel(text) {
+      modeLabel.textContent = text;
+    }
+
+    async function fetchStatus() {
+      if (manualOverride) return;
+      if (window.location.protocol === "file:") {
+        return;
+      }
+      try {
+        const response = await fetch("/api/status", { cache: "no-store" });
+        if (!response.ok) return;
+        const data = await response.json();
+        if (data && data.mode) {
+          targetState = data.mode.toUpperCase();
+        }
+      } catch (err) {
+        // Ignore API errors in demo mode.
+      }
+    }
+
+    setInterval(fetchStatus, 1000);
+
+    function handleManualInput() {
+      manualOverride = true;
+      lastManualInput = performance.now();
+    }
+
+    window.addEventListener("keydown", (event) => {
+      if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " "].includes(event.key)) {
+        handleManualInput();
+      }
+
+      switch (event.key) {
+        case "ArrowUp":
+          rotationVelocity.y -= 0.02;
+          targetState = "SEARCH";
+          break;
+        case "ArrowDown":
+          rotationVelocity.y += 0.02;
+          targetState = "SEARCH";
+          break;
+        case "ArrowLeft":
+          rotationVelocity.x -= 0.02;
+          targetState = "SEARCH";
+          break;
+        case "ArrowRight":
+          rotationVelocity.x += 0.02;
+          targetState = "SEARCH";
+          break;
+        case " ":
+          targetState = "FOCUS";
+          break;
+      }
+    });
+
+    window.addEventListener("keyup", (event) => {
+      if (event.key === " ") {
+        targetState = "SEARCH";
+      }
+    });
+
+    const clock = new THREE.Clock();
+
+    function updateState(delta, elapsed) {
+      if (manualOverride && performance.now() - lastManualInput > 4000) {
+        manualOverride = false;
+      }
+
+      if (targetState === "FOCUS") {
+        targetZ = 2;
+        uniforms.uFocus.value = 1;
+        pupilWidth = 0.02;
+        setModeLabel("FOCUS");
+      } else {
+        targetZ = 0;
+        uniforms.uFocus.value = 0;
+        pupilWidth = 0.135 + Math.sin(elapsed * 1.1) * 0.015;
+        setModeLabel("SEARCHING");
+      }
+
+      if (targetState === "SEARCH" && !manualOverride) {
+        if (elapsed > nextScanChange) {
+          rotationTarget.x = (Math.random() - 0.5) * 0.45;
+          rotationTarget.y = (Math.random() - 0.5) * 0.8;
+          nextScanChange = elapsed + 2.2 + Math.random() * 1.8;
+        }
+      } else {
+        rotationTarget.x = 0;
+        rotationTarget.y = 0;
+      }
+
+      const damp = 1.0 - Math.exp(-delta * 2.5);
+      currentZ += (targetZ - currentZ) * damp;
+      eyeGroup.position.z = currentZ;
+
+      rotationVelocity.multiplyScalar(0.85);
+      eyeMesh.rotation.x += rotationVelocity.y;
+      eyeMesh.rotation.y += rotationVelocity.x;
+
+      eyeMesh.rotation.x += (rotationTarget.x - eyeMesh.rotation.x) * damp * 0.8;
+      eyeMesh.rotation.y += (rotationTarget.y - eyeMesh.rotation.y) * damp * 0.8;
+
+      uniforms.uPupilWidth.value += (pupilWidth - uniforms.uPupilWidth.value) * 0.2;
+    }
+
+    function animate() {
+      const delta = clock.getDelta();
+      const elapsed = clock.elapsedTime;
+
+      uniforms.uTime.value = elapsed;
+      updateState(delta, elapsed);
+
+      composer.render();
+      requestAnimationFrame(animate);
+    }
+
+    animate();
+
+    function updateSceneScale() {
+      const scale = Math.min(window.innerWidth / DESIGN_WIDTH, window.innerHeight / DESIGN_HEIGHT);
+      sceneContainer.style.transform = `translate(-50%, -50%) scale(${scale})`;
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setSize(DESIGN_WIDTH, DESIGN_HEIGHT, false);
+      composer.setSize(DESIGN_WIDTH, DESIGN_HEIGHT);
+      bloomPass.setSize(DESIGN_WIDTH, DESIGN_HEIGHT);
+      camera.aspect = DESIGN_WIDTH / DESIGN_HEIGHT;
+      camera.updateProjectionMatrix();
+    }
+
+    updateSceneScale();
+    window.addEventListener("resize", updateSceneScale);
+  </script>
+</body>
+</html>
