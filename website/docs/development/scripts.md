@@ -117,3 +117,38 @@ functions/packages/
 - `--region`: AWS region (default: `eu-west-3`)
 
 **Note:** Frontend deployment is normally handled automatically by `setup_aws.sh` during infrastructure deployment. Use this script for manual frontend updates.
+
+## Quick Start
+
+**For new deployments:**
+```bash
+./scripts/setup_classroom.sh --name my-classroom --cloud aws --region eu-west-3
+```
+
+**For local development:**
+```bash
+./scripts/test_local.sh
+```
+
+**For frontend-only updates:**
+```bash
+./scripts/build_frontend.sh --environment dev --region eu-west-3
+```
+
+## Notes
+
+- All scripts use relative paths and can be run from the project root
+- Terraform manages state automatically - no manual imports needed
+- Frontend deployment is integrated into the main deployment flow
+- Lambda packaging is automatic unless `--skip-packaging` is used
+- For detailed deployment information, see the [Deployment Guide](/docs/deployment/guide)
+
+## Clean Deployment Workflow
+
+The deployment system is designed to work cleanly without manual state management:
+
+1. **First deployment**: Run `setup_classroom.sh` - Terraform creates everything
+2. **Updates**: Run `setup_classroom.sh` again - Terraform updates existing resources
+3. **Clean slate**: Use `--destroy` then redeploy for a fresh start
+
+No import scripts or state patching needed - Terraform handles it all.

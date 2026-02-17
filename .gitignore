@@ -38,6 +38,7 @@ obj/
 # IDE files
 .idea/
 .vscode/
+.cursor/
 *.swp
 *.swo
 .DS_Store
@@ -52,56 +53,25 @@ obj/
 terraform.rc
 errored.tfstate
 
+# Docusaurus
+website/build/
+website/.docusaurus/
+website/node_modules/
+
 # Logs
 *.log
 logs/
 functions/azure/.venv-py39/pyvenv.cfg
 venv-py39/pyvenv.cfg
+# Terraform state files (HCL format)
 iac/azure/state/*.hcl
 iac/azure/state/*.lock.hcl
-performance_tests/scenario1_results_20251108_112825.txt
-performance_tests/scenario1_results_20251108_113214.txt
-performance_tests/scenario1_results_20251108_113602.txt
-performance_tests/scenario1_results_20251108_114453.txt
-performance_tests/scenario1_results_20251108_114721.txt
-performance_tests/scenario1_results_20251108_115346.txt
-performance_tests/scenario1_results_20251108_122535.txt
-performance_tests/scenario1_results_20251108_123637.txt
-performance_tests/scenario1_results_20251108_125559.txt
-performance_tests/scenario1_results_20251108_130844.txt
-performance_tests/scenario1_results_20251108_134820.txt
-performance_tests/scenario1_results_20251108_143240.txt
-performance_tests/scenario1_results_20251108_143956.txt
-performance_tests/scenario2_results_20251108_114905.txt
-performance_tests/scenario2_results_20251108_115615.txt
-performance_tests/scenario2_results_20251108_120056.txt
-performance_tests/scenario2_results_20251108_131615.txt
-performance_tests/scenario2_results_20251108_131756.txt
-performance_tests/scenario2_results_20251108_150338.txt
-performance_tests/SCENARIO3_BUSINESS_LOGIC.md
-performance_tests/scenario3_results_20251108_120459.txt
-performance_tests/scenario3_results_20251108_121149.txt
-performance_tests/scenario3_results_20251108_132354.txt
-performance_tests/scenario3_results_20251108_132937.txt
-performance_tests/scenario3_results_20251108_140554.txt
-performance_tests/scenario3_results_20251108_150031.txt
-performance_tests/scenario4_results_20251108_150817.txt
-performance_tests/scenario5_results_20251108_151211.txt
-performance_tests/scenario5_results_20251108_153258.txt
-performance_tests/scenario5_results_20251108_154510.txt
-performance_tests/scenario5_results_20251108_160034.txt
-performance_tests/scenario5_results_20251108_162354.txt
-iac/backend/aws/.terraform.lock.hcl
+
+# Note: .terraform.lock.hcl files should be COMMITTED to ensure consistent provider versions
+# Remove any .terraform.lock.hcl entries from gitignore if present
+
+# Temporary files
 users_e2e_qs_2025.txt
-functions/packages/dify_jira_api.zip
-functions/packages/testus_patronus_admin_cleanup.zip
-functions/packages/testus_patronus_instance_manager.zip
-functions/packages/testus_patronus_status.zip
-functions/packages/testus_patronus_stop_old_instances.zip
-functions/packages/testus_patronus_user_management.zip
-functions/packages/classroom_admin_cleanup.zip
-functions/packages/classroom_instance_manager.zip
-functions/packages/classroom_stop_old_instances.zip
-functions/packages/classroom_user_management.zip
-iac/aws/common/.terraform.lock.hcl
-iac/aws/workshops/testus_patronus/.terraform.lock.hcl
+
+# Lambda packages (generated files)
+functions/packages/*.zip
