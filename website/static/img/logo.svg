@@ -1,14 +1,5 @@
-<svg width="200" height="200" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg">
-  <!-- Cloud shape -->
-  <path d="M 50 80 Q 30 80 30 100 Q 30 120 50 120 L 150 120 Q 170 120 170 100 Q 170 80 150 80 Q 150 60 130 60 Q 110 60 110 80 Q 90 80 90 100 Q 90 80 70 80 Q 50 80 50 100 Z" fill="#25c2a0" opacity="0.9"/>
-  
-  <!-- Book/Classroom element -->
-  <rect x="80" y="100" width="40" height="30" rx="2" fill="#ffffff" opacity="0.95"/>
-  <line x1="90" y1="110" x2="110" y2="110" stroke="#25c2a0" stroke-width="2"/>
-  <line x1="90" y1="118" x2="110" y2="118" stroke="#25c2a0" stroke-width="2"/>
-  <line x1="90" y1="126" x2="105" y2="126" stroke="#25c2a0" stroke-width="2"/>
-  
-  <!-- Small decorative elements -->
-  <circle cx="60" cy="90" r="3" fill="#ffffff" opacity="0.8"/>
-  <circle cx="140" cy="90" r="3" fill="#ffffff" opacity="0.8"/>
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="32" height="32" viewBox="0 0 32 32" xmlns="http://www.w3.org/2000/svg">
+  <rect width="32" height="32" rx="6" fill="#25c2a0"/>
+  <text x="16" y="22" font-family="Arial, sans-serif" font-size="16" font-weight="bold" text-anchor="middle" fill="white">CC</text>
 </svg>
