@@ -15,75 +15,81 @@ This project enables educational institutions and training organizations to:
 
 ## 🏗️ Overall Architecture
 
-The system follows a **serverless, modular monolith** architecture pattern:
+The system follows a **serverless modular architecture** pattern with **separate access paths for students and instructors**:
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    User Access Layer                         │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │   Students   │  │  Instructors │  │   Admins     │      │
-│  └──────┬───────┘  └──────┬───────┘  └──────┬───────┘      │
-└─────────┼──────────────────┼──────────────────┼──────────────┘
-          │                  │                  │
-          ▼                  ▼                  ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    Frontend Layer                          │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  React SPA (CloudFront + S3)                        │   │
-│  │  - Instance Management UI                            │   │
-│  │  - Workshop Configuration                           │   │
-│  │  - Tutorial Session Management                      │   │
-│  └──────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
-          │
-          ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    API Layer                                  │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │  API Gateway (REST API)                              │   │
-│  │  - Routes /api/* requests                            │   │
-│  │  - Custom domain: ec2-management-api.testingfantasy │   │
-│  └──────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
-          │
-          ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    Compute Layer                              │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │   Lambda    │  │   Lambda     │  │   Lambda     │      │
-│  │  Instance   │  │   User       │  │   Cleanup    │      │
-│  │  Manager    │  │  Management  │  │   Functions  │      │
-│  └──────┬──────┘  └──────┬───────┘  └──────┬───────┘      │
-│         │                │                 │               │
-│         └────────────────┼─────────────────┘               │
-│                          │                                 │
-│         ┌────────────────▼─────────────────┐              │
-│         │      EC2 Instance Pool            │              │
-│         │  - Pre-configured applications     │              │
-│         │  - Dify AI, Jenkins, etc.          │              │
-│         └────────────────────────────────────┘              │
-└─────────────────────────────────────────────────────────────┘
-          │
-          ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    Data Layer                                │
-│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
-│  │  DynamoDB    │  │  SSM         │  │  Secrets     │      │
-│  │  - Instance  │  │  Parameter   │  │  Manager     │      │
-│  │    Assignments│  │  Store       │  │  - Passwords │      │
-│  │  - Sessions  │  │  - Templates  │  │  - Configs   │      │
-│  └──────────────┘  └──────────────┘  └──────────────┘      │
-└─────────────────────────────────────────────────────────────┘
+```mermaid
+flowchart TB
+    subgraph users[User Access Layer]
+        Students[Students]
+        Instructors[Instructors]
+        Admins[Admins]
+    end
+    
+    subgraph studentAccess[Student Access Path]
+        StudentCF[CloudFront<br/>testus-patronus.testingfantasy.com<br/>fellowship-of-the-build.testingfantasy.com]
+        StudentLambda[Workshop Lambda Functions<br/>classroom_user_management.py<br/>Serves HTML directly]
+    end
+    
+    subgraph instructorAccess[Instructor Access Path]
+        InstructorCF[CloudFront<br/>ec2-management-env.testingfantasy.com]
+        InstructorS3[S3 Bucket<br/>React SPA]
+        InstructorAPI[API Gateway<br/>REST API<br/>ec2-management-api-env.testingfantasy.com]
+        InstanceManager[Instance Manager Lambda<br/>classroom_instance_manager.py]
+    end
+    
+    subgraph compute[Compute Layer]
+        EC2Pool[EC2 Instance Pool<br/>Pre-configured applications<br/>Dify AI, Jenkins, etc.]
+        CleanupLambdas[Cleanup Lambda Functions<br/>Stop Old Instances<br/>Admin Cleanup]
+    end
+    
+    subgraph data[Data Layer]
+        DynamoDB[(DynamoDB<br/>Instance Assignments<br/>Tutorial Sessions)]
+        SSM[SSM Parameter Store<br/>Templates & Configs]
+        Secrets[Secrets Manager<br/>Passwords & Credentials]
+    end
+    
+    Students --> StudentCF
+    StudentCF --> StudentLambda
+    StudentLambda --> EC2Pool
+    StudentLambda --> DynamoDB
+    StudentLambda --> SSM
+    StudentLambda --> Secrets
+    
+    Instructors --> InstructorCF
+    InstructorCF --> InstructorS3
+    InstructorS3 --> InstructorAPI
+    InstructorAPI --> InstanceManager
+    InstanceManager --> EC2Pool
+    InstanceManager --> DynamoDB
+    InstanceManager --> SSM
+    InstanceManager --> Secrets
+    
+    CleanupLambdas --> EC2Pool
+    CleanupLambdas --> DynamoDB
 ```
 
 ### Key Components
 
-1. **Frontend (React SPA)**: Web-based management interface hosted on S3 and served via CloudFront
-2. **API Gateway**: RESTful API that routes requests to Lambda functions
-3. **Lambda Functions**: Serverless compute for business logic
-4. **EC2 Instances**: Pre-configured compute resources for students
-5. **Data Storage**: DynamoDB for state, SSM for configuration, Secrets Manager for credentials
-6. **Infrastructure as Code**: Terraform modules for reproducible deployments
+**Student-Facing Components:**
+1. **Workshop Lambda Functions**: Serverless functions that serve HTML pages directly to students
+   - `classroom_user_management.py`: Creates student accounts and serves HTML with credentials
+   - `testus_patronus_status.py`: Status checking for workshop instances
+   - `dify_jira_api.py`: Dify Jira API integration
+   - Accessed via CloudFront: `testus-patronus.testingfantasy.com`, `fellowship-of-the-build.testingfantasy.com`
+
+**Instructor-Facing Components:**
+2. **EC2 Manager Frontend (React SPA)**: Web-based management interface hosted on S3 and served via CloudFront
+   - Custom domain: `ec2-management-{environment}.testingfantasy.com` (e.g., `ec2-management-dev.testingfantasy.com`)
+   - Instance management, workshop configuration, tutorial session management
+3. **API Gateway**: RESTful API that routes requests to Lambda functions
+   - Custom domain: `ec2-management-api-{environment}.testingfantasy.com` (e.g., `ec2-management-api-dev.testingfantasy.com`)
+4. **Instance Manager Lambda**: Core Lambda function handling EC2 lifecycle management
+   - Manages instance creation, assignment, deletion, HTTPS setup
+
+**Shared Components:**
+5. **EC2 Instances**: Pre-configured compute resources for students
+6. **Data Storage**: DynamoDB for state, SSM for configuration, Secrets Manager for credentials
+7. **Infrastructure as Code**: Terraform modules for reproducible deployments
 
 ## 🏛️ AWS Architecture
 
@@ -92,38 +98,47 @@ The system follows a **serverless, modular monolith** architecture pattern:
 ```mermaid
 flowchart TB
     subgraph client["Client Access"]
-        User["👤 User<br/>Browser"]
+        Student["👤 Student<br/>Browser"]
+        Instructor["👤 Instructor<br/>Browser"]
     end
 
-    subgraph cdn["Content Delivery & Routing"]
-        CF["🌐 CloudFront<br/>CDN Distribution<br/>ec2-management-{env}.testingfantasy.com"]
-        ACM["🔒 ACM Certificate<br/>SSL/TLS (us-east-1)"]
-        Route53["📡 Route53<br/>DNS Management"]
+    subgraph studentCDN["Student Access - CDN & Routing"]
+        StudentCF["🌐 CloudFront<br/>testus-patronus.testingfantasy.com<br/>fellowship-of-the-build.testingfantasy.com"]
+        StudentACM["🔒 ACM Certificate<br/>SSL/TLS us-east-1"]
+        StudentRoute53["📡 Route53<br/>DNS Management"]
     end
 
-    subgraph frontend["Frontend Hosting"]
-        S3["🪣 S3 Bucket<br/>Static React App<br/>ec2-manager-frontend-{workshop}-{env}"]
+    subgraph instructorCDN["Instructor Access - CDN & Routing"]
+        InstructorCF["🌐 CloudFront<br/>ec2-management-env.testingfantasy.com"]
+        InstructorACM["🔒 ACM Certificate<br/>SSL/TLS us-east-1"]
+        InstructorRoute53["📡 Route53<br/>DNS Management"]
     end
 
-    subgraph api["API Layer"]
-        APIGW["🚪 API Gateway<br/>REST API<br/>ec2-management-api-{env}.testingfantasy.com"]
+    subgraph instructorFrontend["Instructor Frontend"]
+        S3["🪣 S3 Bucket<br/>React SPA<br/>ec2-manager-frontend-common-env"]
+    end
+
+    subgraph instructorAPI["Instructor API Layer"]
+        APIGW["🚪 API Gateway<br/>REST API<br/>ec2-management-api-env.testingfantasy.com"]
         CF_Func["⚡ CloudFront Function<br/>URL Rewriting"]
     end
 
     subgraph compute["Compute Layer"]
-        LambdaIM["⚡ Lambda<br/>Instance Manager<br/>lambda-instance-manager-{workshop}-{env}-{region}"]
-        LambdaStop["⚡ Lambda<br/>Stop Old Instances<br/>lambda-stop-old-instances-{workshop}-{env}-{region}"]
-        LambdaCleanup["⚡ Lambda<br/>Admin Cleanup<br/>lambda-admin-cleanup-{workshop}-{env}-{region}"]
-        LambdaUser["⚡ Lambda<br/>User Management<br/>lambda-user-management-{workshop}-{env}-{region}"]
-        EC2["🖥️ EC2 Instances<br/>{workshop}-pool-{i}<br/>{workshop}-admin-{i}"]
-        ALB["⚖️ Application Load Balancer<br/>Per-Instance HTTPS<br/>{instance-id}.{workshop}.testingfantasy.com"]
+        LambdaIM["⚡ Lambda<br/>Instance Manager<br/>lambda-instance-manager-common-env-region"]
+        LambdaUser["⚡ Lambda<br/>User Management<br/>lambda-user-management-workshop-env-region<br/>Serves HTML"]
+        LambdaStatus["⚡ Lambda<br/>Status Check<br/>lambda-status-workshop-env-region"]
+        LambdaDifyJira["⚡ Lambda<br/>Dify Jira API<br/>lambda-dify-jira-api-workshop-env-region"]
+        LambdaStop["⚡ Lambda<br/>Stop Old Instances<br/>lambda-stop-old-instances-workshop-env-region"]
+        LambdaCleanup["⚡ Lambda<br/>Admin Cleanup<br/>lambda-admin-cleanup-workshop-env-region"]
+        EC2["🖥️ EC2 Instances<br/>workshop-pool-i<br/>workshop-admin-i"]
+        ALB["⚖️ Application Load Balancer<br/>Per-Instance HTTPS<br/>instance-id.workshop.testingfantasy.com"]
     end
 
     subgraph data["Data Layer"]
-        DynamoAssign["💾 DynamoDB<br/>Instance Assignments<br/>dynamodb-instance-assignments-{workshop}-{env}-{region}"]
-        DynamoSessions["💾 DynamoDB<br/>Tutorial Sessions<br/>dynamodb-tutorial-sessions-{workshop}-{env}-{region}"]
-        SSM["🔧 SSM Parameter Store<br/>/classroom/templates/{env}<br/>/classroom/{workshop}/{env}/*"]
-        Secrets["🔐 Secrets Manager<br/>classroom/{workshop}/{env}/instance-manager/password"]
+        DynamoAssign["💾 DynamoDB<br/>Instance Assignments<br/>dynamodb-instance-assignments-workshop-env-region"]
+        DynamoSessions["💾 DynamoDB<br/>Tutorial Sessions<br/>dynamodb-tutorial-sessions-workshop-env-region"]
+        SSM["🔧 SSM Parameter Store<br/>/classroom/templates/env<br/>/classroom/workshop/env/*"]
+        Secrets["🔐 Secrets Manager<br/>classroom/workshop/env/instance-manager/password"]
     end
 
     subgraph monitoring["Monitoring & Automation"]
@@ -134,21 +149,24 @@ flowchart TB
         IAMRole["🛡️ IAM Roles<br/>Least Privilege<br/>lambda-execution-role-{workshop}-{env}-{region}"]
     end
 
-    %% Client to CDN
-    User -->|"HTTPS"| CF
-    CF -->|"SSL/TLS"| ACM
-    CF -->|"DNS"| Route53
+    %% Student Access Flow
+    Student -->|"HTTPS"| StudentCF
+    StudentCF -->|"SSL/TLS"| StudentACM
+    StudentCF -->|"DNS"| StudentRoute53
+    StudentCF -->|"Direct Invoke"| LambdaUser
+    LambdaUser -->|"Read/Write"| DynamoAssign
+    LambdaUser -->|"Get Config"| SSM
+    LambdaUser -->|"Get Secrets"| Secrets
+    LambdaUser -->|"Assign Instance"| EC2
 
-    %% CDN Routing
-    CF -->|"Static Files<br/>(/* paths)"| S3
-    CF -->|"API Calls<br/>(/api/* paths)"| CF_Func
+    %% Instructor Access Flow
+    Instructor -->|"HTTPS"| InstructorCF
+    InstructorCF -->|"SSL/TLS"| InstructorACM
+    InstructorCF -->|"DNS"| InstructorRoute53
+    InstructorCF -->|"Static Files<br/>(/* paths)"| S3
+    InstructorCF -->|"API Calls<br/>(/api/* paths)"| CF_Func
     CF_Func -->|"Rewrite"| APIGW
-
-    %% API Gateway to Lambda
     APIGW -->|"Invoke"| LambdaIM
-    APIGW -->|"Invoke"| LambdaUser
-
-    %% Lambda to Data Layer
     LambdaIM -->|"Read/Write"| DynamoAssign
     LambdaIM -->|"Read/Write"| DynamoSessions
     LambdaIM -->|"Get Templates"| SSM
@@ -164,9 +182,11 @@ flowchart TB
 
     %% Lambda Permissions
     LambdaIM -.->|"Assume Role"| IAMRole
+    LambdaUser -.->|"Assume Role"| IAMRole
+    LambdaStatus -.->|"Assume Role"| IAMRole
+    LambdaDifyJira -.->|"Assume Role"| IAMRole
     LambdaStop -.->|"Assume Role"| IAMRole
     LambdaCleanup -.->|"Assume Role"| IAMRole
-    LambdaUser -.->|"Assume Role"| IAMRole
 
     %% ALB to EC2
     ALB -->|"HTTPS Traffic"| EC2
@@ -195,37 +215,71 @@ All AWS resources follow a consistent naming pattern:
 
 ### Component Details
 
-#### Frontend & CDN Layer
+#### Student-Facing Components
+
+**Workshop Lambda Functions (HTML-Serving):**
+- **User Management Lambda**: Creates student accounts and serves HTML pages with credentials
+  - Function name: `lambda-user-management-{workshop}-{env}-{region}`
+  - Source: `functions/aws/{workshop}/classroom_user_management.py`
+  - Serves HTML directly (not REST API)
+  - Custom domain via CloudFront: `testus-patronus.testingfantasy.com`, `fellowship-of-the-build.testingfantasy.com`
+  - Also accessible via Lambda Function URL
+  - Workshop-specific (Testus Patronus, Fellowship)
+
+- **Status Lambda**: Checks workshop instance status
+  - Function name: `lambda-status-{workshop}-{env}-{region}`
+  - Source: `functions/aws/testus_patronus/testus_patronus_status.py`
+  - Accessible via Lambda Function URL
+
+- **Dify Jira API Lambda**: Dify Jira API integration
+  - Function name: `lambda-dify-jira-api-{workshop}-{env}-{region}`
+  - Source: `functions/aws/testus_patronus/dify_jira_api.py`
+  - Custom domain via CloudFront: `dify-jira.testingfantasy.com`, `dify-jira-fellowship.testingfantasy.com`
+
+**Student Access CloudFront:**
+- **Amazon CloudFront**: Global CDN for workshop Lambda functions
+  - Custom domains: `testus-patronus.testingfantasy.com`, `fellowship-of-the-build.testingfantasy.com`
+  - Routes directly to Lambda Function URLs
+  - SSL/TLS termination via ACM certificates (us-east-1)
+
+#### Instructor-Facing Components
+
+**EC2 Manager Frontend:**
 - **Amazon CloudFront**: Global CDN serving the React SPA and routing API requests
   - Custom domain: `ec2-management-{environment}.testingfantasy.com`
   - SSL/TLS termination via ACM certificates
 - **Amazon S3**: Static website hosting for React application files
-  - Bucket: `s3-ec2-manager-frontend-{workshop}-{env}-{region}`
+  - Bucket: `s3-ec2-manager-frontend-common-{env}-{region}`
   - Versioning and encryption enabled
-- **AWS Certificate Manager (ACM)**: SSL/TLS certificates (must be in `us-east-1` for CloudFront)
-- **Amazon Route53**: DNS management for custom domains
 
-#### API Layer
+**EC2 Manager API:**
 - **Amazon API Gateway**: REST API endpoint routing `/api/*` requests
   - Custom domain: `ec2-management-api-{environment}.testingfantasy.com`
   - Regional endpoint type
   - CORS enabled for frontend access
 - **CloudFront Function**: URL rewriting for API path routing
 
-#### Compute Layer
+**Instance Manager Lambda:**
 - **Instance Manager Lambda**: Core Lambda function handling EC2 lifecycle
-  - Function name: `lambda-instance-manager-{workshop}-{env}-{region}`
+  - Function name: `lambda-instance-manager-common-{env}-{region}`
+  - Source: `functions/common/classroom_instance_manager.py`
   - Supports both API Gateway and Function URL invocation
   - Manages instance creation, assignment, deletion, HTTPS setup
+  - **Instructor-only** - not accessible to students
+
+#### Shared Compute Layer
+
+**Automation Lambda Functions:**
 - **Stop Old Instances Lambda**: Scheduled function stopping idle instances
   - Function name: `lambda-stop-old-instances-{workshop}-{env}-{region}`
+  - Source: `functions/common/classroom_stop_old_instances.py`
   - Runs every 5 minutes via EventBridge
 - **Admin Cleanup Lambda**: Scheduled function terminating admin instances
   - Function name: `lambda-admin-cleanup-{workshop}-{env}-{region}`
+  - Source: `functions/common/classroom_admin_cleanup.py`
   - Runs on configurable schedule (default: weekly)
-- **User Management Lambda**: Creates and manages student accounts
-  - Function name: `lambda-user-management-{workshop}-{env}-{region}`
-  - Workshop-specific (Testus Patronus, Fellowship)
+
+**EC2 Infrastructure:**
 - **Amazon EC2 Instances**: Pre-configured instances for students
   - Pool instances: `{workshop}-pool-{i}`
   - Admin instances: `{workshop}-admin-{i}`
@@ -233,6 +287,10 @@ All AWS resources follow a consistent naming pattern:
 - **Application Load Balancer (ALB)**: On-demand HTTPS endpoints
   - Creates subdomains: `{instance-id}.{workshop}.testingfantasy.com`
   - Wildcard certificate for `*.testingfantasy.com`
+
+**DNS & Certificates:**
+- **AWS Certificate Manager (ACM)**: SSL/TLS certificates (must be in `us-east-1` for CloudFront)
+- **Amazon Route53**: DNS management for custom domains
 
 #### Data Layer
 - **DynamoDB - Instance Assignments**: Tracks EC2 instance assignments
@@ -265,26 +323,46 @@ All AWS resources follow a consistent naming pattern:
 ### Prerequisites
 
 1. **Install Required Tools:**
-   ```bash
-   # macOS
+```bash
+# macOS
    brew install terraform awscli python3
-   
-   # Linux
+
+# Linux
    sudo apt-get update
    sudo apt-get install terraform awscli python3 python3-pip
-   ```
+```
 
 2. **Configure AWS Credentials:**
-   ```bash
+```bash
    aws configure
    # Enter your AWS Access Key ID, Secret Access Key, and default region
-   
+
    # Verify access
    aws sts get-caller-identity
-   ```
+```
 
-3. **Verify Terraform:**
-   ```bash
+3. **Custom Domain Requirements:**
+   
+   **Custom domains are optional but recommended for better user experience:**
+   
+   - **EC2 Manager (Instructor Interface)**: Custom domain is **recommended** but not strictly required
+     - With custom domain: `https://ec2-management-dev.testingfantasy.com`
+     - Without custom domain: Access via CloudFront distribution URL (e.g., `https://d1234567890abc.cloudfront.net`)
+     - The infrastructure will create ACM certificates automatically, but DNS validation records must be added post-deployment
+   
+   - **Workshop Lambda Functions (Student Access)**: Custom domains are **optional**
+     - With custom domain: `https://testus-patronus.testingfantasy.com`
+     - Without custom domain: Access via Lambda Function URL (e.g., `https://abc123xyz.lambda-url.eu-west-1.on.aws`)
+     - Workshop functions work fully without custom domains
+   
+   - **Route53 Hosted Zone**: Required if you want to use custom domains
+     - You need a Route53 hosted zone for your domain (e.g., `testingfantasy.com`)
+     - Or configure DNS manually with your DNS provider
+   
+   **See the "Custom Domain Configuration" section below for detailed setup instructions.**
+
+4. **Verify Terraform:**
+```bash
    terraform version  # Should be >= 1.0.0
    ```
 
@@ -298,7 +376,7 @@ All AWS resources follow a consistent naming pattern:
   --region eu-west-1 \
   --environment dev \
   --with-pool \
-  --pool-size 10
+  --pool-size 10  # Number of machines you need, can be created later from ec2 manager
 ```
 
 **For Development/Testing (Lambda only, no EC2 costs):**
@@ -365,9 +443,83 @@ The `setup_classroom.sh` script automates the entire deployment process:
 ./scripts/setup_classroom.sh --name my-class --cloud aws --workshop fellowship
 ```
 
+### Custom Domain Configuration
+
+#### Understanding Custom Domain Requirements
+
+**What Requires Custom Domains?**
+
+1. **EC2 Manager (Instructor Interface)** - Recommended:
+   - Frontend: `ec2-management-{environment}.testingfantasy.com`
+   - API: `ec2-management-api-{environment}.testingfantasy.com`
+   - **Status**: Custom domain is recommended for better UX, but infrastructure can deploy without it
+   - **Without custom domain**: Access via CloudFront distribution URLs (less user-friendly)
+
+2. **Workshop Lambda Functions (Student Access)** - Optional:
+   - Testus Patronus: `testus-patronus.testingfantasy.com`
+   - Fellowship: `fellowship-of-the-build.testingfantasy.com`
+   - Dify Jira API: `dify-jira.testingfantasy.com`, `dify-jira-fellowship.testingfantasy.com`
+   - **Status**: Fully functional without custom domains (uses Lambda Function URLs)
+
+#### Access URLs: With vs. Without Custom Domains
+
+**EC2 Manager (Instructor Interface):**
+
+| Component | With Custom Domain | Without Custom Domain |
+|-----------|-------------------|----------------------|
+| Frontend | `https://ec2-management-dev.testingfantasy.com` | `https://d1234567890abc.cloudfront.net` |
+| API | `https://ec2-management-api-dev.testingfantasy.com/api` | `https://abc123xyz.execute-api.eu-west-1.amazonaws.com/dev/api` |
+
+**Workshop Lambda Functions (Student Access):**
+
+| Component | With Custom Domain | Without Custom Domain |
+|-----------|-------------------|----------------------|
+| Testus Patronus | `https://testus-patronus.testingfantasy.com` | `https://abc123xyz.lambda-url.eu-west-1.on.aws` |
+| Fellowship | `https://fellowship-of-the-build.testingfantasy.com` | `https://def456uvw.lambda-url.eu-west-1.on.aws` |
+
+**Note**: Lambda Function URLs are always available regardless of custom domain configuration.
+
+#### Deployment Scenarios
+
+**Scenario 1: Deploy Without Custom Domains (Quick Start)**
+```bash
+# Deploy infrastructure without DNS setup
+./scripts/setup_classroom.sh \
+  --name my-classroom \
+  --cloud aws \
+  --region eu-west-1 \
+  --environment dev
+
+# Access EC2 Manager via CloudFront URL (get from Terraform outputs)
+cd iac/aws
+terraform output instance_manager_cloudfront_domain
+# Use: https://<cloudfront-domain-from-output>
+
+# Access Workshop Lambda via Function URL (get from Terraform outputs)
+terraform output testus_patronus_lambda_function_url
+# Use: <function-url-from-output>
+```
+
+**Scenario 2: Deploy With Custom Domains (Production)**
+```bash
+# Step 1: Deploy infrastructure (creates ACM certificates)
+./scripts/setup_classroom.sh \
+  --name my-classroom \
+  --cloud aws \
+  --region eu-west-1 \
+  --environment dev
+
+# Step 2: Configure DNS (see "Post-Deployment: Setting Up Custom Domain" below)
+# Step 3: Complete certificate validation
+cd iac/aws
+terraform apply  # Completes custom domain setup
+```
+
 ### Post-Deployment: Setting Up Custom Domain
 
-After deployment, you'll need to configure DNS for the custom domain:
+**Note**: This section is only needed if you want to use custom domains. The infrastructure works without custom domains, but URLs will be less user-friendly.
+
+After initial deployment, configure DNS for custom domains:
 
 1. **Get ACM Certificate Validation Records:**
    ```bash
@@ -380,13 +532,13 @@ After deployment, you'll need to configure DNS for the custom domain:
    - Wait for certificate validation (5-40 minutes)
 
 3. **Complete Deployment:**
-   ```bash
+```bash
    cd iac/aws
    terraform apply  # Completes certificate validation
    ```
 
 4. **Get CloudFront Domain:**
-   ```bash
+```bash
    terraform output instance_manager_cloudfront_domain
    ```
 
@@ -397,6 +549,31 @@ After deployment, you'll need to configure DNS for the custom domain:
 6. **Access Your Instance Manager:**
    - URL: `https://ec2-management-{environment}.testingfantasy.com`
    - Wait 5-15 minutes for DNS propagation
+
+**Alternative: Access Without Custom Domain**
+
+If you skip DNS setup, you can still access the EC2 Manager:
+
+```bash
+cd iac/aws
+# Get CloudFront distribution URL
+terraform output instance_manager_cloudfront_domain
+# Access at: https://<cloudfront-domain-from-output>
+
+# Get API Gateway endpoint
+terraform output instance_manager_api_gateway_url
+# Access at: <api-gateway-url-from-output>/api
+```
+
+**Workshop Lambda Functions Without Custom Domains:**
+
+```bash
+cd iac/aws
+# Get Lambda Function URLs
+terraform output testus_patronus_lambda_function_url
+terraform output fellowship_lambda_function_url
+# Access directly at the Function URLs (no DNS setup needed)
+```
 
 ### Destroying Infrastructure
 
@@ -437,16 +614,32 @@ After deployment, you'll need to configure DNS for the custom domain:
 
 ### For Students: Accessing Resources
 
-1. **Get User Account:**
-   - Visit the User Management Lambda URL (provided by instructor)
-   - Get assigned EC2 instance details
-   - Receive Dify AI or Jenkins access credentials
+**Note:** Students access workshop-specific Lambda functions directly, not the EC2 Manager interface.
+
+1. **Get User Account and Credentials:**
+   - Visit the workshop-specific URL (provided by instructor):
+     - **Testus Patronus**: `https://testus-patronus.testingfantasy.com`
+     - **Fellowship**: `https://fellowship-of-the-build.testingfantasy.com`
+   - The Lambda function serves an HTML page with:
+     - Your assigned EC2 instance details
+     - Dify AI or Jenkins access credentials
+     - Azure LLM API keys (if applicable)
+     - Instance connection information
 
 2. **Access EC2 Instance:**
    - Via HTTPS (if enabled): `https://{instance-id}.{workshop}.testingfantasy.com`
    - Via SSH (if configured): Use provided credentials
+   - Direct IP access: Use the public IP shown on your HTML page
+
+3. **Get a New User Account:**
+   - Click "Get a new user" button on the workshop HTML page
+   - A new account will be created and assigned automatically
 
 ### API Usage
+
+**Note:** The Instance Manager API is **instructor-only** and provides REST endpoints for managing EC2 instances. Workshop Lambda functions (e.g., `classroom_user_management.py`) serve HTML pages directly to students, not REST APIs.
+
+**Instance Manager API (Instructor Access):**
 
 The Instance Manager API can be accessed directly:
 
@@ -458,12 +651,12 @@ The Instance Manager API can be accessed directly:
 All endpoints (except `/api/health` and `/api/login`) require password authentication.
 
 **Example: List Instances**
-```bash
+   ```bash
 curl -X GET "https://ec2-management-api-dev.testingfantasy.com/api/list?password=YOUR_PASSWORD"
-```
+   ```
 
 **Example: Create Instance**
-```bash
+   ```bash
 curl -X POST "https://ec2-management-api-dev.testingfantasy.com/api/create" \
   -H "Content-Type: application/json" \
   -d '{
@@ -614,7 +807,7 @@ region      = "eu-west-1"
 - Template configurations
 
 **Access Outputs:**
-```bash
+   ```bash
 cd iac/aws
 terraform output instance_manager_url
 terraform output instance_manager_custom_url
@@ -623,9 +816,13 @@ terraform output testus_patronus_lambda_function_url
 
 ## 🔌 API Documentation
 
+**Important Note:** This API documentation describes the **Instance Manager API**, which is **instructor-only** and provides REST endpoints for managing EC2 instances. 
+
+**Workshop Lambda functions** (e.g., `classroom_user_management.py` in `functions/aws/testus_patronus/`) serve **HTML pages directly** to students, not REST APIs. Students access these via workshop-specific domains like `testus-patronus.testingfantasy.com` and receive HTML pages with their credentials and instance information.
+
 ### Instance Manager API
 
-The Instance Manager API provides RESTful endpoints for managing EC2 instances, tutorial sessions, and configurations.
+The Instance Manager API provides RESTful endpoints for managing EC2 instances, tutorial sessions, and configurations. This API is used by the EC2 Manager React frontend and is intended for instructor/admin use only.
 
 **Base URL:**
 - API Gateway: `https://ec2-management-api-{environment}.testingfantasy.com/api`
@@ -1065,7 +1262,7 @@ frontend/ec2-manager/
   - Development: `/api` (proxied through Vite dev server)
 
 **Example Build:**
-```bash
+   ```bash
 export VITE_API_URL="https://ec2-management-api-dev.testingfantasy.com/api"
 npm run build
 ```
@@ -1389,7 +1586,7 @@ az account set --subscription "your-subscription-id"
    # Or use the script
    ./scripts/setup_classroom.sh --name my-class --cloud aws --force-unlock
    ```
-
+   
 2. **Lambda Packaging Fails:**
    ```bash
    # Install missing dependencies
