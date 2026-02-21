@@ -51,6 +51,12 @@ variable "region" {
   type        = string
 }
 
+variable "sut_bucket_arn" {
+  description = "ARN of the S3 bucket for Fellowship SUT (optional, only for fellowship workshop)"
+  type        = string
+  default     = ""
+}
+
 
 
 

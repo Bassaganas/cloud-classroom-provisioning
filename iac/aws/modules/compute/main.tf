@@ -62,6 +62,22 @@ resource "aws_iam_role_policy_attachment" "ssm_policy" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
+# IAM policy for S3 access to Fellowship SUT bucket
+resource "aws_iam_role_policy" "ec2_sut_access" {
+  count = var.sut_bucket_arn != "" ? 1 : 0
+  name  = "ec2-sut-s3-access-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
+  role  = aws_iam_role.ec2_ssm_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = ["s3:GetObject"]
+      Resource = "${var.sut_bucket_arn}/*"
+    }]
+  })
+}
+
 # Create instance profile
 resource "aws_iam_instance_profile" "ec2_ssm_profile" {
   name = "iam-ec2-ssm-profile-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"

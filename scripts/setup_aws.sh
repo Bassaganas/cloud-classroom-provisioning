@@ -83,26 +83,76 @@ publish_template_map() {
 
   echo "Publishing template map with $template_count workshop(s) to SSM..."
   
-  # Use Advanced tier to support larger parameter values (up to 8KB)
-  # Standard tier only supports 4KB, which is exceeded when multiple workshops include base64 user_data
+  # Store each workshop template in a separate parameter to avoid size limits
+  # Advanced tier supports up to 8KB per parameter, but combined templates exceed this
   set +e
-  aws ssm put-parameter \
-    --name "$templates_param" \
-    --type "String" \
-    --value "$templates_json" \
-    --tier "Advanced" \
-    --overwrite \
-    --region "$REGION" >/dev/null 2>&1
-  put_status=$?
+  publish_success=true
+  
+  # Publish each workshop template individually
+  for workshop_name in $(echo "$templates_json" | jq -r 'keys[]'); do
+    workshop_template=$(echo "$templates_json" | jq --arg name "$workshop_name" '.[$name]')
+    workshop_param="${templates_param}/${workshop_name}"
+    
+    # Check template size before publishing
+    template_size=$(echo "$workshop_template" | wc -c)
+    if [ "$template_size" -gt 8192 ]; then
+      echo "  ✗ Template for workshop '$workshop_name' is too large: ${template_size} bytes (max: 8192 bytes)"
+      echo "     This exceeds SSM Parameter Store Advanced tier limit (8KB)"
+      echo "     Consider reducing user_data.sh script size or using S3 for user_data storage"
+      publish_success=false
+      continue
+    fi
+    
+    # Try to publish with error capture
+    set +e
+    publish_output=$(aws ssm put-parameter \
+      --name "$workshop_param" \
+      --type "String" \
+      --value "$workshop_template" \
+      --tier "Advanced" \
+      --overwrite \
+      --region "$REGION" 2>&1)
+    publish_exit_code=$?
+    set -e
+    
+    if [ $publish_exit_code -eq 0 ]; then
+      echo "  ✓ Published template for workshop: $workshop_name (${template_size} bytes)"
+    else
+      echo "  ✗ Failed to publish template for workshop: $workshop_name"
+      echo "     Error: $publish_output"
+      echo "     Template size: ${template_size} bytes"
+      publish_success=false
+    fi
+  done
+  
+  # Also publish the combined map for backward compatibility (if it fits)
+  # Note: Lambda now prioritizes individual parameters, so combined map is only used as fallback
+  json_size=$(echo "$templates_json" | wc -c)
+  if [ "$json_size" -le 8192 ]; then
+    if aws ssm put-parameter \
+      --name "$templates_param" \
+      --type "String" \
+      --value "$templates_json" \
+      --tier "Advanced" \
+      --overwrite \
+      --region "$REGION" >/dev/null 2>&1; then
+      echo "  ✓ Published combined template map (backward compatibility, Lambda prioritizes individual parameters)"
+    else
+      echo "  ⚠ Combined template map too large ($json_size bytes), using individual parameters only"
+    fi
+  else
+    echo "  ⚠ Combined template map too large ($json_size bytes), using individual parameters only"
+    echo "  Note: Old combined map may still exist - Lambda will use individual parameters instead"
+  fi
+  
   set -e
 
-  if [ $put_status -eq 0 ]; then
-    echo "✓ Published workshop template map to SSM (Advanced tier): $templates_param"
-    echo "  Workshops in map: $(echo "$templates_json" | jq -r 'keys | join(", ")')"
+  if [ "$publish_success" = true ]; then
+    echo "✓ Published workshop templates to SSM (Advanced tier)"
+    echo "  Individual parameters: ${templates_param}/{workshop_name}"
+    return 0
   else
-    echo "✗ Failed to publish template map to SSM. Error code: $put_status"
-    echo "  Parameter: $templates_param"
-    echo "  JSON size: $(echo "$templates_json" | wc -c) bytes"
+    echo "✗ Failed to publish some workshop templates to SSM"
     return 1
   fi
 }
@@ -122,6 +172,81 @@ configure_aws() {
   aws configure set aws_secret_access_key "$aws_secret_access_key"
   aws configure set region "$aws_region"
   aws configure set output json
+}
+
+# Function to upload Fellowship SUT to S3
+upload_sut_to_s3() {
+  # Only for fellowship workshop
+  if [ "$WORKSHOP_ROOT" != "fellowship" ] && [ "$WORKSHOP_ROOT" != "fellowship-of-the-build" ]; then
+    return 0
+  fi
+
+  echo ""
+  echo "Uploading Fellowship SUT to S3..."
+  
+  # Get bucket name from Terraform output (from workshop_fellowship module)
+  cd "${ROOT_DIR}/${ROOT_MODULE_PATH}"
+  SUT_BUCKET=$(terraform output -raw sut_bucket_name 2>/dev/null || echo "")
+  if [ -z "$SUT_BUCKET" ]; then
+    echo "Warning: SUT bucket not found in Terraform outputs, skipping upload"
+    return 0
+  fi
+
+  SUT_DIR="${ROOT_DIR}/iac/aws/workshops/fellowship/fellowship-sut"
+  TARBALL="/tmp/fellowship-sut.tar.gz"
+
+  # Check if SUT directory exists
+  if [ ! -d "$SUT_DIR" ]; then
+    echo "Warning: SUT directory not found at $SUT_DIR, skipping upload"
+    return 0
+  fi
+
+  # Create tarball (exclude common ignore patterns)
+  echo "  Packaging SUT..."
+  if ! tar -czf "$TARBALL" \
+    --exclude='.git' \
+    --exclude='node_modules' \
+    --exclude='__pycache__' \
+    --exclude='*.pyc' \
+    --exclude='.pytest_cache' \
+    --exclude='*.db' \
+    --exclude='.DS_Store' \
+    --exclude='dist' \
+    --exclude='build' \
+    -C "$(dirname "$SUT_DIR")" \
+    "$(basename "$SUT_DIR")" 2>/dev/null; then
+    echo "✗ Failed to create SUT tarball"
+    rm -f "$TARBALL"
+    return 1
+  fi
+
+  # Upload SUT tarball to S3
+  echo "  Uploading SUT to s3://${SUT_BUCKET}/fellowship-sut.tar.gz..."
+  if ! aws s3 cp "$TARBALL" "s3://${SUT_BUCKET}/fellowship-sut.tar.gz" --region "$REGION"; then
+    echo "✗ Failed to upload SUT to S3"
+    rm -f "$TARBALL"
+    return 1
+  fi
+  echo "✓ SUT uploaded successfully to s3://${SUT_BUCKET}/fellowship-sut.tar.gz"
+
+  # Upload setup script to S3
+  SETUP_SCRIPT="${ROOT_DIR}/iac/aws/workshops/fellowship/setup_fellowship.sh"
+  if [ ! -f "$SETUP_SCRIPT" ]; then
+    echo "Warning: Setup script not found at $SETUP_SCRIPT, skipping upload"
+    rm -f "$TARBALL"
+    return 1
+  fi
+  
+  echo "  Uploading setup script to s3://${SUT_BUCKET}/setup_fellowship.sh..."
+  if ! aws s3 cp "$SETUP_SCRIPT" "s3://${SUT_BUCKET}/setup_fellowship.sh" --region "$REGION"; then
+    echo "✗ Failed to upload setup script to S3"
+    rm -f "$TARBALL"
+    return 1
+  fi
+  echo "✓ Setup script uploaded successfully to s3://${SUT_BUCKET}/setup_fellowship.sh"
+
+  # Cleanup
+  rm -f "$TARBALL"
 }
 
 # Parse command line arguments
@@ -326,6 +451,9 @@ else
   else
   terraform apply -auto-approve
   fi
+    
+    # Upload Fellowship SUT to S3 (if fellowship workshop)
+    upload_sut_to_s3
     
     # Build and deploy frontend after common infrastructure is deployed
     echo ""

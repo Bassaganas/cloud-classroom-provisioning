@@ -14,6 +14,12 @@ variable "common_ec2_iam_instance_profile_name" {
   type        = string
 }
 
+variable "common_ec2_iam_role_arn" {
+  description = "EC2 IAM role ARN from common infrastructure (for attaching S3 policies)"
+  type        = string
+  default     = ""
+}
+
 variable "common_instance_manager_password_secret_name" {
   description = "Instance manager password secret name from common infrastructure"
   type        = string

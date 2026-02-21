@@ -54,6 +54,7 @@ module "workshop_fellowship" {
   common_subnet_id                             = module.common.subnet_id
   common_security_group_ids                    = [module.common.security_group_id]
   common_ec2_iam_instance_profile_name         = module.common.ec2_iam_instance_profile_name
+  common_ec2_iam_role_arn                      = module.common.ec2_iam_role_arn
   common_instance_manager_password_secret_name = module.common.instance_manager_password_secret_name
   common_instance_manager_password_secret_arn  = module.common.instance_manager_password_secret_arn
 
@@ -115,6 +116,7 @@ module "workshop_testus_patronus" {
   common_subnet_id                             = module.common.subnet_id
   common_security_group_ids                    = [module.common.security_group_id]
   common_ec2_iam_instance_profile_name         = module.common.ec2_iam_instance_profile_name
+  common_ec2_iam_role_arn                      = module.common.ec2_iam_role_arn
   common_instance_manager_password_secret_name = module.common.instance_manager_password_secret_name
   common_instance_manager_password_secret_arn  = module.common.instance_manager_password_secret_arn
 

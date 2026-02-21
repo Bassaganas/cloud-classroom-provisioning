@@ -183,6 +183,7 @@ module "s3_frontend" {
   region        = var.region
 }
 
+
 # CloudFront Module - Custom Domain and CDN for Instance Manager
 module "cloudfront_instance_manager" {
   source = "../cloudfront"

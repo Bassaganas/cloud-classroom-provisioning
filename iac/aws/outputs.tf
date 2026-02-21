@@ -80,6 +80,11 @@ output "workshop_fellowship_template_config" {
   }
 }
 
+output "sut_bucket_name" {
+  description = "Name of the S3 bucket for Fellowship SUT (only for fellowship workshop)"
+  value       = module.workshop_fellowship.sut_bucket_name
+}
+
 output "workshop_testus_patronus_template_config" {
   description = "Template configuration for testus_patronus workshop (for SSM)"
   value = {

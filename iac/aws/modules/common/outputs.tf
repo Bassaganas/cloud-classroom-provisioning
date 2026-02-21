@@ -67,6 +67,11 @@ output "ec2_iam_instance_profile_name" {
   value       = module.compute.ec2_iam_instance_profile_name
 }
 
+output "ec2_iam_role_arn" {
+  description = "ARN of the EC2 IAM role"
+  value       = module.compute.ec2_iam_role_arn
+}
+
 output "s3_frontend_bucket_name" {
   description = "Name of the S3 bucket for frontend"
   value       = module.s3_frontend.bucket_name
@@ -81,3 +86,4 @@ output "instance_manager_openapi_spec_url" {
   description = "URL to export OpenAPI spec from API Gateway"
   value       = module.api_gateway.openapi_spec_url
 }
+

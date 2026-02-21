@@ -85,8 +85,9 @@ HTTPS_ALB_SG_NAME = f"classroom-https-sg-{ENVIRONMENT}"
 _password_cache = None
 _template_map_cache = None
 _template_map_cache_time = None
-# Cache TTL: 5 minutes (300 seconds) - refresh template map periodically
-TEMPLATE_MAP_CACHE_TTL = 300
+# Cache TTL: Reduced to 60 seconds for faster template updates during development
+# Can be overridden via TEMPLATE_MAP_CACHE_TTL environment variable
+TEMPLATE_MAP_CACHE_TTL = int(os.environ.get('TEMPLATE_MAP_CACHE_TTL', '60'))
 
 def get_password_from_secret():
     """Get the instance manager password from AWS Secrets Manager"""
@@ -235,42 +236,119 @@ def update_timeout_parameters(workshop_name, stop_timeout=None, terminate_timeou
         return {'success': False, 'error': str(e)}
 
 def get_template_map():
-    """Load workshop template map from SSM Parameter Store"""
-    global _template_map_cache
+    """Load workshop template map from SSM Parameter Store
+    
+    Prioritizes individual parameters first (new approach), then falls back to combined map (backward compatibility)
+    Cache expires after 60 seconds to ensure fresh templates are loaded
+    """
+    global _template_map_cache, _template_map_cache_time
 
-    if _template_map_cache is not None:
-        return _template_map_cache
+    # Check if cache is still valid (within TTL)
+    if _template_map_cache is not None and _template_map_cache_time is not None:
+        cache_age = time.time() - _template_map_cache_time
+        if cache_age < TEMPLATE_MAP_CACHE_TTL:
+            logger.info(f"Using cached template map (age: {int(cache_age)}s, TTL: {TEMPLATE_MAP_CACHE_TTL}s)")
+            return _template_map_cache
+        else:
+            logger.info(f"Template cache expired (age: {int(cache_age)}s, TTL: {TEMPLATE_MAP_CACHE_TTL}s), refreshing...")
+            _template_map_cache = None
+            _template_map_cache_time = None
 
     if not TEMPLATE_MAP_PARAMETER:
         logger.warning("INSTANCE_MANAGER_TEMPLATE_MAP_PARAMETER not set, workshop selection disabled")
         _template_map_cache = {}
         return _template_map_cache
 
+    template_map = {}
+    loaded_from_individual = False
+    
+    # PRIORITY 1: Try to load individual workshop templates first (new approach, more reliable)
+    # This avoids issues with old combined maps that may have outdated templates
+    # The base path (e.g., /classroom/templates/dev) is used to construct individual paths:
+    # - /classroom/templates/dev/fellowship
+    # - /classroom/templates/dev/testus_patronus
+    # - /classroom/templates/dev/fellowship-of-the-build
+    workshop_names = ['fellowship', 'testus_patronus']
+    
+    logger.info(f"Attempting to load individual workshop templates from base path: {TEMPLATE_MAP_PARAMETER}")
+    
+    for workshop_name in workshop_names:
+        try:
+            workshop_param = f"{TEMPLATE_MAP_PARAMETER}/{workshop_name}"
+            logger.info(f"Trying to load template from: {workshop_param}")
+            response = ssm.get_parameter(Name=workshop_param)
+            workshop_template = json.loads(response['Parameter']['Value'])
+            template_map[workshop_name] = workshop_template
+            logger.info(f"✓ Successfully loaded template for workshop: {workshop_name} from {workshop_param}")
+            loaded_from_individual = True
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'ParameterNotFound':
+                logger.debug(f"Template not found for {workshop_name} at {workshop_param} (this is OK if workshop doesn't exist)")
+            else:
+                logger.warning(f"Error retrieving template for {workshop_name} from {workshop_param}: {str(e)}")
+        except json.JSONDecodeError as e:
+            logger.warning(f"Invalid template JSON for {workshop_name} from {workshop_param}: {str(e)}")
+        except Exception as e:
+            logger.warning(f"Unexpected error retrieving template for {workshop_name} from {workshop_param}: {str(e)}")
+    
+    # If we successfully loaded individual parameters, use them
+    if loaded_from_individual and len(template_map) > 0:
+        _template_map_cache = template_map
+        _template_map_cache_time = time.time()
+        logger.info(f"Loaded workshop template map with {len(_template_map_cache)} entries (from individual parameters)")
+        logger.info(f"Template cache keys: {list(_template_map_cache.keys())}")
+        return _template_map_cache
+    
+    # PRIORITY 2: Fallback to combined map (backward compatibility)
+    # Only use this if individual parameters don't exist
+    logger.info("Individual parameters not found or empty, trying combined template map (backward compatibility)")
     try:
         response = ssm.get_parameter(Name=TEMPLATE_MAP_PARAMETER)
         template_map = json.loads(response['Parameter']['Value'])
-        _template_map_cache = template_map if isinstance(template_map, dict) else {}
-        logger.info(f"Loaded workshop template map with {len(_template_map_cache)} entries")
-        return _template_map_cache
+        if isinstance(template_map, dict) and len(template_map) > 0:
+            _template_map_cache = template_map
+            _template_map_cache_time = time.time()
+            logger.info(f"Loaded workshop template map from combined parameter with {len(_template_map_cache)} entries")
+            logger.info(f"Template cache keys: {list(_template_map_cache.keys())}")
+            logger.warning("Using combined template map - consider migrating to individual parameters for better reliability")
+            return _template_map_cache
     except ClientError as e:
-        logger.error(f"Error retrieving template map from SSM: {str(e)}")
-        _template_map_cache = {}
-        return _template_map_cache
+        if e.response['Error']['Code'] == 'ParameterNotFound':
+            logger.warning("Combined template map also not found - no templates available")
+        else:
+            logger.warning(f"Error retrieving combined template map from SSM: {str(e)}")
     except json.JSONDecodeError as e:
-        logger.error(f"Invalid template map JSON in SSM: {str(e)}")
-        _template_map_cache = {}
-        return _template_map_cache
+        logger.warning(f"Invalid template map JSON in SSM: {str(e)}")
     except Exception as e:
-        logger.error(f"Unexpected error retrieving template map: {str(e)}")
-        _template_map_cache = {}
-        return _template_map_cache
+        logger.warning(f"Unexpected error retrieving combined template map: {str(e)}")
+    
+    # No templates found
+    _template_map_cache = {}
+    _template_map_cache_time = time.time()
+    logger.warning("No workshop templates found in SSM (neither individual parameters nor combined map)")
+    return _template_map_cache
+
+def clear_template_cache():
+    """Clear the template cache to force refresh on next access"""
+    global _template_map_cache, _template_map_cache_time
+    _template_map_cache = None
+    _template_map_cache_time = None
+    logger.info("Template cache cleared")
 
 def get_template_for_workshop(workshop_name):
     """Get the template config for a given workshop"""
     template_map = get_template_map()
     if not template_map:
+        logger.warning(f"Template map is empty, cannot get template for workshop: {workshop_name}")
         return None
-    return template_map.get(workshop_name)
+    
+    template = template_map.get(workshop_name)
+    if template:
+        logger.info(f"Found template for workshop: {workshop_name}")
+    else:
+        logger.warning(f"No template found for workshop: {workshop_name}")
+        logger.info(f"Available workshops in template map: {list(template_map.keys())}")
+    return template
 
 def get_default_vpc_id():
     response = ec2.describe_vpcs(Filters=[{'Name': 'isDefault', 'Values': ['true']}])
@@ -551,9 +629,18 @@ def get_user_data_script(template_config=None):
         user_data_base64 = template_config.get('user_data_base64')
         if user_data_base64:
             try:
-                return base64.b64decode(user_data_base64).decode('utf-8')
+                user_data = base64.b64decode(user_data_base64).decode('utf-8')
+                logger.info(f"Successfully decoded user_data from template (length: {len(user_data)} chars)")
+                # Log first few lines to verify it's the correct script
+                first_lines = '\n'.join(user_data.split('\n')[:5])
+                logger.info(f"User data script preview:\n{first_lines}...")
+                return user_data
             except Exception as e:
                 logger.warning(f"Failed to decode user_data_base64: {str(e)}")
+        else:
+            logger.warning("Template config provided but user_data_base64 is missing")
+    else:
+        logger.warning("No template config provided, using fallback user_data script")
 
     # Fallback to inline script if template data is missing
     return """#!/bin/bash
@@ -643,7 +730,39 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
     """
     try:
         workshop_name = workshop_name or WORKSHOP_NAME
+        logger.info("=" * 80)
+        logger.info(f"INSTANCE CREATION REQUEST")
+        logger.info(f"  Workshop: {workshop_name}")
+        logger.info(f"  Instance Type: {instance_type}")
+        logger.info(f"  Count: {count}")
+        logger.info(f"  Tutorial Session ID: {tutorial_session_id}")
+        logger.info(f"  Region: {REGION}")
+        logger.info(f"  Environment: {ENVIRONMENT}")
+        logger.info("=" * 80)
+        
         template_config = get_template_for_workshop(workshop_name)
+        
+        if not template_config:
+            logger.error(f"❌ No template found for workshop: {workshop_name}")
+            logger.info("Available templates will be logged by get_template_map()")
+            # Log available templates for debugging
+            template_map = get_template_map()
+            if template_map:
+                logger.info(f"Available workshops in template map: {list(template_map.keys())}")
+            else:
+                logger.warning("Template map is empty - no templates loaded from SSM")
+        else:
+            logger.info(f"✓ Template found for workshop: {workshop_name}")
+            logger.info(f"  Template keys: {list(template_config.keys())}")
+            logger.info(f"  Has user_data_base64: {'user_data_base64' in template_config}")
+            logger.info(f"  AMI ID: {template_config.get('ami_id', 'NOT SET')}")
+            logger.info(f"  Instance Type Override: {template_config.get('instance_type', 'NOT SET')}")
+            logger.info(f"  App Port: {template_config.get('app_port', 'NOT SET')}")
+            
+            # Log SSM parameter path used
+            ssm_param_path = f"{TEMPLATE_MAP_PARAMETER}/{workshop_name}"
+            logger.info(f"  SSM Parameter Path: {ssm_param_path}")
+        
         ami_id = template_config.get('ami_id') if template_config else None
         
         # If no AMI ID in template, try to get the latest Amazon Linux 2 AMI
@@ -669,7 +788,40 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
         
         instance_type_override = template_config.get('instance_type') if template_config else None
         selected_instance_type = instance_type_override or INSTANCE_TYPE
+        logger.info(f"Selected instance type: {selected_instance_type} (override: {instance_type_override}, default: {INSTANCE_TYPE})")
+        
         user_data = get_user_data_script(template_config)
+        
+        # Log user_data details for debugging
+        logger.info("=" * 80)
+        logger.info("USER DATA SCRIPT ANALYSIS")
+        logger.info(f"  Script length: {len(user_data)} characters")
+        logger.info(f"  Source: {'Template from SSM' if template_config and template_config.get('user_data_base64') else 'Fallback script'}")
+        
+        # Check for key markers in user_data
+        markers = {
+            'fellowship-sut': 'fellowship-sut' in user_data.lower(),
+            'docker-compose': 'docker-compose' in user_data.lower() or 'docker compose' in user_data.lower(),
+            'LOG_FILE': 'LOG_FILE' in user_data,
+            'user-data.log': '/var/log/user-data.log' in user_data,
+            'S3 download': 'aws s3 cp' in user_data or 's3://' in user_data,
+            'SSM parameter': 'aws ssm get-parameter' in user_data,
+            'devops-escape-room': 'devops-escape-room' in user_data.lower(),
+            'dify': 'dify' in user_data.lower()
+        }
+        
+        logger.info("  Script markers:")
+        for marker, found in markers.items():
+            status = "✓" if found else "✗"
+            logger.info(f"    {status} {marker}: {found}")
+        
+        if workshop_name in ['fellowship', 'fellowship-of-the-build']:
+            if markers['fellowship-sut']:
+                logger.info("  ✓ Fellowship SUT deployment code DETECTED in user_data")
+            else:
+                logger.warning("  ⚠ Fellowship SUT deployment code NOT FOUND - instance will NOT have SUT deployed!")
+        
+        logger.info("=" * 80)
         
         # Get timeout parameters - use provided values or fall back to SSM defaults
         timeouts = get_timeout_parameters(workshop_name)
@@ -729,6 +881,17 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
             if tutorial_session_id:
                 tags.append({'Key': 'TutorialSessionID', 'Value': tutorial_session_id})
             
+            logger.info("=" * 80)
+            logger.info(f"LAUNCHING INSTANCE {i+1}/{count}")
+            logger.info(f"  AMI ID: {ami_id}")
+            logger.info(f"  Instance Type: {selected_instance_type}")
+            logger.info(f"  IAM Instance Profile: {IAM_INSTANCE_PROFILE}")
+            logger.info(f"  Subnet ID: {SUBNET_ID or 'Default VPC subnet'}")
+            logger.info(f"  Security Groups: {SECURITY_GROUP_IDS if SECURITY_GROUP_IDS else 'Default'}")
+            logger.info(f"  User Data Length: {len(user_data)} characters")
+            logger.info(f"  User Data Preview (first 200 chars): {user_data[:200]}...")
+            logger.info("=" * 80)
+            
             response = ec2.run_instances(
                 ImageId=ami_id,
                 InstanceType=selected_instance_type,
@@ -762,6 +925,19 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
             
             instance_id = response['Instances'][0]['InstanceId']
             initial_state = response['Instances'][0]['State']['Name']
+            private_ip = response['Instances'][0].get('PrivateIpAddress', 'Not assigned yet')
+            
+            logger.info("=" * 80)
+            logger.info(f"✓ INSTANCE CREATED SUCCESSFULLY")
+            logger.info(f"  Instance ID: {instance_id}")
+            logger.info(f"  Initial State: {initial_state}")
+            logger.info(f"  Private IP: {private_ip}")
+            logger.info(f"  Workshop: {workshop_name}")
+            logger.info(f"  Type: {instance_type}")
+            logger.info(f"  Template Source: {ssm_param_path if template_config else 'FALLBACK (no template)'}")
+            logger.info(f"  User Data Source: {'SSM Template' if template_config and template_config.get('user_data_base64') else 'Fallback Script'}")
+            logger.info(f"  Tutorial Session: {tutorial_session_id or 'N/A'}")
+            logger.info("=" * 80)
             
             # Launch instances asynchronously - don't wait for them to be running
             # They will be stopped by a background process once they're running
