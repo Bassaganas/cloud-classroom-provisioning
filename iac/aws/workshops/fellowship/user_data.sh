@@ -49,6 +49,21 @@ fi
 chmod +x "$SETUP_SCRIPT"
 log "✓ Setup script downloaded and made executable"
 
-# Execute setup script
+# Pass environment variables to setup script (domain information from Lambda)
+# These are injected by Lambda into user_data before instance creation
+if [ -n "$CADDY_DOMAIN" ]; then
+    export CADDY_DOMAIN
+    log "Domain from user_data: $CADDY_DOMAIN"
+fi
+if [ -n "$MACHINE_NAME" ]; then
+    export MACHINE_NAME
+    log "Machine name from user_data: $MACHINE_NAME"
+fi
+if [ -n "$WORKSHOP_NAME" ]; then
+    export WORKSHOP_NAME
+    log "Workshop name from user_data: $WORKSHOP_NAME"
+fi
+
+# Execute setup script (preserves environment)
 log "Executing setup script..."
 exec "$SETUP_SCRIPT"

@@ -120,6 +120,59 @@ rm -f /tmp/fellowship-sut.tar.gz
 chown -R ec2-user:ec2-user /home/ec2-user/fellowship-sut
 log "✓ SUT extracted"
 
+# Get instance domain for Caddy
+# PRIORITY 1: Check if domain was passed via user_data environment variable
+# This is the most reliable method - domain is known before instance creation
+log "Getting instance domain for Caddy..."
+if [ -n "$CADDY_DOMAIN" ] && [ "$CADDY_DOMAIN" != "" ]; then
+    log "✓ Found Caddy domain from user_data environment: $CADDY_DOMAIN"
+    # Domain is already set, no need to query EC2 tags
+else
+    # PRIORITY 2: Fallback to EC2 tags (requires instance ID from metadata service)
+    log "Domain not in environment, attempting to get from EC2 tags..."
+    INSTANCE_ID=""
+    CADDY_DOMAIN=""
+    
+    # Retry getting instance ID (metadata service may not be ready immediately)
+    for i in {1..10}; do
+        INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null || echo "")
+        if [ -n "$INSTANCE_ID" ]; then
+            log "✓ Got instance ID: $INSTANCE_ID"
+            break
+        fi
+        if [ $i -lt 10 ]; then
+            log "  Attempt $i/10: Instance ID not available yet, waiting 2s..."
+            sleep 2
+        fi
+    done
+    
+    if [ -n "$INSTANCE_ID" ]; then
+        # Get domain from instance tags (set by Lambda BEFORE instance creation)
+        # With predictable domain names, this should be available immediately
+        log "Retrieving HttpsDomain tag from instance tags..."
+        for i in {1..6}; do
+            CADDY_DOMAIN=$(aws ec2 describe-tags --region "${AWS_REGION}" --filters "Name=resource-id,Values=${INSTANCE_ID}" "Name=key,Values=HttpsDomain" --query "Tags[0].Value" --output text 2>/dev/null || echo "")
+            if [ -n "$CADDY_DOMAIN" ] && [ "$CADDY_DOMAIN" != "None" ] && [ "$CADDY_DOMAIN" != "" ]; then
+                log "✓ Found Caddy domain from tags: $CADDY_DOMAIN"
+                break
+            fi
+            if [ $i -lt 6 ]; then
+                log "  Attempt $i/6: HttpsDomain tag not found yet, waiting 2s..."
+                sleep 2
+            fi
+        done
+    else
+        log "WARNING: Could not get instance ID after retries"
+    fi
+    
+    # Final check
+    if [ -z "$CADDY_DOMAIN" ] || [ "$CADDY_DOMAIN" = "None" ] || [ "$CADDY_DOMAIN" = "" ]; then
+        log "WARNING: Caddy domain not found, Caddy will start with HTTP only"
+        log "  The domain will be set automatically when Lambda retries, then restart Caddy: sudo systemctl restart caddy"
+        CADDY_DOMAIN=""
+    fi
+fi
+
 # Deploy SUT
 log "Deploying SUT..."
 if [ ! -f "/home/ec2-user/fellowship-sut/docker-compose.yml" ]; then
@@ -130,8 +183,10 @@ if [ ! -x "/home/ec2-user/.docker/cli-plugins/docker-compose" ]; then
     log "ERROR: Docker Compose plugin not executable"
     exit 1
 fi
-log "Starting SUT containers..."
-DEPLOY_OUTPUT=$(su - ec2-user -c "cd ~/fellowship-sut && docker compose up -d 2>&1")
+log "Starting SUT containers with CADDY_DOMAIN=${CADDY_DOMAIN}..."
+# Export CADDY_DOMAIN for docker-compose
+export CADDY_DOMAIN
+DEPLOY_OUTPUT=$(su - ec2-user -c "cd ~/fellowship-sut && CADDY_DOMAIN='${CADDY_DOMAIN}' docker compose up -d 2>&1")
 DEPLOY_EXIT_CODE=$?
 if [ $DEPLOY_EXIT_CODE -ne 0 ]; then
     log "ERROR: Failed to start SUT containers (exit code: $DEPLOY_EXIT_CODE)"

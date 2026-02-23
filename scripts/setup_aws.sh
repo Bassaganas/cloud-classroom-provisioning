@@ -174,79 +174,166 @@ configure_aws() {
   aws configure set output json
 }
 
-# Function to upload Fellowship SUT to S3
+# Function to upload workshop setup scripts to S3
 upload_sut_to_s3() {
-  # Only for fellowship workshop
-  if [ "$WORKSHOP_ROOT" != "fellowship" ] && [ "$WORKSHOP_ROOT" != "fellowship-of-the-build" ]; then
+  # Skip if only common infrastructure was deployed
+  if [ "$ONLY_COMMON" = true ]; then
     return 0
   fi
 
-  echo ""
-  echo "Uploading Fellowship SUT to S3..."
+  # Determine which workshops to upload for
+  # If --only-workshop is used, only upload for that workshop
+  # Otherwise, try to upload for both if they exist
+  WORKSHOPS_TO_UPLOAD=""
   
-  # Get bucket name from Terraform output (from workshop_fellowship module)
-  cd "${ROOT_DIR}/${ROOT_MODULE_PATH}"
-  SUT_BUCKET=$(terraform output -raw sut_bucket_name 2>/dev/null || echo "")
-  if [ -z "$SUT_BUCKET" ]; then
-    echo "Warning: SUT bucket not found in Terraform outputs, skipping upload"
-    return 0
+  if [ "$ONLY_WORKSHOP" = true ]; then
+    # Only upload for the specified workshop
+    if [ "$WORKSHOP_ROOT" = "fellowship" ] || [ "$WORKSHOP_ROOT" = "fellowship-of-the-build" ] || [ "$WORKSHOP_ROOT" = "testus_patronus" ]; then
+      WORKSHOPS_TO_UPLOAD="$WORKSHOP_ROOT"
+    else
+      echo "Warning: Workshop '$WORKSHOP_ROOT' does not require S3 upload, skipping"
+      return 0
+    fi
+  else
+    # Upload for all workshops that were deployed
+    # Check which workshop modules exist in Terraform outputs
+    cd "${ROOT_DIR}/${ROOT_MODULE_PATH}"
+    
+    # Check for fellowship
+    if terraform output -raw sut_bucket_name >/dev/null 2>&1; then
+      WORKSHOPS_TO_UPLOAD="${WORKSHOPS_TO_UPLOAD} fellowship"
+    fi
+    
+    # Check for testus_patronus
+    if terraform output -raw testus_patronus_sut_bucket_name >/dev/null 2>&1; then
+      WORKSHOPS_TO_UPLOAD="${WORKSHOPS_TO_UPLOAD} testus_patronus"
+    fi
+    
+    if [ -z "$WORKSHOPS_TO_UPLOAD" ]; then
+      echo "Warning: No workshop S3 buckets found in Terraform outputs, skipping upload"
+      return 0
+    fi
   fi
 
-  SUT_DIR="${ROOT_DIR}/iac/aws/workshops/fellowship/fellowship-sut"
-  TARBALL="/tmp/fellowship-sut.tar.gz"
+  # Upload for each workshop
+  for WORKSHOP in $WORKSHOPS_TO_UPLOAD; do
+    echo ""
+    if [ "$WORKSHOP" = "testus_patronus" ]; then
+      echo "Uploading Testus Patronus setup script to S3..."
+    else
+      echo "Uploading Fellowship SUT to S3..."
+    fi
+    
+    # Get bucket name from Terraform output with retry logic
+    cd "${ROOT_DIR}/${ROOT_MODULE_PATH}"
+    SUT_BUCKET=""
+    MAX_RETRIES=5
+    RETRY_DELAY=2
+    
+    for i in $(seq 1 $MAX_RETRIES); do
+      if [ "$WORKSHOP" = "testus_patronus" ]; then
+        # For testus_patronus, get bucket from workshop_testus_patronus module
+        SUT_BUCKET=$(terraform output -raw testus_patronus_sut_bucket_name 2>/dev/null || echo "")
+      else
+        # For fellowship, get bucket from workshop_fellowship module
+        SUT_BUCKET=$(terraform output -raw sut_bucket_name 2>/dev/null || echo "")
+      fi
+      
+      if [ -n "$SUT_BUCKET" ] && [ "$SUT_BUCKET" != "" ]; then
+        break
+      fi
+      
+      if [ $i -lt $MAX_RETRIES ]; then
+        echo "  Waiting for Terraform output to be available (attempt $i/$MAX_RETRIES)..."
+        sleep $RETRY_DELAY
+      fi
+    done
+    
+    if [ -z "$SUT_BUCKET" ] || [ "$SUT_BUCKET" = "" ]; then
+      echo "✗ Error: SUT bucket not found in Terraform outputs for workshop '$WORKSHOP'"
+      echo "  Expected output: $([ "$WORKSHOP" = "testus_patronus" ] && echo "testus_patronus_sut_bucket_name" || echo "sut_bucket_name")"
+      echo "  This may indicate the workshop module was not deployed or the output is not available yet"
+      continue
+    fi
+    
+    # Verify bucket exists in S3
+    if ! aws s3 ls "s3://${SUT_BUCKET}" --region "$REGION" >/dev/null 2>&1; then
+      echo "✗ Error: S3 bucket '$SUT_BUCKET' does not exist or is not accessible"
+      echo "  Verify the bucket was created by Terraform"
+      continue
+    fi
+    echo "  ✓ Found S3 bucket: $SUT_BUCKET"
 
-  # Check if SUT directory exists
-  if [ ! -d "$SUT_DIR" ]; then
-    echo "Warning: SUT directory not found at $SUT_DIR, skipping upload"
-    return 0
-  fi
+    # Fellowship-specific: Upload SUT tarball
+    if [ "$WORKSHOP" = "fellowship" ] || [ "$WORKSHOP" = "fellowship-of-the-build" ]; then
+      SUT_DIR="${ROOT_DIR}/iac/aws/workshops/fellowship/fellowship-sut"
+      TARBALL="/tmp/fellowship-sut.tar.gz"
 
-  # Create tarball (exclude common ignore patterns)
-  echo "  Packaging SUT..."
-  if ! tar -czf "$TARBALL" \
-    --exclude='.git' \
-    --exclude='node_modules' \
-    --exclude='__pycache__' \
-    --exclude='*.pyc' \
-    --exclude='.pytest_cache' \
-    --exclude='*.db' \
-    --exclude='.DS_Store' \
-    --exclude='dist' \
-    --exclude='build' \
-    -C "$(dirname "$SUT_DIR")" \
-    "$(basename "$SUT_DIR")" 2>/dev/null; then
-    echo "✗ Failed to create SUT tarball"
-    rm -f "$TARBALL"
-    return 1
-  fi
+      # Check if SUT directory exists
+      if [ ! -d "$SUT_DIR" ]; then
+        echo "  Warning: SUT directory not found at $SUT_DIR, skipping SUT tarball upload"
+      else
+        # Create tarball (exclude common ignore patterns)
+        echo "  Packaging SUT..."
+        if ! tar -czf "$TARBALL" \
+          --exclude='.git' \
+          --exclude='node_modules' \
+          --exclude='__pycache__' \
+          --exclude='*.pyc' \
+          --exclude='.pytest_cache' \
+          --exclude='*.db' \
+          --exclude='.DS_Store' \
+          --exclude='dist' \
+          --exclude='build' \
+          -C "$(dirname "$SUT_DIR")" \
+          "$(basename "$SUT_DIR")" 2>/dev/null; then
+          echo "  ✗ Failed to create SUT tarball"
+          rm -f "$TARBALL"
+          continue
+        fi
 
-  # Upload SUT tarball to S3
-  echo "  Uploading SUT to s3://${SUT_BUCKET}/fellowship-sut.tar.gz..."
-  if ! aws s3 cp "$TARBALL" "s3://${SUT_BUCKET}/fellowship-sut.tar.gz" --region "$REGION"; then
-    echo "✗ Failed to upload SUT to S3"
-    rm -f "$TARBALL"
-    return 1
-  fi
-  echo "✓ SUT uploaded successfully to s3://${SUT_BUCKET}/fellowship-sut.tar.gz"
+        # Upload SUT tarball to S3
+        echo "  Uploading SUT to s3://${SUT_BUCKET}/fellowship-sut.tar.gz..."
+        if ! aws s3 cp "$TARBALL" "s3://${SUT_BUCKET}/fellowship-sut.tar.gz" --region "$REGION"; then
+          echo "  ✗ Failed to upload SUT to S3"
+          rm -f "$TARBALL"
+          continue
+        fi
+        echo "  ✓ SUT uploaded successfully to s3://${SUT_BUCKET}/fellowship-sut.tar.gz"
+        rm -f "$TARBALL"
+      fi
+    fi
 
-  # Upload setup script to S3
-  SETUP_SCRIPT="${ROOT_DIR}/iac/aws/workshops/fellowship/setup_fellowship.sh"
-  if [ ! -f "$SETUP_SCRIPT" ]; then
-    echo "Warning: Setup script not found at $SETUP_SCRIPT, skipping upload"
-    rm -f "$TARBALL"
-    return 1
-  fi
-  
-  echo "  Uploading setup script to s3://${SUT_BUCKET}/setup_fellowship.sh..."
-  if ! aws s3 cp "$SETUP_SCRIPT" "s3://${SUT_BUCKET}/setup_fellowship.sh" --region "$REGION"; then
-    echo "✗ Failed to upload setup script to S3"
-    rm -f "$TARBALL"
-    return 1
-  fi
-  echo "✓ Setup script uploaded successfully to s3://${SUT_BUCKET}/setup_fellowship.sh"
-
-  # Cleanup
-  rm -f "$TARBALL"
+    # Upload setup script to S3 (for both workshops)
+    if [ "$WORKSHOP" = "testus_patronus" ]; then
+      SETUP_SCRIPT="${ROOT_DIR}/iac/aws/workshops/testus_patronus/setup_testus_patronus.sh"
+      S3_KEY="setup_testus_patronus.sh"
+    else
+      SETUP_SCRIPT="${ROOT_DIR}/iac/aws/workshops/fellowship/setup_fellowship.sh"
+      S3_KEY="setup_fellowship.sh"
+    fi
+    
+    if [ ! -f "$SETUP_SCRIPT" ]; then
+      echo "  ✗ Error: Setup script not found at $SETUP_SCRIPT"
+      echo "  Expected location: $SETUP_SCRIPT"
+      continue
+    fi
+    
+    echo "  Uploading setup script to s3://${SUT_BUCKET}/${S3_KEY}..."
+    if ! aws s3 cp "$SETUP_SCRIPT" "s3://${SUT_BUCKET}/${S3_KEY}" --region "$REGION"; then
+      echo "  ✗ Failed to upload setup script to S3"
+      echo "  Verify AWS credentials and S3 bucket permissions"
+      continue
+    fi
+    echo "  ✓ Setup script uploaded successfully to s3://${SUT_BUCKET}/${S3_KEY}"
+    
+    # Verify upload by checking if file exists in S3
+    if aws s3 ls "s3://${SUT_BUCKET}/${S3_KEY}" --region "$REGION" >/dev/null 2>&1; then
+      echo "  ✓ Verified: Setup script exists in S3"
+    else
+      echo "  ⚠ Warning: Could not verify setup script exists in S3 (upload may have failed)"
+    fi
+  done
 }
 
 # Parse command line arguments
@@ -452,7 +539,7 @@ else
   terraform apply -auto-approve
   fi
     
-    # Upload Fellowship SUT to S3 (if fellowship workshop)
+    # Upload workshop setup scripts to S3 (for fellowship and/or testus_patronus)
     upload_sut_to_s3
     
     # Build and deploy frontend after common infrastructure is deployed

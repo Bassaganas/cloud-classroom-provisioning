@@ -457,7 +457,125 @@ def get_next_rule_priority(listener_arn):
     priorities = [int(r['Priority']) for r in rules if r.get('Priority') not in ['default', None]]
     return max(priorities, default=0) + 1
 
+def sanitize_domain_name(domain):
+    """Sanitize domain name by replacing invalid DNS characters.
+    
+    DNS domain names can only contain letters, numbers, hyphens, and dots.
+    Underscores are not valid in DNS names and will cause Let's Encrypt to reject certificates.
+    
+    Args:
+        domain: Domain name string (may contain underscores or other invalid chars)
+    
+    Returns:
+        Sanitized domain name with underscores replaced by hyphens
+    """
+    # Replace underscores with hyphens (most common invalid character)
+    # Also ensure no double hyphens are created
+    sanitized = domain.replace('_', '-')
+    # Remove any double hyphens that might result
+    while '--' in sanitized:
+        sanitized = sanitized.replace('--', '-')
+    return sanitized
+
+def setup_caddy_domain(instance_id, workshop_name, machine_name=None, domain=None):
+    """Setup Caddy domain with Route53 A record and instance tags
+    
+    Uses predictable machine names (e.g., 'fellowship-pool-0') instead of instance IDs
+    to avoid timing issues. Domain is known before instance creation.
+    
+    Args:
+        instance_id: EC2 instance ID
+        workshop_name: Workshop identifier (e.g., 'fellowship', 'testus_patronus')
+        machine_name: Optional predictable machine name (e.g., 'fellowship-pool-0')
+        domain: Optional pre-computed domain name (if provided, machine_name is ignored)
+    
+    Returns:
+        dict with domain and https_url, or None if domain setup is skipped
+    """
+    if not HTTPS_BASE_DOMAIN or not HTTPS_HOSTED_ZONE_ID:
+        logger.warning("HTTPS_BASE_DOMAIN or HTTPS_HOSTED_ZONE_ID not configured, skipping Caddy domain setup")
+        return None
+    
+    try:
+        # Use provided domain or construct from machine_name, fallback to instance_id
+        if domain:
+            final_domain = sanitize_domain_name(domain)
+        elif machine_name:
+            # Sanitize machine_name before using it in domain
+            sanitized_machine_name = sanitize_domain_name(machine_name)
+            final_domain = f"{sanitized_machine_name}.{workshop_name}.{HTTPS_BASE_DOMAIN}"
+        else:
+            # Fallback to instance ID (backward compatibility)
+            final_domain = f"{instance_id}.{workshop_name}.{HTTPS_BASE_DOMAIN}"
+        
+        # Ensure the final domain is sanitized (in case workshop_name or HTTPS_BASE_DOMAIN has issues)
+        final_domain = sanitize_domain_name(final_domain)
+        
+        https_url = f"https://{final_domain}"
+        
+        # Get instance public IP (with retries - instance may not have IP immediately)
+        public_ip = None
+        for attempt in range(1, 6):
+            try:
+                response = ec2.describe_instances(InstanceIds=[instance_id])
+                if response.get('Reservations') and response['Reservations'][0].get('Instances'):
+                    instance = response['Reservations'][0]['Instances'][0]
+                    public_ip = instance.get('PublicIpAddress')
+                    if public_ip:
+                        logger.info(f"Got public IP for {instance_id}: {public_ip} (attempt {attempt})")
+                        break
+            except Exception as e:
+                logger.warning(f"Error getting instance info (attempt {attempt}): {str(e)}")
+            
+            if attempt < 5:
+                time.sleep(2)
+        
+        # Create/update Route53 A record
+        route53 = boto3.client('route53')
+        if public_ip:
+            route53.change_resource_record_sets(
+                HostedZoneId=HTTPS_HOSTED_ZONE_ID,
+                ChangeBatch={
+                    'Changes': [{
+                        'Action': 'UPSERT',
+                        'ResourceRecordSet': {
+                            'Name': final_domain,
+                            'Type': 'A',
+                            'TTL': 300,
+                            'ResourceRecords': [{'Value': public_ip}]
+                        }
+                    }]
+                }
+            )
+            logger.info(f"Created Route53 A record: {final_domain} -> {public_ip}")
+        else:
+            logger.warning(f"Instance {instance_id} has no public IP yet, Route53 record will be created when IP is available")
+            logger.info(f"  Domain: {final_domain} (will be updated when instance gets public IP)")
+            # Note: Route53 record will be created/updated when IP becomes available
+            # The tags are already set, so setup script can use the domain immediately
+        
+        # Update instance tags (may already be set, but ensure they're correct)
+        ec2.create_tags(
+            Resources=[instance_id],
+            Tags=[
+                {'Key': 'HttpsDomain', 'Value': final_domain},
+                {'Key': 'HttpsUrl', 'Value': https_url},
+                {'Key': 'HttpsEnabled', 'Value': 'true'}
+            ]
+        )
+        logger.info(f"Updated instance tags with HTTPS domain: {final_domain}")
+        
+        return {
+            'domain': final_domain,
+            'https_url': https_url,
+            'public_ip': public_ip
+        }
+    except Exception as e:
+        logger.error(f"Error setting up Caddy domain for {instance_id}: {str(e)}", exc_info=True)
+        return None
+
 def create_route53_alias(record_name, lb_dns, lb_zone_id):
+    """Legacy ALB function - kept for backward compatibility but not used with Caddy"""
     if not HTTPS_HOSTED_ZONE_ID:
         raise RuntimeError("INSTANCE_MANAGER_HOSTED_ZONE_ID is not configured")
 
@@ -881,6 +999,66 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
             if tutorial_session_id:
                 tags.append({'Key': 'TutorialSessionID', 'Value': tutorial_session_id})
             
+            # Generate predictable domain name BEFORE instance creation
+            # This eliminates timing issues - domain is known immediately
+            machine_name = name  # Use the same name as the instance name
+            if HTTPS_BASE_DOMAIN and HTTPS_HOSTED_ZONE_ID:
+                # Sanitize machine_name to ensure valid DNS characters
+                sanitized_machine_name = sanitize_domain_name(machine_name)
+                domain = f"{sanitized_machine_name}.{workshop_name}.{HTTPS_BASE_DOMAIN}"
+                # Sanitize the entire domain to be safe
+                domain = sanitize_domain_name(domain)
+                https_url = f"https://{domain}"
+                
+                # Add domain tags BEFORE instance creation
+                # This ensures setup script can read them immediately
+                tags.append({'Key': 'HttpsDomain', 'Value': domain})
+                tags.append({'Key': 'HttpsUrl', 'Value': https_url})
+                tags.append({'Key': 'HttpsEnabled', 'Value': 'true'})
+                tags.append({'Key': 'MachineName', 'Value': machine_name})  # Keep original for reference
+                
+                logger.info(f"Generated domain name BEFORE instance creation: {domain} (sanitized from machine_name: {machine_name})")
+                
+                # Inject domain information into user_data as environment variables
+                # This ensures the domain is available immediately without needing EC2 metadata service
+                domain_exports = f"""# Domain information injected by Lambda (available immediately)
+export CADDY_DOMAIN={domain}
+export MACHINE_NAME={machine_name}
+export WORKSHOP_NAME={workshop_name}
+"""
+                
+                # Inject after shebang and set -e, but before any other code
+                if user_data.startswith('#!/bin/bash'):
+                    lines = user_data.split('\n')
+                    # Find where to insert (after shebang, after set -e if present)
+                    insert_pos = 1
+                    # Skip shebang
+                    if len(lines) > 1:
+                        # Check if second line is set -e or similar
+                        if lines[1].strip().startswith('set '):
+                            insert_pos = 2
+                        # Check for comments after shebang
+                        elif lines[1].strip().startswith('#'):
+                            # Find first non-comment, non-empty line
+                            for j in range(1, min(5, len(lines))):
+                                if lines[j].strip() and not lines[j].strip().startswith('#'):
+                                    insert_pos = j
+                                    break
+                    
+                    # Insert domain exports
+                    lines.insert(insert_pos, domain_exports.rstrip())
+                    user_data = '\n'.join(lines)
+                    logger.info(f"Injected domain information into user_data: CADDY_DOMAIN={domain}, MACHINE_NAME={machine_name}")
+                else:
+                    # No shebang, prepend
+                    user_data = domain_exports + user_data
+                    logger.info(f"Prepended domain information to user_data: CADDY_DOMAIN={domain}, MACHINE_NAME={machine_name}")
+            else:
+                domain = None
+                machine_name = None
+                logger.warning("HTTPS not configured - domain tags will not be set")
+                logger.warning("  Domain will not be injected into user_data (HTTPS may not work initially)")
+            
             logger.info("=" * 80)
             logger.info(f"LAUNCHING INSTANCE {i+1}/{count}")
             logger.info(f"  AMI ID: {ami_id}")
@@ -957,6 +1135,52 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
             })
             
             logger.info(f"Created {instance_type} instance {instance_id} ({i+1}/{count}) - will be stopped automatically once running")
+            
+            # Setup Caddy domain (Route53 A record)
+            # Domain name and tags are already set before instance creation
+            # Now we just need to create/update the Route53 record with the public IP
+            if domain and machine_name:
+                caddy_setup = None
+                max_retries = 5
+                retry_delay = 10  # seconds
+                
+                for attempt in range(1, max_retries + 1):
+                    try:
+                        # Pass machine_name and domain to avoid reconstructing
+                        caddy_setup = setup_caddy_domain(instance_id, workshop_name, machine_name=machine_name, domain=domain)
+                        if caddy_setup:
+                            logger.info(f"✓ Caddy domain setup (attempt {attempt}/{max_retries}): {caddy_setup['https_url']}")
+                            # Update instance info with HTTPS URL
+                            instances[-1]['https_url'] = caddy_setup['https_url']
+                            instances[-1]['https_domain'] = caddy_setup['domain']
+                            if caddy_setup.get('public_ip'):
+                                logger.info(f"  Route53 record created: {caddy_setup['domain']} -> {caddy_setup['public_ip']}")
+                            else:
+                                logger.info(f"  Route53 record will be created when instance gets public IP: {caddy_setup['domain']}")
+                            break
+                        else:
+                            if attempt < max_retries:
+                                logger.info(f"⚠ Caddy domain setup attempt {attempt}/{max_retries} failed (no public IP yet), retrying in {retry_delay}s...")
+                                time.sleep(retry_delay)
+                            else:
+                                logger.warning(f"⚠ Caddy Route53 record creation failed after {max_retries} attempts (instance may not have public IP yet)")
+                                logger.info(f"   Domain tags are already set: {domain}")
+                                logger.info(f"   Route53 record will be created automatically when instance gets public IP")
+                                # Still add domain info to instance response (tags are already set)
+                                instances[-1]['https_url'] = f"https://{domain}"
+                                instances[-1]['https_domain'] = domain
+                    except Exception as e:
+                        if attempt < max_retries:
+                            logger.warning(f"Error setting up Caddy domain (attempt {attempt}/{max_retries}): {str(e)}, retrying...")
+                            time.sleep(retry_delay)
+                        else:
+                            logger.warning(f"Error setting up Caddy Route53 record after {max_retries} attempts (non-fatal): {str(e)}")
+                            logger.info(f"   Domain tags are already set: {domain}")
+                            # Still add domain info to instance response (tags are already set)
+                            instances[-1]['https_url'] = f"https://{domain}"
+                            instances[-1]['https_domain'] = domain
+            else:
+                logger.info("HTTPS not configured - skipping Caddy domain setup")
         
         return {
             'success': True,
@@ -1039,6 +1263,10 @@ def list_instances(include_terminated=False, tutorial_session_id=None):
                     cleanup_days = int(tags.get('CleanupDays', '7'))
                     cleanup_days_remaining = max(0, cleanup_days - age_days)
                 
+                # Extract HTTPS info from tags
+                https_domain = tags.get('HttpsDomain')
+                https_url = tags.get('HttpsUrl')
+                
                 instance_info = {
                     'instance_id': instance_id,
                     'state': state,
@@ -1054,7 +1282,9 @@ def list_instances(include_terminated=False, tutorial_session_id=None):
                     'assignment_status': assignment.get('status'),
                     'assigned_at': assignment.get('assigned_at'),
                     'cleanup_days': cleanup_days,  # Total cleanup days configured
-                    'cleanup_days_remaining': cleanup_days_remaining  # Days remaining before deletion
+                    'cleanup_days_remaining': cleanup_days_remaining,  # Days remaining before deletion
+                    'https_domain': https_domain,  # HTTPS domain from tags
+                    'https_url': https_url  # Full HTTPS URL from tags
                 }
                 
                 instances.append(instance_info)
@@ -1232,6 +1462,63 @@ def delete_instances(instance_ids=None, delete_type='individual'):
         # Process deletions asynchronously - don't wait for completion
         for instance_id in instance_ids:
             try:
+                # Get instance tags before deletion to retrieve domain information
+                instance_tags = {}
+                domain_to_delete = None
+                try:
+                    response = ec2.describe_instances(InstanceIds=[instance_id])
+                    if response.get('Reservations') and response['Reservations'][0].get('Instances'):
+                        instance = response['Reservations'][0]['Instances'][0]
+                        instance_tags = {tag['Key']: tag['Value'] for tag in instance.get('Tags', [])}
+                        domain_to_delete = instance_tags.get('HttpsDomain')
+                except Exception as e:
+                    logger.warning(f"Error getting instance tags for {instance_id}: {str(e)}")
+                
+                # Clean up Route53 record if domain exists
+                if domain_to_delete and HTTPS_HOSTED_ZONE_ID:
+                    try:
+                        route53 = boto3.client('route53')
+                        # Get the current record to ensure exact match for DELETE
+                        try:
+                            response = route53.list_resource_record_sets(
+                                HostedZoneId=HTTPS_HOSTED_ZONE_ID,
+                                StartRecordName=domain_to_delete,
+                                StartRecordType='A',
+                                MaxItems=1
+                            )
+                            
+                            # Find the exact record to delete
+                            record_to_delete = None
+                            for record in response.get('ResourceRecordSets', []):
+                                if record['Name'] == domain_to_delete and record['Type'] == 'A':
+                                    record_to_delete = record
+                                    break
+                            
+                            if record_to_delete:
+                                # Delete the Route53 A record with exact match
+                                route53.change_resource_record_sets(
+                                    HostedZoneId=HTTPS_HOSTED_ZONE_ID,
+                                    ChangeBatch={
+                                        'Changes': [{
+                                            'Action': 'DELETE',
+                                            'ResourceRecordSet': record_to_delete
+                                        }]
+                                    }
+                                )
+                                logger.info(f"Deleted Route53 record: {domain_to_delete} for instance {instance_id}")
+                            else:
+                                logger.debug(f"Route53 record {domain_to_delete} not found (may already be deleted)")
+                        except ClientError as e:
+                            if e.response['Error']['Code'] == 'NoSuchHostedZone':
+                                logger.warning(f"Hosted zone {HTTPS_HOSTED_ZONE_ID} not found")
+                            elif e.response['Error']['Code'] == 'InvalidChangeBatch':
+                                # Record might not exist or already deleted - this is OK
+                                logger.debug(f"Route53 record {domain_to_delete} may not exist or already deleted: {str(e)}")
+                            else:
+                                logger.warning(f"Failed to delete Route53 record {domain_to_delete} for {instance_id}: {str(e)}")
+                    except Exception as e:
+                        logger.warning(f"Error deleting Route53 record for {instance_id}: {str(e)}")
+                
                 # Clean up DynamoDB assignment (non-blocking)
                 try:
                     response = table.get_item(Key={'instance_id': instance_id})
@@ -3430,9 +3717,13 @@ def get_frontend_html():
                         assignedBadge = '<span>-</span>';
                     }
                     
-                    // Make public IP a clickable link if available
+                    // Make HTTPS URL or IP a clickable link
                     let publicIpCell;
-                    if (instance.public_ip) {
+                    if (instance.https_url) {
+                        // Prefer HTTPS URL with friendly "Visit me" text
+                        publicIpCell = `<a href="${instance.https_url}" target="_blank">Visit me</a>`;
+                    } else if (instance.public_ip) {
+                        // Fallback to HTTP IP link (backward compatibility)
                         publicIpCell = `<a href="http://${instance.public_ip}" target="_blank">${instance.public_ip}</a>`;
                     } else {
                         publicIpCell = '-';

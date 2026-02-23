@@ -151,8 +151,11 @@ resource "aws_lambda_function" "stop_old_instances" {
 
   environment {
     variables = {
-      ENVIRONMENT   = var.environment
-      WORKSHOP_NAME = var.workshop_name
+      ENVIRONMENT                     = var.environment
+      WORKSHOP_NAME                   = var.workshop_name
+      CLASSROOM_REGION                = var.region
+      INSTANCE_MANAGER_BASE_DOMAIN    = var.instance_manager_base_domain
+      INSTANCE_MANAGER_HOSTED_ZONE_ID = var.instance_manager_hosted_zone_id
     }
   }
 
@@ -247,10 +250,12 @@ resource "aws_lambda_function" "admin_cleanup" {
 
   environment {
     variables = {
-      ENVIRONMENT                 = var.environment
-      WORKSHOP_NAME               = var.workshop_name
-      CLASSROOM_REGION            = var.region
-      ADMIN_CLEANUP_INTERVAL_DAYS = var.admin_cleanup_interval_days
+      ENVIRONMENT                     = var.environment
+      WORKSHOP_NAME                   = var.workshop_name
+      CLASSROOM_REGION                = var.region
+      ADMIN_CLEANUP_INTERVAL_DAYS     = var.admin_cleanup_interval_days
+      INSTANCE_MANAGER_BASE_DOMAIN    = var.instance_manager_base_domain
+      INSTANCE_MANAGER_HOSTED_ZONE_ID = var.instance_manager_hosted_zone_id
     }
   }
 

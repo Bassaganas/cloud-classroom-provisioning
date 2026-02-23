@@ -1,0 +1,287 @@
+#!/bin/bash
+# Testus Patronus EC2 Instance Setup Script
+# This script is downloaded from S3 and executed by user_data.sh
+# Contains all setup logic: Docker, Docker Compose, Dify, and Caddy
+set -e
+
+# Logging setup - redirect all output to log file
+LOG_FILE="/var/log/user-data.log"
+exec > >(tee -a "$LOG_FILE") 2>&1
+
+# Function to log with timestamp
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
+}
+
+log "=========================================="
+log "Testus Patronus Setup Script Started"
+log "=========================================="
+
+# Get AWS region with retries and fallback
+AWS_REGION=""
+for i in {1..5}; do
+    AWS_REGION=$(curl -s --max-time 5 --connect-timeout 2 http://169.254.169.254/latest/meta-data/placement/region 2>/dev/null || echo "")
+    [ -n "$AWS_REGION" ] && break
+    [ $i -lt 5 ] && sleep 2
+done
+[ -z "$AWS_REGION" ] && AWS_REGION="eu-west-3" && log "Using default region: $AWS_REGION" || log "Region: $AWS_REGION"
+
+# Function to wait for yum lock
+wait_for_yum() {
+    while sudo fuser /var/run/yum.pid >/dev/null 2>&1; do
+        log "Waiting for yum lock to be released..."
+        sleep 5
+    done
+}
+
+# Wait for any existing yum processes to complete
+log "Checking for yum locks..."
+wait_for_yum
+
+# Update and install dependencies
+log "Installing Docker and Git..."
+yum update -y
+wait_for_yum
+yum install -y docker git
+systemctl start docker
+systemctl enable docker
+usermod -aG docker ec2-user
+log "✓ Docker installed and started"
+
+# Install Docker Compose plugin
+log "Installing Docker Compose plugin..."
+mkdir -p /home/ec2-user/.docker/cli-plugins/
+if curl -SL https://github.com/docker/compose/releases/download/v2.27.0/docker-compose-linux-x86_64 -o /home/ec2-user/.docker/cli-plugins/docker-compose; then
+    chmod +x /home/ec2-user/.docker/cli-plugins/docker-compose
+    chown -R ec2-user:ec2-user /home/ec2-user/.docker
+    log "✓ Docker Compose plugin installed"
+else
+    log "ERROR: Failed to download Docker Compose plugin"
+    exit 1
+fi
+
+# Clone and configure Dify as ec2-user with specific version
+log "Setting up Dify..."
+su - ec2-user -c "git clone https://github.com/langgenius/dify.git ~/dify"
+su - ec2-user -c "cd ~/dify && git checkout 1.9.1"  # Pin to stable version 1.9.1
+su - ec2-user -c "cp ~/dify/docker/.env.example ~/dify/docker/.env"
+
+# Configure Dify with minimal, documented configuration
+cat >> /home/ec2-user/dify/docker/.env << 'EOF'
+
+# ===== MINIMAL DIFY CONFIGURATION =====
+
+# System language (officially documented in .env.example)
+LANG=en_US.UTF-8
+
+# Frontend configuration for nginx proxy
+NEXT_PUBLIC_API_PREFIX=/console/api
+NEXT_PUBLIC_PUBLIC_API_PREFIX=/v1
+
+# ===== VERSION PINNING FOR STABILITY =====
+# Pin Docker image versions to avoid compatibility issues
+DIFY_API_VERSION=1.9.1
+DIFY_WEB_VERSION=1.9.1
+DIFY_WORKER_VERSION=1.9.1
+DIFY_WORKER_BEAT_VERSION=1.9.1
+
+# Database and Redis versions (stable versions)
+POSTGRES_VERSION=15-alpine
+REDIS_VERSION=6-alpine
+
+# Weaviate version (stable)
+WEAVIATE_VERSION=1.27.0
+
+EOF
+
+# Pre-pull specific Docker images to ensure version consistency
+log "Pre-pulling Dify Docker images with specific versions..."
+su - ec2-user -c "cd ~/dify/docker && docker compose pull"
+
+# Start Dify services
+log "Starting Dify services..."
+su - ec2-user -c "cd ~/dify/docker && docker compose up -d"
+
+# Wait for services to be ready
+log "Waiting for Dify services to start..."
+sleep 120
+
+log "✓ Dify setup completed successfully"
+log "Dify version: 1.9.1 (pinned for stability)"
+
+# Install Caddy for HTTPS
+log "Installing Caddy for HTTPS..."
+CADDY_VERSION="2.7.6"
+curl -1sLf "https://github.com/caddyserver/caddy/releases/download/v${CADDY_VERSION}/caddy_${CADDY_VERSION}_linux_amd64.tar.gz" | tar -xz -C /usr/local/bin
+chmod +x /usr/local/bin/caddy
+log "✓ Caddy installed"
+
+# Get instance domain for Caddy
+# PRIORITY 1: Check if domain was passed via user_data environment variable
+# This is the most reliable method - domain is known before instance creation
+log "Getting instance domain for Caddy..."
+if [ -n "$CADDY_DOMAIN" ] && [ "$CADDY_DOMAIN" != "" ]; then
+    log "✓ Found Caddy domain from user_data environment: $CADDY_DOMAIN"
+    # Domain is already set, no need to query EC2 tags
+else
+    # PRIORITY 2: Fallback to EC2 tags (requires instance ID from metadata service)
+    log "Domain not in environment, attempting to get from EC2 tags..."
+    INSTANCE_ID=""
+    CADDY_DOMAIN="localhost"
+    
+    # Retry getting instance ID (metadata service may not be ready immediately)
+    for i in {1..10}; do
+        INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null || echo "")
+        if [ -n "$INSTANCE_ID" ]; then
+            log "✓ Got instance ID: $INSTANCE_ID"
+            break
+        fi
+        if [ $i -lt 10 ]; then
+            log "  Attempt $i/10: Instance ID not available yet, waiting 2s..."
+            sleep 2
+        fi
+    done
+    
+    if [ -n "$INSTANCE_ID" ]; then
+        # Get domain from instance tags (set by Lambda BEFORE instance creation)
+        # With predictable domain names, this should be available immediately
+        log "Retrieving HttpsDomain tag from instance tags..."
+        for i in {1..6}; do
+            CADDY_DOMAIN=$(aws ec2 describe-tags --region "${AWS_REGION}" --filters "Name=resource-id,Values=${INSTANCE_ID}" "Name=key,Values=HttpsDomain" --query "Tags[0].Value" --output text 2>/dev/null || echo "")
+            if [ -n "$CADDY_DOMAIN" ] && [ "$CADDY_DOMAIN" != "None" ] && [ "$CADDY_DOMAIN" != "" ]; then
+                log "✓ Found Caddy domain from tags: $CADDY_DOMAIN"
+                break
+            fi
+            if [ $i -lt 6 ]; then
+                log "  Attempt $i/6: HttpsDomain tag not found yet, waiting 2s..."
+                sleep 2
+            fi
+        done
+    else
+        log "WARNING: Could not get instance ID after retries"
+    fi
+    
+    # Final check
+    if [ "$CADDY_DOMAIN" = "localhost" ] || [ -z "$CADDY_DOMAIN" ] || [ "$CADDY_DOMAIN" = "None" ]; then
+        log "WARNING: Caddy domain not found, Caddy will start with localhost"
+        log "  The domain will be set automatically when Lambda retries, then restart Caddy: sudo systemctl restart caddy"
+        CADDY_DOMAIN="localhost"
+    fi
+fi
+
+# Create Caddy directory and Caddyfile
+mkdir -p /home/ec2-user/caddy
+cat > /home/ec2-user/caddy/Caddyfile << EOF
+# Caddyfile for Testus Patronus (Dify)
+# Domain is set from instance tags at startup
+# Caddy automatically provisions Let's Encrypt certificate via HTTP-01 challenge
+
+${CADDY_DOMAIN} {
+    # Automatic HTTPS via HTTP-01 challenge (default, no config needed)
+    # Caddy automatically provisions Let's Encrypt certificate when domain is set
+    # Just needs port 80 accessible (already is via security group)
+    
+    # Proxy all traffic to Dify (runs on localhost:80)
+    reverse_proxy localhost:80
+}
+EOF
+chown -R ec2-user:ec2-user /home/ec2-user/caddy
+log "✓ Caddyfile created with domain: ${CADDY_DOMAIN}"
+
+# Create script to update Caddyfile when domain becomes available
+cat > /home/ec2-user/caddy/update-domain.sh << 'SCRIPT_EOF'
+#!/bin/bash
+# Script to update Caddyfile when HttpsDomain tag becomes available
+INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null || echo "")
+AWS_REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region 2>/dev/null || echo "eu-west-3")
+
+if [ -z "$INSTANCE_ID" ]; then
+    exit 1
+fi
+
+CADDY_DOMAIN=$(aws ec2 describe-tags --region "${AWS_REGION}" --filters "Name=resource-id,Values=${INSTANCE_ID}" "Name=key,Values=HttpsDomain" --query "Tags[0].Value" --output text 2>/dev/null || echo "")
+
+if [ -n "$CADDY_DOMAIN" ] && [ "$CADDY_DOMAIN" != "None" ] && [ "$CADDY_DOMAIN" != "" ] && [ "$CADDY_DOMAIN" != "localhost" ]; then
+    # Check if Caddyfile already has this domain
+    if ! grep -q "^${CADDY_DOMAIN} {" /home/ec2-user/caddy/Caddyfile; then
+        echo "Updating Caddyfile with domain: $CADDY_DOMAIN"
+        sed -i "s/^localhost {/${CADDY_DOMAIN} {/" /home/ec2-user/caddy/Caddyfile
+        # Reload Caddy configuration
+        sudo systemctl reload caddy || sudo systemctl restart caddy
+        echo "✓ Caddy updated and reloaded with domain: $CADDY_DOMAIN"
+    fi
+fi
+SCRIPT_EOF
+chmod +x /home/ec2-user/caddy/update-domain.sh
+chown ec2-user:ec2-user /home/ec2-user/caddy/update-domain.sh
+log "✓ Domain update script created"
+
+# Create systemd timer to periodically check for domain updates
+cat > /etc/systemd/system/caddy-domain-update.service << 'EOF'
+[Unit]
+Description=Update Caddy domain from instance tags
+After=network.target
+
+[Service]
+Type=oneshot
+User=ec2-user
+ExecStart=/home/ec2-user/caddy/update-domain.sh
+EOF
+
+cat > /etc/systemd/system/caddy-domain-update.timer << 'EOF'
+[Unit]
+Description=Timer to update Caddy domain periodically
+After=network.target
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+
+[Install]
+WantedBy=timers.target
+EOF
+
+systemctl daemon-reload
+systemctl enable caddy-domain-update.timer
+systemctl start caddy-domain-update.timer
+log "✓ Domain update timer enabled (checks every 5 minutes)"
+
+# Create systemd service for Caddy
+cat > /etc/systemd/system/caddy.service << 'EOF'
+[Unit]
+Description=Caddy web server
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=ec2-user
+WorkingDirectory=/home/ec2-user/caddy
+ExecStart=/usr/local/bin/caddy run --config /home/ec2-user/caddy/Caddyfile
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# Reload systemd and start Caddy
+systemctl daemon-reload
+systemctl enable caddy
+systemctl start caddy
+log "✓ Caddy service started"
+
+# Final status
+PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || echo "N/A")
+log "=========================================="
+log "Setup Complete"
+log "=========================================="
+log "Public IP: $PUBLIC_IP"
+if [ -n "$CADDY_DOMAIN" ] && [ "$CADDY_DOMAIN" != "localhost" ]; then
+    log "Dify HTTPS: https://${CADDY_DOMAIN}/"
+    log "Dify HTTP: http://${PUBLIC_IP}/"
+else
+    log "Dify: http://${PUBLIC_IP}/"
+    log "Note: HTTPS domain will be available after Lambda sets HttpsDomain tag"
+fi
+log "=========================================="

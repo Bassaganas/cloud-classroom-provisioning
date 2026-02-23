@@ -14,9 +14,9 @@ locals {
   region_code = replace(var.region, "-", "")
 }
 
-# S3 Bucket for Fellowship SUT files
+# S3 Bucket for workshop setup scripts (fellowship SUT or testus_patronus setup script)
 resource "aws_s3_bucket" "sut" {
-  bucket = "s3-fellowship-sut-${var.environment}-${local.region_code}"
+  bucket = var.workshop_name == "testus_patronus" ? "s3-testus-patronus-setup-${var.environment}-${local.region_code}" : "s3-fellowship-sut-${var.environment}-${local.region_code}"
 
   tags = {
     Environment = var.environment
@@ -24,7 +24,7 @@ resource "aws_s3_bucket" "sut" {
     Project     = "classroom"
     WorkshopID  = var.workshop_name
     Company     = "TestingFantasy"
-    Purpose     = "fellowship-sut-deployment"
+    Purpose     = var.workshop_name == "testus_patronus" ? "testus-patronus-setup-script" : "fellowship-sut-deployment"
   }
 }
 

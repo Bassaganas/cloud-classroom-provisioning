@@ -16,6 +16,8 @@ logger.setLevel(logging.INFO)
 region = os.environ.get('CLASSROOM_REGION', 'eu-west-3')
 WORKSHOP_NAME = os.environ.get('WORKSHOP_NAME', 'classroom')
 ENVIRONMENT = os.environ.get('ENVIRONMENT', 'dev')
+HTTPS_BASE_DOMAIN = os.environ.get('INSTANCE_MANAGER_BASE_DOMAIN', '')
+HTTPS_HOSTED_ZONE_ID = os.environ.get('INSTANCE_MANAGER_HOSTED_ZONE_ID', '')
 ssm = boto3.client('ssm', region_name=region)
 dynamodb = boto3.resource('dynamodb', region_name=region)
 table = dynamodb.Table(f'instance-assignments-{WORKSHOP_NAME}-{ENVIRONMENT}')
@@ -50,6 +52,63 @@ def get_timeout_parameters():
             'terminate_timeout': 60,
             'hard_terminate_timeout': 240
         }
+
+def cleanup_route53_record(instance_id: str, tags: Dict) -> None:
+    """Clean up Route53 A record for an instance if it exists
+    
+    Args:
+        instance_id: EC2 instance ID
+        tags: Instance tags dictionary
+    """
+    if not HTTPS_HOSTED_ZONE_ID:
+        return  # Route53 not configured, skip cleanup
+    
+    domain_to_delete = tags.get('HttpsDomain')
+    if not domain_to_delete:
+        return  # No domain configured for this instance
+    
+    try:
+        route53 = boto3.client('route53', region_name=region)
+        # Get the current record to ensure exact match for DELETE
+        try:
+            response = route53.list_resource_record_sets(
+                HostedZoneId=HTTPS_HOSTED_ZONE_ID,
+                StartRecordName=domain_to_delete,
+                StartRecordType='A',
+                MaxItems=1
+            )
+            
+            # Find the exact record to delete
+            record_to_delete = None
+            for record in response.get('ResourceRecordSets', []):
+                if record['Name'] == domain_to_delete and record['Type'] == 'A':
+                    record_to_delete = record
+                    break
+            
+            if record_to_delete:
+                # Delete the Route53 A record with exact match
+                route53.change_resource_record_sets(
+                    HostedZoneId=HTTPS_HOSTED_ZONE_ID,
+                    ChangeBatch={
+                        'Changes': [{
+                            'Action': 'DELETE',
+                            'ResourceRecordSet': record_to_delete
+                        }]
+                    }
+                )
+                logger.info(f"Deleted Route53 record: {domain_to_delete} for instance {instance_id}")
+            else:
+                logger.debug(f"Route53 record {domain_to_delete} not found (may already be deleted)")
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'NoSuchHostedZone':
+                logger.warning(f"Hosted zone {HTTPS_HOSTED_ZONE_ID} not found")
+            elif e.response['Error']['Code'] == 'InvalidChangeBatch':
+                # Record might not exist or already deleted - this is OK
+                logger.debug(f"Route53 record {domain_to_delete} may not exist or already deleted: {str(e)}")
+            else:
+                logger.warning(f"Failed to delete Route53 record {domain_to_delete} for {instance_id}: {str(e)}")
+    except Exception as e:
+        logger.warning(f"Error deleting Route53 record for {instance_id}: {str(e)}")
 
 def wait_for_command(ssm_client, command_id: str, instance_id: str, timeout: int = 60) -> Dict:
     """Wait for an SSM command to complete with timeout"""
@@ -111,6 +170,9 @@ def process_instance(instance_id, ec2_client, ssm_client, table):
                 if is_assigned:
                     logger.warning(f"Instance {instance_id} is assigned but has exceeded hard terminate timeout. Forcing termination.")
                     # Notify the student (you could add notification logic here)
+                
+                # Clean up Route53 record before termination
+                cleanup_route53_record(instance_id, tags)
                 
                 # Terminate the instance regardless of state
                 ec2_client.terminate_instances(InstanceIds=[instance_id])
@@ -283,6 +345,9 @@ def process_instance(instance_id, ec2_client, ssm_client, table):
                             if now - last_stopped_at > timedelta(minutes=TERMINATE_TIMEOUT_MINUTES):
                                 logger.info(f"Terminating stopped instance {instance_id} (stopped for more than {TERMINATE_TIMEOUT_MINUTES} minutes)")
                                 try:
+                                    # Clean up Route53 record before termination
+                                    cleanup_route53_record(instance_id, tags)
+                                    
                                     ec2_client.terminate_instances(InstanceIds=[instance_id])
                                     logger.info(f"Terminating instance {instance_id}")
                                     waiter = ec2_client.get_waiter('instance_terminated')
@@ -367,6 +432,9 @@ def process_admin_instance(instance_id, ec2_client, table):
         if age_days >= cleanup_days:
             logger.info(f"Admin instance {instance_id} has expired (age={age_days} >= cleanup_days={cleanup_days}). Deleting...")
             try:
+                # Clean up Route53 record before termination
+                cleanup_route53_record(instance_id, tags)
+                
                 # Terminate the instance
                 ec2_client.terminate_instances(InstanceIds=[instance_id])
                 logger.info(f"Terminated expired admin instance {instance_id}")
