@@ -1,8 +1,11 @@
 # Caddyfile for Fellowship SUT
-# Domain will be dynamically set via environment variable CADDY_DOMAIN
+# This file is generated during setup with the actual domain substituted
+# Domain will be dynamically set via environment variable CADDY_DOMAIN and templating
 # Caddy automatically provisions Let's Encrypt certificate via HTTP-01 challenge
 # If CADDY_DOMAIN is not set, Caddy will serve HTTP only on port 80
 
+# Template syntax: {$CADDY_DOMAIN} is replaced by Caddy from environment at runtime
+# Fallback: if not set, use localhost
 {$CADDY_DOMAIN:localhost} {
     # Automatic HTTPS via HTTP-01 challenge (default, no config needed)
     # Caddy automatically provisions Let's Encrypt certificate when domain is set

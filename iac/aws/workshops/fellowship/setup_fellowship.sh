@@ -194,9 +194,16 @@ EOF
 chown ec2-user:ec2-user /home/ec2-user/fellowship-sut/.env
 log "✓ Created /home/ec2-user/fellowship-sut/.env with CADDY_DOMAIN"
 
+# Verify .env file was created correctly
+if [ -f /home/ec2-user/fellowship-sut/.env ]; then
+    log "Verifying .env file contents:"
+    cat /home/ec2-user/fellowship-sut/.env | sed 's/^/  /'
+fi
+
 # Deploy SUT containers
 # Pass CADDY_DOMAIN explicitly via environment to ensure it reaches docker-compose and Caddy container
-DEPLOY_OUTPUT=$(su - ec2-user -c "cd ~/fellowship-sut && CADDY_DOMAIN='${CADDY_DOMAIN}' docker compose up -d 2>&1")
+log "Deploying containers with docker compose..."
+DEPLOY_OUTPUT=$(su - ec2-user -c "export CADDY_DOMAIN='${CADDY_DOMAIN}'; cd ~/fellowship-sut && docker compose up -d 2>&1")
 DEPLOY_EXIT_CODE=$?
 if [ $DEPLOY_EXIT_CODE -ne 0 ]; then
     log "ERROR: Failed to start SUT containers (exit code: $DEPLOY_EXIT_CODE)"
@@ -238,6 +245,18 @@ for i in {1..30}; do
     fi
     sleep 2
 done
+
+# Verify CADDY_DOMAIN reached the Caddy container
+log "Verifying CADDY_DOMAIN in Caddy container..."
+CADDY_CONTAINER_ENV=$(su - ec2-user -c "cd ~/fellowship-sut && docker inspect fellowship-caddy --format='{{json .Config.Env}}' 2>/dev/null" || echo "")
+if echo "$CADDY_CONTAINER_ENV" | grep -q "CADDY_DOMAIN"; then
+    DOMAIN_VALUE=$(echo "$CADDY_CONTAINER_ENV" | grep -o 'CADDY_DOMAIN=[^"]*' | cut -d= -f2)
+    log "✓ CADDY_DOMAIN in container: $DOMAIN_VALUE"
+else
+    log "⚠ CADDY_DOMAIN not found in Caddy container environment"
+    log "Container environment vars:"
+    su - ec2-user -c "cd ~/fellowship-sut && docker exec fellowship-caddy env | grep -i caddy || echo 'No CADDY variables found'" || true
+fi
 
 # Final verification
 CONTAINER_COUNT=$(su - ec2-user -c "cd ~/fellowship-sut && docker compose ps -q --status running | wc -l" 2>/dev/null || echo "0")
