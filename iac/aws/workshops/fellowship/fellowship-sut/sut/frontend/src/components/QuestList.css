@@ -7,42 +7,147 @@
 .quest-list-empty {
   text-align: center;
   padding: 3rem;
-  color: #666;
-  background: white;
+  color: var(--earth-brown);
+  background: var(--parchment);
   border-radius: 8px;
+  border: 2px solid var(--earth-brown);
+  font-family: 'Lora', serif;
 }
 
 .quest-card {
-  background: white;
+  background: var(--parchment);
   border-radius: 8px;
-  padding: 1.5rem;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  padding: 1.25rem;
+  box-shadow: 0 2px 8px rgba(139, 69, 19, 0.2);
+  border: 2px solid var(--earth-brown);
   transition: transform 0.2s ease, box-shadow 0.2s ease;
+  position: relative;
 }
 
 .quest-card:hover {
   transform: translateY(-2px);
-  box-shadow: 0 4px 15px rgba(0, 0, 0, 0.15);
+  box-shadow: 0 4px 15px rgba(139, 69, 19, 0.3);
+}
+
+.quest-card-dark-magic {
+  background: linear-gradient(135deg, #2a1a1a 0%, #3d2525 100%);
+  border-color: var(--dark-red);
+  box-shadow: 0 0 10px rgba(220, 38, 38, 0.5);
+  color: var(--parchment);
+}
+
+.quest-card-dark-magic:hover {
+  box-shadow: 0 0 15px rgba(220, 38, 38, 0.7);
 }
 
 .quest-card-header {
+  margin-bottom: 1rem;
+}
+
+.quest-title-row {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  margin-bottom: 1rem;
+  margin-bottom: 0.5rem;
 }
 
-.quest-card-header h3 {
+.quest-title-row h3 {
   margin: 0;
-  color: #333;
-  font-size: 1.3rem;
+  color: var(--deep-blue);
+  font-size: 1.25rem;
+  font-family: 'Cinzel', serif;
+  font-weight: 600;
   flex: 1;
 }
 
+.quest-card-dark-magic .quest-title-row h3 {
+  color: var(--parchment);
+}
+
+.quest-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
+.quest-type-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.75rem;
+  background: var(--forest-green-light);
+  color: var(--parchment);
+  border-radius: 12px;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.dark-magic-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.25rem 0.75rem;
+  background: var(--dark-red);
+  color: var(--parchment);
+  border-radius: 12px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  animation: pulse-glow 2s ease-in-out infinite;
+}
+
+@keyframes pulse-glow {
+  0%, 100% {
+    box-shadow: 0 0 5px rgba(220, 38, 38, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 15px rgba(220, 38, 38, 0.8);
+  }
+}
+
+.priority-ring {
+  font-size: 1.2rem;
+  display: inline-block;
+}
+
+.priority-critical {
+  filter: drop-shadow(0 0 3px rgba(220, 38, 38, 0.8));
+}
+
+.priority-important {
+  filter: drop-shadow(0 0 3px rgba(245, 158, 11, 0.8));
+}
+
+.priority-standard {
+  filter: drop-shadow(0 0 3px rgba(107, 114, 128, 0.5));
+}
+
 .quest-description {
-  color: #666;
+  color: var(--earth-brown);
   margin-bottom: 1rem;
   line-height: 1.6;
+  font-family: 'Lora', serif;
+}
+
+.quest-card-dark-magic .quest-description {
+  color: var(--parchment-light);
+}
+
+.character-quote {
+  margin: 1rem 0;
+  padding: 1rem;
+  background: rgba(218, 165, 32, 0.1);
+  border-left: 4px solid var(--gold);
+  border-radius: 4px;
+  font-style: italic;
+  color: var(--deep-blue);
+  font-family: 'Cinzel', serif;
+}
+
+.quest-card-dark-magic .character-quote {
+  background: rgba(139, 0, 0, 0.2);
+  border-left-color: var(--dark-red);
+  color: var(--parchment);
 }
 
 .quest-meta {
@@ -51,7 +156,12 @@
   gap: 1rem;
   margin-bottom: 1rem;
   font-size: 0.9rem;
-  color: #999;
+  color: var(--earth-brown-light);
+  font-family: 'Lora', serif;
+}
+
+.quest-card-dark-magic .quest-meta {
+  color: var(--parchment-light);
 }
 
 .quest-meta-item {
@@ -60,12 +170,62 @@
   gap: 0.25rem;
 }
 
+.quest-location-clickable {
+  cursor: pointer;
+  transition: all 0.2s ease;
+  text-decoration: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 4px;
+}
+
+.quest-location-clickable:hover {
+  color: var(--gold, #DAA520);
+  text-decoration-color: var(--gold, #DAA520);
+  transform: translateX(2px);
+}
+
 .quest-actions {
   display: flex;
   gap: 0.5rem;
   margin-top: 1rem;
   padding-top: 1rem;
-  border-top: 1px solid #eee;
+  border-top: 2px solid var(--earth-brown);
+}
+
+.quest-card-dark-magic .quest-actions {
+  border-top-color: var(--dark-red);
+}
+
+.quest-status {
+  padding: 0.25rem 0.75rem;
+  border-radius: 12px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  display: inline-block;
+}
+
+.quest-status-not_yet_begun,
+.quest-status-pending {
+  background: var(--status-not-yet-begun);
+  color: white;
+}
+
+.quest-status-the_road_goes_ever_on,
+.quest-status-in_progress {
+  background: var(--status-road-goes-on);
+  color: white;
+}
+
+.quest-status-it_is_done,
+.quest-status-completed {
+  background: var(--status-it-is-done);
+  color: white;
+}
+
+.quest-status-the_shadow_falls,
+.quest-status-blocked {
+  background: var(--status-shadow-falls);
+  color: white;
 }
 
 .btn-sm {

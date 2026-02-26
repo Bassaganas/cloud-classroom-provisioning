@@ -1,3 +1,53 @@
+/* LOTR Color Palette */
+:root {
+  /* Primary Colors */
+  --parchment-light: #F4E4BC;
+  --parchment: #E8D5B7;
+  --earth-brown: #8B4513;
+  --earth-brown-light: #A0522D;
+  --forest-green: #2D5016;
+  --forest-green-light: #3D6B1F;
+  --gold: #DAA520;
+  --gold-light: #FFD700;
+  --dark-red: #8B0000;
+  --dark-red-light: #A52A2A;
+  --deep-blue: #1A1F2E;
+  --deep-blue-light: #2C3E50;
+  
+  /* Status Colors */
+  --status-not-yet-begun: #6B7280;
+  --status-road-goes-on: #F59E0B;
+  --status-it-is-done: #10B981;
+  --status-shadow-falls: #DC2626;
+  
+  /* Priority Colors */
+  --priority-critical: #DC2626;
+  --priority-important: #F59E0B;
+  --priority-standard: #6B7280;
+}
+
+/* LOTR Typography */
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Lora:wght@400;600&display=swap');
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Lora', serif;
+  background: linear-gradient(135deg, var(--parchment-light) 0%, var(--parchment) 100%);
+  background-attachment: fixed;
+  min-height: 100vh;
+  margin: 0;
+  color: var(--earth-brown);
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Cinzel', serif;
+  font-weight: 700;
+  color: var(--deep-blue);
+}
+
 .app {
   min-height: 100vh;
 }
@@ -35,30 +85,39 @@
 }
 
 .btn-primary {
-  background-color: #667eea;
-  color: white;
+  background-color: var(--gold);
+  color: var(--deep-blue);
+  font-weight: 600;
+  border: 2px solid var(--earth-brown);
 }
 
 .btn-primary:hover {
-  background-color: #5568d3;
+  background-color: var(--gold-light);
+  box-shadow: 0 0 10px rgba(218, 165, 32, 0.5);
 }
 
 .btn-secondary {
-  background-color: #6c757d;
-  color: white;
+  background-color: var(--earth-brown-light);
+  color: var(--parchment);
+  font-weight: 600;
+  border: 2px solid var(--earth-brown);
 }
 
 .btn-secondary:hover {
-  background-color: #5a6268;
+  background-color: var(--earth-brown);
+  box-shadow: 0 0 10px rgba(139, 69, 19, 0.3);
 }
 
 .btn-danger {
-  background-color: #dc3545;
-  color: white;
+  background-color: var(--dark-red);
+  color: var(--parchment);
+  font-weight: 600;
+  border: 2px solid var(--dark-red-light);
 }
 
 .btn-danger:hover {
-  background-color: #c82333;
+  background-color: var(--dark-red-light);
+  box-shadow: 0 0 10px rgba(139, 0, 0, 0.5);
 }
 
 /* Form styles */
@@ -76,24 +135,28 @@
 .form-input {
   width: 100%;
   padding: 0.75rem;
-  border: 1px solid #ddd;
+  border: 2px solid var(--earth-brown);
   border-radius: 4px;
   font-size: 1rem;
+  background-color: var(--parchment);
+  color: var(--deep-blue);
+  font-family: 'Lora', serif;
 }
 
 .form-input:focus {
   outline: none;
-  border-color: #667eea;
-  box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+  border-color: var(--gold);
+  box-shadow: 0 0 0 3px rgba(218, 165, 32, 0.2);
 }
 
 /* Card styles */
 .card {
-  background: white;
+  background: var(--parchment);
   border-radius: 8px;
   padding: 1.5rem;
-  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 2px 10px rgba(139, 69, 19, 0.2);
   margin-bottom: 1rem;
+  border: 2px solid var(--earth-brown);
 }
 
 .card-header {
@@ -118,18 +181,20 @@
 
 /* Navigation */
 .navbar {
-  background: rgba(255, 255, 255, 0.95);
+  background: var(--parchment);
   padding: 1rem 2rem;
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+  box-shadow: 0 2px 8px rgba(139, 69, 19, 0.3);
   display: flex;
   justify-content: space-between;
   align-items: center;
+  border-bottom: 3px solid var(--earth-brown);
 }
 
 .navbar-brand {
   font-size: 1.5rem;
   font-weight: 700;
-  color: #667eea;
+  font-family: 'Cinzel', serif;
+  color: var(--deep-blue);
   text-decoration: none;
 }
 

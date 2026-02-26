@@ -83,3 +83,123 @@ def test_get_quest_by_id(api_base_url: str):
         assert response.status_code == 200, f"Get quest by ID should return 200, got {response.status_code}"
         data = response.json()
         assert data['id'] == quest_id, "Should return the correct quest"
+
+def test_quest_has_new_fields(api_base_url: str):
+    """Test that quests include new LOTR fields."""
+    response = requests.get(f"{api_base_url}/quests")
+    assert response.status_code == 200
+    quests = response.json()
+    
+    if len(quests) > 0:
+        quest = quests[0]
+        # Check for new fields (may be None for existing quests)
+        assert 'quest_type' in quest, "Quest should have quest_type field"
+        assert 'priority' in quest, "Quest should have priority field"
+        assert 'is_dark_magic' in quest, "Quest should have is_dark_magic field"
+        assert 'character_quote' in quest, "Quest should have character_quote field"
+        assert 'completed_at' in quest, "Quest should have completed_at field"
+
+def test_filter_quests_by_status(api_base_url: str):
+    """Test filtering quests by status."""
+    response = requests.get(f"{api_base_url}/quests?status=it_is_done")
+    assert response.status_code == 200
+    quests = response.json()
+    assert isinstance(quests, list), "Should return a list"
+    # All returned quests should have the filtered status
+    for quest in quests:
+        assert quest['status'] in ['it_is_done', 'completed'], f"Quest {quest['id']} should have status it_is_done or completed"
+
+def test_filter_quests_by_type(api_base_url: str):
+    """Test filtering quests by quest type."""
+    response = requests.get(f"{api_base_url}/quests?quest_type=The Journey")
+    assert response.status_code == 200
+    quests = response.json()
+    assert isinstance(quests, list), "Should return a list"
+    for quest in quests:
+        assert quest.get('quest_type') == 'The Journey', f"Quest {quest['id']} should be of type The Journey"
+
+def test_filter_quests_by_priority(api_base_url: str):
+    """Test filtering quests by priority."""
+    response = requests.get(f"{api_base_url}/quests?priority=Critical")
+    assert response.status_code == 200
+    quests = response.json()
+    assert isinstance(quests, list), "Should return a list"
+    for quest in quests:
+        assert quest.get('priority') == 'Critical', f"Quest {quest['id']} should have Critical priority"
+
+def test_filter_dark_magic_quests(api_base_url: str):
+    """Test filtering dark magic quests."""
+    response = requests.get(f"{api_base_url}/quests?dark_magic=true")
+    assert response.status_code == 200
+    quests = response.json()
+    assert isinstance(quests, list), "Should return a list"
+    for quest in quests:
+        assert quest.get('is_dark_magic') is True, f"Quest {quest['id']} should be a dark magic quest"
+
+def test_complete_quest_endpoint(api_base_url: str):
+    """Test PUT /quests/{id}/complete endpoint."""
+    # First login to get session
+    session = requests.Session()
+    login_response = session.post(
+        f"{api_base_url}/auth/login",
+        json={
+            'username': 'frodo_baggins',
+            'password': 'fellowship123'
+        }
+    )
+    assert login_response.status_code == 200, "Login should succeed"
+    
+    # Get a quest that's not completed
+    response = session.get(f"{api_base_url}/quests")
+    assert response.status_code == 200
+    quests = response.json()
+    
+    # Find a quest that's not completed
+    incomplete_quest = None
+    for quest in quests:
+        if quest['status'] not in ['it_is_done', 'completed']:
+            incomplete_quest = quest
+            break
+    
+    if incomplete_quest:
+        quest_id = incomplete_quest['id']
+        # Complete the quest
+        complete_response = session.put(f"{api_base_url}/quests/{quest_id}/complete")
+        assert complete_response.status_code == 200, f"Complete quest should return 200, got {complete_response.status_code}"
+        data = complete_response.json()
+        assert data['status'] in ['it_is_done', 'completed'], "Quest status should be it_is_done or completed"
+        assert 'completed_at' in data, "Quest should have completed_at timestamp"
+        assert 'message' in data, "Response should include completion message"
+
+def test_create_quest_with_new_fields(api_base_url: str):
+    """Test creating a quest with new LOTR fields."""
+    # Login first
+    session = requests.Session()
+    login_response = session.post(
+        f"{api_base_url}/auth/login",
+        json={
+            'username': 'frodo_baggins',
+            'password': 'fellowship123'
+        }
+    )
+    assert login_response.status_code == 200
+    
+    # Create quest with new fields
+    quest_data = {
+        'title': 'Test Quest',
+        'description': 'A test quest for LOTR transformation',
+        'status': 'not_yet_begun',
+        'quest_type': 'The Journey',
+        'priority': 'Important',
+        'is_dark_magic': False,
+        'character_quote': 'Test quote'
+    }
+    
+    response = session.post(f"{api_base_url}/quests", json=quest_data)
+    assert response.status_code == 201, f"Create quest should return 201, got {response.status_code}"
+    data = response.json()
+    assert data['title'] == 'Test Quest', "Should return created quest"
+    assert data['quest_type'] == 'The Journey', "Should have quest_type"
+    assert data['priority'] == 'Important', "Should have priority"
+    assert data['is_dark_magic'] is False, "Should have is_dark_magic"
+    assert data['character_quote'] == 'Test quote', "Should have character_quote"

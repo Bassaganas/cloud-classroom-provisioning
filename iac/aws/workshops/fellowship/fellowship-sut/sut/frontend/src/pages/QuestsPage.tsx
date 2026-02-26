@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import QuestList from '../components/QuestList';
 import QuestForm from '../components/QuestForm';
 import { apiService } from '../services/api';
@@ -12,6 +12,7 @@ interface QuestsPageProps {
 }
 
 const QuestsPage: React.FC<QuestsPageProps> = ({ user, onLogout }) => {
+  const location = useLocation();
   const [quests, setQuests] = useState<Quest[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
@@ -22,6 +23,17 @@ const QuestsPage: React.FC<QuestsPageProps> = ({ user, onLogout }) => {
   useEffect(() => {
     loadData();
   }, []);
+
+  // Handle quest selection from map navigation
+  useEffect(() => {
+    if (location.state?.selectedQuestId && quests.length > 0) {
+      const selectedQuest = quests.find(q => q.id === location.state.selectedQuestId);
+      if (selectedQuest) {
+        setEditingQuest(selectedQuest);
+        setShowForm(true);
+      }
+    }
+  }, [location.state?.selectedQuestId, quests]);
 
   const loadData = async () => {
     try {
@@ -55,9 +67,22 @@ const QuestsPage: React.FC<QuestsPageProps> = ({ user, onLogout }) => {
   };
 
   const handleDeleteQuest = async (id: number) => {
-    if (window.confirm('Are you sure you want to delete this quest?')) {
+    if (window.confirm('Are you sure you want to abandon this quest?')) {
       await apiService.deleteQuest(id);
       await loadData();
+    }
+  };
+
+  const handleCompleteQuest = async (id: number) => {
+    try {
+      const result = await apiService.completeQuest(id);
+      if (result.message) {
+        alert(result.message + (result.character_quote ? `\n\n"${result.character_quote}"` : ''));
+      }
+      await loadData();
+    } catch (error) {
+      console.error('Failed to complete quest:', error);
+      alert('Failed to complete quest. The shadow may have fallen upon it.');
     }
   };
 
@@ -91,27 +116,30 @@ const QuestsPage: React.FC<QuestsPageProps> = ({ user, onLogout }) => {
     <div>
       <nav className="navbar">
         <Link to="/dashboard" className="navbar-brand">
-          Fellowship Quest Tracker
+          The Fellowship's Quest List
         </Link>
         <div className="navbar-nav">
-          <Link to="/dashboard" className="nav-link">Dashboard</Link>
-          <Link to="/quests" className="nav-link">Quests</Link>
+          <Link to="/dashboard" className="nav-link">The Council Chamber</Link>
+          <Link to="/quests" className="nav-link">The Scrolls of Middle-earth</Link>
+          <Link to="/map" className="nav-link">The Map of Middle-earth</Link>
+          <Link to="/middle-earth-map" className="nav-link">Middle-Earth Interactive Map</Link>
           <button className="btn btn-secondary" onClick={onLogout}>
-            Logout
+            Leave the Fellowship
           </button>
         </div>
       </nav>
       <div className="container">
         <div className="page-header">
-          <h1>Quests</h1>
+          <h1>The Scrolls of Middle-earth</h1>
           <button className="btn btn-primary" onClick={() => setShowForm(true)}>
-            Create New Quest
+            Propose a Quest
           </button>
         </div>
         <QuestList
           quests={quests}
           onEdit={handleEditQuest}
           onDelete={handleDeleteQuest}
+          onComplete={handleCompleteQuest}
         />
       </div>
       {showForm && (

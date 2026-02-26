@@ -1,0 +1,65 @@
+<svg width="1200" height="800" xmlns="http://www.w3.org/2000/svg">
+  <!-- Background - Parchment texture -->
+  <rect width="1200" height="800" fill="#F4E4BC" stroke="#8B4513" stroke-width="3"/>
+  
+  <!-- Title -->
+  <text x="600" y="50" font-family="Cinzel, serif" font-size="36" fill="#8B4513" text-anchor="middle" font-weight="bold">
+    Middle-earth
+  </text>
+  
+  <!-- Regions -->
+  <!-- Eriador (Northwest) -->
+  <ellipse cx="200" cy="300" rx="150" ry="200" fill="#E8D5B7" stroke="#8B4513" stroke-width="2" opacity="0.6"/>
+  <text x="200" y="310" font-family="Lora, serif" font-size="24" fill="#8B4513" text-anchor="middle" font-weight="bold">Eriador</text>
+  
+  <!-- Misty Mountains (Central) -->
+  <path d="M 300 100 Q 400 200 500 300 Q 600 400 700 500" stroke="#6B7280" stroke-width="8" fill="none" stroke-linecap="round"/>
+  <text x="500" y="280" font-family="Lora, serif" font-size="20" fill="#6B7280" text-anchor="middle">Misty Mountains</text>
+  
+  <!-- Rhovanion (Central) -->
+  <ellipse cx="500" cy="400" rx="200" ry="250" fill="#D4A574" stroke="#8B4513" stroke-width="2" opacity="0.5"/>
+  <text x="500" y="410" font-family="Lora, serif" font-size="24" fill="#8B4513" text-anchor="middle" font-weight="bold">Rhovanion</text>
+  
+  <!-- Mordor (Southeast) -->
+  <ellipse cx="900" cy="400" rx="180" ry="200" fill="#2A1A1A" stroke="#8B0000" stroke-width="3" opacity="0.7"/>
+  <text x="900" y="410" font-family="Lora, serif" font-size="24" fill="#8B0000" text-anchor="middle" font-weight="bold">Mordor</text>
+  
+  <!-- Location markers (will be overlaid by Leaflet) -->
+  <!-- The Shire -->
+  <circle cx="180" cy="480" r="8" fill="#3D6B1F" stroke="#2D5016" stroke-width="2"/>
+  <text x="180" y="500" font-family="Lora, serif" font-size="14" fill="#2D5016" text-anchor="middle">The Shire</text>
+  
+  <!-- Rivendell -->
+  <circle cx="300" cy="440" r="8" fill="#3D6B1F" stroke="#2D5016" stroke-width="2"/>
+  <text x="300" y="460" font-family="Lora, serif" font-size="14" fill="#2D5016" text-anchor="middle">Rivendell</text>
+  
+  <!-- Moria -->
+  <circle cx="360" cy="400" r="8" fill="#6B7280" stroke="#4B5563" stroke-width="2"/>
+  <text x="360" y="420" font-family="Lora, serif" font-size="14" fill="#4B5563" text-anchor="middle">Moria</text>
+  
+  <!-- Lothlórien -->
+  <circle cx="480" cy="360" r="8" fill="#DAA520" stroke="#B8860B" stroke-width="2"/>
+  <text x="480" y="380" font-family="Lora, serif" font-size="14" fill="#B8860B" text-anchor="middle">Lothlórien</text>
+  
+  <!-- Rohan -->
+  <circle cx="540" cy="440" r="8" fill="#3D6B1F" stroke="#2D5016" stroke-width="2"/>
+  <text x="540" y="460" font-family="Lora, serif" font-size="14" fill="#2D5016" text-anchor="middle">Rohan</text>
+  
+  <!-- Mordor -->
+  <circle cx="840" cy="400" r="8" fill="#8B0000" stroke="#5A0000" stroke-width="2"/>
+  <text x="840" y="420" font-family="Lora, serif" font-size="14" fill="#8B0000" text-anchor="middle">Mordor</text>
+  
+  <!-- Compass Rose -->
+  <g transform="translate(1100, 100)">
+    <circle r="40" fill="#E8D5B7" stroke="#8B4513" stroke-width="2"/>
+    <line x1="0" y1="-40" x2="0" y2="40" stroke="#8B4513" stroke-width="2"/>
+    <line x1="-40" y1="0" x2="40" y2="0" stroke="#8B4513" stroke-width="2"/>
+    <text x="0" y="-50" font-family="Cinzel, serif" font-size="20" fill="#8B4513" text-anchor="middle" font-weight="bold">N</text>
+  </g>
+  
+  <!-- Scale -->
+  <line x1="50" y1="750" x2="350" y2="750" stroke="#8B4513" stroke-width="2"/>
+  <line x1="50" y1="745" x2="50" y2="755" stroke="#8B4513" stroke-width="2"/>
+  <line x1="350" y1="745" x2="350" y2="755" stroke="#8B4513" stroke-width="2"/>
+  <text x="200" y="740" font-family="Lora, serif" font-size="14" fill="#8B4513" text-anchor="middle">300 Miles</text>
+</svg>

@@ -13,13 +13,14 @@
 }
 
 .quest-form-modal {
-  background: white;
+  background: var(--parchment);
   border-radius: 12px;
   max-width: 600px;
   width: 100%;
   max-height: 90vh;
   overflow-y: auto;
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 10px 40px rgba(139, 69, 19, 0.3);
+  border: 3px solid var(--earth-brown);
 }
 
 .quest-form-header {
@@ -27,12 +28,14 @@
   justify-content: space-between;
   align-items: center;
   padding: 1.5rem;
-  border-bottom: 1px solid #eee;
+  border-bottom: 2px solid var(--earth-brown);
 }
 
 .quest-form-header h2 {
   margin: 0;
-  color: #333;
+  color: var(--deep-blue);
+  font-family: 'Cinzel', serif;
+  font-weight: 700;
 }
 
 .close-button {
@@ -69,5 +72,5 @@
   gap: 1rem;
   margin-top: 1.5rem;
   padding-top: 1.5rem;
-  border-top: 1px solid #eee;
+  border-top: 2px solid var(--earth-brown);
 }

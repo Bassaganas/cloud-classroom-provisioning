@@ -3,10 +3,13 @@
   justify-content: space-between;
   align-items: center;
   margin-bottom: 2rem;
-  color: white;
+  color: var(--deep-blue);
 }
 
 .page-header h1 {
   margin: 0;
   font-size: 2rem;
+  font-family: 'Cinzel', serif;
+  font-weight: 700;
+  color: var(--deep-blue);
 }

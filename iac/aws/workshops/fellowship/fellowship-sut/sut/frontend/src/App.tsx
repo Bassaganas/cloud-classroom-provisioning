@@ -3,6 +3,8 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
 import QuestsPage from './pages/QuestsPage';
+import MapPage from './pages/MapPage';
+import MiddleEarthMapPage from './pages/MiddleEarthMapPage';
 import { apiService } from './services/api';
 import { User } from './types';
 import './App.css';
@@ -39,14 +41,6 @@ function App() {
     }
   };
 
-  if (loading) {
-    return (
-      <div className="app-loading">
-        <div className="loading-spinner">Loading...</div>
-      </div>
-    );
-  }
-
   return (
     <BrowserRouter>
       <div className="app">
@@ -81,8 +75,33 @@ function App() {
               )
             }
           />
+          <Route
+            path="/map"
+            element={
+              user ? (
+                <MapPage user={user} onLogout={handleLogout} />
+              ) : (
+                <Navigate to="/login" replace />
+              )
+            }
+          />
+          <Route
+            path="/middle-earth-map"
+            element={
+              user ? (
+                <MiddleEarthMapPage user={user} onLogout={handleLogout} />
+              ) : (
+                <Navigate to="/login" replace />
+              )
+            }
+          />
           <Route path="/" element={<Navigate to={user ? "/dashboard" : "/login"} replace />} />
         </Routes>
+        {loading && (
+          <div className="app-loading">
+            <div className="loading-spinner">Loading...</div>
+          </div>
+        )}
       </div>
     </BrowserRouter>
   );

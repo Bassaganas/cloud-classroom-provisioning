@@ -1,0 +1,132 @@
+/* MiddleEarthMapStandalone Styles */
+
+/* Leaflet CSS is loaded via JavaScript imports */
+/* Marker cluster CSS is loaded via JavaScript imports */
+
+.leaflet-container {
+  height: 100%;
+  width: 100%;
+  position: absolute;
+  top: 0;
+  left: 0;
+  background: #F9F4ED !important;
+  font-family: "Lora", serif;
+}
+
+.leaflet-popup {
+  width: 90vw;
+  max-width: 30rem;
+  z-index: 420;
+}
+
+.leaflet-popup .leaflet-popup-content-wrapper {
+  background: #F9F4ED;
+}
+
+.leaflet-popup .leaflet-popup-close-button {
+  margin: 1rem 2rem;
+}
+
+.leaflet-popup .leaflet-popup-close-button span {
+  font-size: 2rem;
+}
+
+.leaflet-popup .leaflet-popup-close-button:hover {
+  text-decoration: underline;
+}
+
+.leaflet-popup .leaflet-popup-content {
+  padding: 1rem;
+  width: auto !important;
+}
+
+@media (min-width: 840px) {
+  .leaflet-popup .leaflet-popup-content {
+    padding: 1rem 2rem;
+  }
+}
+
+.leaflet-popup .title {
+  font-weight: bold;
+  font-size: 1.4rem;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid #cecece;
+  padding-bottom: 1rem;
+}
+
+.leaflet-popup .date {
+  font-weight: bold;
+  font-size: 1rem;
+}
+
+.leaflet-popup .description {
+  font-size: 1rem;
+  line-height: 1.4rem;
+}
+
+.leaflet-popup .info-link-container {
+  margin-top: 1rem;
+  display: flex;
+  justify-content: center;
+}
+
+.leaflet-popup a.info-link {
+  border: 1px solid black;
+  background-color: rgba(0, 0, 0, 0.78);
+  padding: 0.6rem;
+  text-decoration: none;
+  color: white;
+  text-align: center;
+}
+
+.leaflet-popup a.info-link:hover {
+  opacity: 0.9;
+  color: aliceblue;
+  text-decoration: underline;
+}
+
+.leaflet-marker-icon {
+  width: 1.8rem !important;
+  height: 1.8rem !important;
+}
+
+.leaflet-marker-icon:hover {
+  opacity: 0.7 !important;
+}
+
+.marker-cluster {
+  background: transparent !important;
+}
+
+.marker-cluster div {
+  background-color: rgb(68, 171, 12) !important;
+  width: 100% !important;
+  height: 100% !important;
+  border-radius: 100% !important;
+}
+
+.marker-cluster div span {
+  font-family: "Lora", serif;
+  font-size: 0.8rem;
+  font-weight: bold;
+  line-height: 1.7rem;
+}
+
+.path-tooltip {
+  background: #F9F4ED !important;
+  border-radius: 20px !important;
+  padding: 1rem !important;
+  max-width: 90vw;
+  min-width: 15rem;
+  white-space: normal !important;
+  box-shadow: 0 3px 14px rgba(0, 0, 0, 0.4);
+}
+
+.path-tooltip .path-name {
+  font-size: 1.2rem;
+  font-weight: bold;
+}
+
+.path-tooltip .path-date {
+  font-weight: bold;
+}

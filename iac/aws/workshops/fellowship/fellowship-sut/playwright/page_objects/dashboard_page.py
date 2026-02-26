@@ -1,6 +1,6 @@
 """Dashboard page object for Playwright tests."""
 from playwright.sync_api import Page
-from playwright.page_objects.base_page import BasePage
+from .base_page import BasePage
 
 class DashboardPage(BasePage):
     """Page object for dashboard page."""
@@ -11,8 +11,9 @@ class DashboardPage(BasePage):
         self.stats_cards = page.locator('.stat-card')
         self.quest_list = page.locator('.quest-list')
         self.quest_items = page.locator('.quest-item')
-        self.logout_button = page.locator('button:has-text("Logout")')
+        self.logout_button = page.locator('button:has-text("Leave the Fellowship"), button:has-text("Logout")')
         self.navbar = page.locator('.navbar')
+        self.dark_magic_warning = page.locator('.dark-magic-warning')
     
     def navigate(self) -> 'DashboardPage':
         """Navigate to dashboard page."""
@@ -47,7 +48,9 @@ class DashboardPage(BasePage):
     
     def click_quests_link(self) -> 'DashboardPage':
         """Click quests navigation link."""
-        self.page.locator('a:has-text("Quests")').click()
+        # Try LOTR terminology first, fallback to old text
+        quests_link = self.page.locator('a:has-text("The Scrolls of Middle-earth"), a:has-text("Quests")').first
+        quests_link.click()
         return self
     
     def wait_for_redirect_to_login(self, timeout: int = 5000) -> bool:

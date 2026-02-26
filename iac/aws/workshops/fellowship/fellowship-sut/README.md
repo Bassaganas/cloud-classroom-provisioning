@@ -1,23 +1,28 @@
-# Fellowship Quest Tracker - SUT (System Under Test)
+# The Fellowship's Quest List - SUT (System Under Test)
 
-A LOTR-themed web application for the Fellowship of the Build tutorial. This application tracks the Fellowship's journey, quests, and members through Middle-earth.
+A LOTR-themed todo list application for the Fellowship of the Build tutorial. This application allows Fellowship members to track their epic journey through Middle-earth using a simple, engaging quest list interface.
 
 ## Overview
 
-The Fellowship Quest Tracker is a full-stack web application built with:
+The Fellowship's Quest List is a full-stack web application built with:
 - **Backend**: Flask (Python) with REST API and Swagger documentation
 - **Frontend**: React with TypeScript
 - **Database**: SQLite (for cost efficiency)
-- **Reverse Proxy**: Nginx
+- **Reverse Proxy**: Caddy
 - **Containerization**: Docker Compose
 
 ## Features
 
 - **User Authentication**: Login as Fellowship members (Frodo, Sam, Aragorn, etc.)
-- **Quest Management**: Create, view, update, and complete quests
+- **Quest Management**: Propose, view, revise, and complete quests with epic LOTR terminology
+- **Quest Types**: Categorize quests as The Journey, The Battle, The Fellowship, The Ring, or Dark Magic
+- **Priority System**: Mark quests as Critical, Important, or Standard with visual indicators
+- **Dark Magic Quests**: Special quests corrupted by Sauron's influence (for testing challenges)
+- **Character Quotes**: Memorable quotes displayed when quests are completed
 - **Fellowship Members**: View member profiles and status
 - **Locations**: Track journey through Middle-earth locations
-- **Dashboard**: View quest statistics and recent activity
+- **The Council Chamber**: Dashboard with LOTR-themed statistics and journey progress
+- **The Scrolls of Middle-earth**: Quest list with parchment styling and epic visual design
 - **REST API**: Well-architected API with Swagger documentation
 
 ## Quick Start
@@ -112,20 +117,27 @@ Interactive API documentation is available at:
 
 #### Quests
 
-- `GET /api/quests` - List all quests
+- `GET /api/quests` - List all quests with optional filtering
+  - Query parameters: `status`, `quest_type`, `priority`, `dark_magic`, `location_id`, `assigned_to`
+  - Example: `GET /api/quests?status=it_is_done&priority=Critical`
 - `GET /api/quests/{id}` - Get quest by ID
-- `POST /api/quests` - Create new quest (requires auth)
+- `POST /api/quests` - Propose a new quest (requires auth)
   ```json
   {
-    "title": "New Quest",
-    "description": "Quest description",
-    "status": "pending",
-    "location_id": 1,
+    "title": "Destroy the One Ring",
+    "description": "Journey to Mount Doom and cast the Ring into the flames.",
+    "status": "not_yet_begun",
+    "quest_type": "The Ring",
+    "priority": "Critical",
+    "is_dark_magic": false,
+    "character_quote": "I will take the Ring, though I do not know the way.",
+    "location_id": 6,
     "assigned_to": 1
   }
   ```
-- `PUT /api/quests/{id}` - Update quest (requires auth)
-- `DELETE /api/quests/{id}` - Delete quest (requires auth)
+- `PUT /api/quests/{id}` - Revise quest (requires auth)
+- `PUT /api/quests/{id}/complete` - Mark quest as complete (The Quest Is Done)
+- `DELETE /api/quests/{id}` - Abandon quest (requires auth)
 
 #### Members
 
@@ -156,7 +168,7 @@ curl -X POST http://localhost/api/auth/login \
 curl http://localhost/api/quests
 ```
 
-**Create Quest** (requires authentication):
+**Propose a Quest** (requires authentication):
 ```bash
 curl -X POST http://localhost/api/quests \
   -H "Content-Type: application/json" \
@@ -164,9 +176,24 @@ curl -X POST http://localhost/api/quests \
   -d '{
     "title": "Reach Mount Doom",
     "description": "Journey to Mount Doom to destroy the Ring",
-    "status": "in_progress",
+    "status": "the_road_goes_ever_on",
+    "quest_type": "The Ring",
+    "priority": "Critical",
+    "is_dark_magic": false,
     "location_id": 6
   }'
+```
+
+**Complete a Quest**:
+```bash
+curl -X PUT http://localhost/api/quests/1/complete \
+  -H "Content-Type: application/json" \
+  -b cookies.txt
+```
+
+**Filter Dark Magic Quests**:
+```bash
+curl http://localhost/api/quests?dark_magic=true
 ```
 
 ## Testing
@@ -180,7 +207,14 @@ curl -X POST http://localhost/api/quests \
 
 2. **Install Playwright browsers**:
    ```bash
+   # Install Firefox (recommended for macOS - more stable)
+   playwright install firefox
+   
+   # Or install Chromium (may crash on some macOS systems)
    playwright install chromium
+   
+   # Or install all browsers
+   playwright install
    ```
 
 3. **Run all tests**:
@@ -200,6 +234,22 @@ curl -X POST http://localhost/api/quests \
    pytest -m smoke
    pytest -m api
    pytest -m ui
+   ```
+
+6. **Run Behave (Gherkin) tests**:
+   ```bash
+   cd tests
+   behave
+   ```
+   
+   Or run a specific feature:
+   ```bash
+   behave features/map_page.feature
+   ```
+   
+   **Note**: If Chromium crashes, use Firefox instead:
+   ```bash
+   BROWSER=firefox behave features/map_page.feature
    ```
 
 ### Test Structure
@@ -410,22 +460,52 @@ If you need to manually deploy the SUT to an existing EC2 instance:
 - **Gimli** - Dwarf, Warrior
 - **Gandalf** - Wizard, Guide
 
+### Quest Types
+
+- **The Journey** 🧭 - Travel and navigation quests
+- **The Battle** ⚔️ - Combat and defense quests
+- **The Fellowship** 👥 - Team and rescue quests
+- **The Ring** 💍 - Ring-related quests
+- **Dark Magic** 👁️ - Quests corrupted by Sauron's influence (for testing challenges)
+
+### Quest Priorities
+
+- **Critical** 🔴 - Urgent quests that determine the fate of Middle-earth
+- **Important** 🟡 - Significant quests that advance the journey
+- **Standard** ⚪ - Routine quests and tasks
+
+### Quest Status (LOTR Terminology)
+
+- **Not Yet Begun** - Quest has been proposed but not started
+- **The Road Goes Ever On...** - Quest is in progress
+- **It Is Done** - Quest has been completed
+- **The Shadow Falls** - Quest is blocked or corrupted
+
 ### Sample Quests
 
-- Destroy the One Ring
-- Reach Rivendell
-- Cross the Misty Mountains
-- Escape from Moria
-- Reach Mordor
+- **Destroy the One Ring** (The Ring, Critical) - Journey to Mount Doom and cast the Ring into the flames
+- **Reach Rivendell** (The Journey, Important) - Travel to Rivendell to seek counsel from Elrond
+- **Escape from Moria** (The Battle, Critical) - Survive the dangers of the ancient Dwarven kingdom
+- **Fix the Broken Bridge** (Dark Magic, Critical) - Sauron's dark magic has corrupted the bridge
+- **Rescue Merry and Pippin** (The Fellowship, Important) - Rescue the captured Hobbits
 
 ### Locations
 
-- The Shire (Eriador)
-- Rivendell (Eriador)
-- Moria (Misty Mountains)
-- Lothlórien (Rhovanion)
-- Rohan (Rhovanion)
-- Mordor (Mordor)
+- **The Shire** (Eriador) - The peaceful homeland of the Hobbits
+- **Rivendell** (Eriador) - The Last Homely House, home of Elrond
+- **Moria** (Misty Mountains) - The ancient Dwarven kingdom, now overrun by darkness
+- **Lothlórien** (Rhovanion) - The Golden Wood, realm of Galadriel and Celeborn
+- **Rohan** (Rhovanion) - The land of the Horse-lords
+- **Mordor** (Mordor) - The dark land of Sauron, where the One Ring was forged
+
+### Dark Magic Quests
+
+Dark Magic quests represent infrastructure bugs and testing challenges. They:
+- Display with special red/dark styling and Eye of Sauron icon
+- May appear/disappear randomly (simulated bug)
+- May fail to complete (simulated bug)
+- Appear in dashboard warnings
+- Can be filtered via API: `GET /api/quests?dark_magic=true`
 
 ## Contributing
 

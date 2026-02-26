@@ -31,8 +31,8 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
   return (
     <div className="login-container">
       <div className="login-card">
-        <h1 className="login-title">Fellowship Quest Tracker</h1>
-        <p className="login-subtitle">Enter Middle-earth and track your journey</p>
+        <h1 className="login-title">Welcome to the Fellowship Quest Tracker</h1>
+        <p className="login-subtitle">Enter Middle-earth and track your epic journey</p>
         
         {error && <div className="error-message">{error}</div>}
         

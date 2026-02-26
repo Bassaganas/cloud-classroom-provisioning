@@ -13,6 +13,8 @@ location_response_model = locations_api.model('LocationResponse', {
     'name': fields.String(description='Location name'),
     'description': fields.String(description='Location description'),
     'region': fields.String(description='Region name'),
+    'map_x': fields.Float(description='Map X coordinate (pixel)'),
+    'map_y': fields.Float(description='Map Y coordinate (pixel)'),
     'created_at': fields.String(description='Creation timestamp')
 })
 

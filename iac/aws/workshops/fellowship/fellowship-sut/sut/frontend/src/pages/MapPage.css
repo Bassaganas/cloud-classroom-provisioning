@@ -1,0 +1,402 @@
+/* Map Page Full-Screen Layout Styles */
+
+.map-page-full {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background-color: var(--color-deep-blue-dark, #1A1F2E);
+}
+
+.map-page-full > .navbar {
+  flex-shrink: 0;
+}
+
+.map-page-container {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Filter Sidebar */
+.filter-sidebar {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 320px;
+  background: var(--color-parchment-light, #F4E4BC);
+  border-right: 2px solid var(--color-earth-brown-medium, #A0522D);
+  box-shadow: 2px 0 12px rgba(0, 0, 0, 0.3);
+  z-index: 100;
+  overflow-y: auto;
+  transform: translateX(0);
+  transition: transform 0.3s ease;
+  display: flex;
+  flex-direction: column;
+}
+
+.filter-sidebar.closed {
+  transform: translateX(-100%);
+}
+
+.filter-sidebar-header {
+  padding: 1.5rem;
+  border-bottom: 2px solid var(--color-earth-brown-medium, #A0522D);
+  flex-shrink: 0;
+}
+
+.filter-sidebar-header h2 {
+  font-family: 'Cinzel', serif;
+  color: var(--color-earth-brown-dark, #8B4513);
+  margin: 0;
+  font-size: 1.3rem;
+}
+
+.filter-content {
+  flex: 1;
+  padding: 1.5rem;
+  overflow-y: auto;
+}
+
+.filter-section {
+  margin-bottom: 1.5rem;
+}
+
+.filter-section:last-child {
+  margin-bottom: 0;
+}
+
+.filter-section-title {
+  font-family: 'Cinzel', serif;
+  color: var(--color-earth-brown-dark, #8B4513);
+  font-weight: bold;
+  font-size: 0.95rem;
+  margin-bottom: 0.75rem;
+}
+
+.filter-checkbox-group {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.filter-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  cursor: pointer;
+}
+
+.filter-checkbox input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  accent-color: var(--color-earth-brown-dark, #8B4513);
+}
+
+.filter-checkbox label {
+  cursor: pointer;
+  color: var(--color-earth-brown-dark, #8B4513);
+  font-size: 0.95rem;
+  margin: 0;
+  user-select: none;
+}
+
+.filter-checkbox input[type="checkbox"]:hover + label {
+  color: var(--color-gold-dark, #FFD700);
+}
+
+.clear-filters-btn {
+  margin-top: 1rem;
+  padding: 0.75rem 1rem;
+  background-color: var(--color-earth-brown-dark, #8B4513);
+  color: var(--color-parchment-light, #F4E4BC);
+  border: none;
+  border-radius: 4px;
+  font-family: 'Cinzel', serif;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.clear-filters-btn:hover {
+  background-color: var(--color-earth-brown-medium, #A0522D);
+}
+
+/* Map Main Content */
+.map-main-content {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.filter-toggle-btn {
+  position: absolute;
+  bottom: 1.5rem;
+  left: 1.5rem;
+  width: 50px;
+  height: 50px;
+  background-color: var(--color-earth-brown-dark, #8B4513);
+  color: var(--color-parchment-light, #F4E4BC);
+  border: 2px solid var(--color-gold-dark, #FFD700);
+  border-radius: 50%;
+  font-size: 1.5rem;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+  z-index: 1000;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.filter-toggle-btn:hover {
+  background-color: var(--color-earth-brown-medium, #A0522D);
+  transform: scale(1.1);
+}
+
+.filter-toggle-btn:active {
+  transform: scale(0.95);
+}
+
+/* Map Container */
+.map-container {
+  flex: 1;
+  width: 100%;
+  overflow: hidden;
+}
+
+.middle-earth-map-container {
+  width: 100%;
+  height: 100%;
+}
+
+/* Quest Details Card */
+.quest-details-card {
+  position: fixed;
+  bottom: 1.5rem;
+  right: 1.5rem;
+  width: 350px;
+  max-height: 70vh;
+  background: var(--color-parchment-light, #F4E4BC);
+  border: 2px solid var(--color-earth-brown-medium, #A0522D);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  display: flex;
+  flex-direction: column;
+  z-index: 1001;
+  animation: slideUp 0.3s ease;
+  pointer-events: auto;
+}
+
+@keyframes slideUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.quest-details-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.25rem;
+  border-bottom: 2px solid var(--color-earth-brown-medium, #A0522D);
+  flex-shrink: 0;
+  position: relative;
+  gap: 1rem;
+}
+
+.quest-title {
+  font-family: 'Cinzel', serif;
+  color: var(--color-earth-brown-dark, #8B4513);
+  font-size: 1.2rem;
+  margin: 0;
+  flex: 1;
+  word-wrap: break-word;
+}
+
+.close-btn {
+  background: none;
+  border: none;
+  font-size: 1.5rem;
+  color: var(--color-earth-brown-dark, #8B4513);
+  cursor: pointer;
+  padding: 0;
+  width: 28px;
+  height: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  transition: color 0.2s;
+  flex-shrink: 0;
+  position: relative;
+  z-index: 10;
+}
+
+.close-btn:hover {
+  color: var(--color-gold-dark, #FFD700);
+}
+
+.quest-details-body {
+  flex: 1;
+  padding: 1.25rem;
+  overflow-y: auto;
+}
+
+.quest-meta-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+}
+
+.quest-status {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+}
+
+.quest-status-badge {
+  padding: 0.25rem 0.75rem;
+  border-radius: 4px;
+  font-size: 0.8rem;
+  font-weight: bold;
+  font-family: 'Cinzel', serif;
+  white-space: nowrap;
+}
+
+.quest-status-badge.not_yet_begun {
+  background-color: #E8E8E8;
+  color: #333;
+}
+
+.quest-status-badge.the_road_goes_ever_on {
+  background-color: #FDB813;
+  color: #333;
+}
+
+.quest-status-badge.it_is_done {
+  background-color: #6DB66D;
+  color: #fff;
+}
+
+.quest-status-badge.the_shadow_falls {
+  background-color: #C41E3A;
+  color: #fff;
+}
+
+.quest-info-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.quest-info-label {
+  font-family: 'Cinzel', serif;
+  color: var(--color-earth-brown-medium, #A0522D);
+  font-size: 0.85rem;
+  font-weight: bold;
+}
+
+.quest-info-value {
+  color: var(--color-earth-brown-dark, #8B4513);
+  font-size: 0.95rem;
+}
+
+.quest-description {
+  margin: 1rem 0;
+  padding: 0.75rem;
+  background-color: rgba(160, 82, 45, 0.1);
+  border-left: 3px solid var(--color-earth-brown-medium, #A0522D);
+  border-radius: 4px;
+  color: var(--color-earth-brown-dark, #8B4513);
+  font-size: 0.9rem;
+  font-style: italic;
+  line-height: 1.5;
+}
+
+.quest-quote {
+  margin: 1rem 0 0 0;
+  padding: 0.75rem;
+  background-color: rgba(218, 165, 32, 0.1);
+  border-left: 3px solid var(--color-gold-dark, #FFD700);
+  border-radius: 4px;
+  color: var(--color-earth-brown-dark, #8B4513);
+  font-size: 0.85rem;
+  font-style: italic;
+  line-height: 1.5;
+}
+
+.quest-details-actions {
+  padding: 1.25rem;
+  border-top: 2px solid var(--color-earth-brown-medium, #A0522D);
+  flex-shrink: 0;
+}
+
+.quest-details-actions a,
+.quest-details-actions button {
+  display: inline-block;
+  padding: 0.75rem 1rem;
+  background-color: var(--color-earth-brown-dark, #8B4513);
+  color: var(--color-parchment-light, #F4E4BC);
+  text-decoration: none;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-family: 'Cinzel', serif;
+  transition: background-color 0.2s;
+  font-size: 0.9rem;
+}
+
+.quest-details-actions a:hover,
+.quest-details-actions button:hover {
+  background-color: var(--color-earth-brown-medium, #A0522D);
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+  .filter-sidebar {
+    width: 280px;
+  }
+  
+  .quest-details-card {
+    width: 300px;
+    bottom: 1rem;
+    right: 1rem;
+  }
+  
+  .filter-toggle-btn {
+    width: 45px;
+    height: 45px;
+    font-size: 1.3rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .filter-sidebar {
+    width: 100%;
+  }
+  
+  .quest-details-card {
+    width: calc(100% - 2rem);
+    max-height: 50vh;
+    max-width: none;
+  }
+  
+  .filter-toggle-btn {
+    bottom: 1rem;
+    left: 1rem;
+  }
+}

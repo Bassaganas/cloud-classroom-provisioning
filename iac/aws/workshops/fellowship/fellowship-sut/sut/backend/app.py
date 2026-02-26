@@ -44,8 +44,8 @@ def create_app(config_name: str = None) -> Flask:
     api = Api(
         app,
         version='1.0',
-        title='Fellowship Quest Tracker API',
-        description='REST API for tracking the Fellowship\'s journey and quests',
+        title='The Fellowship\'s Quest List API',
+        description='REST API for tracking the Fellowship\'s epic journey through Middle-earth',
         doc='/api/swagger/',
         prefix='/api'
     )
@@ -73,7 +73,7 @@ def create_app(config_name: str = None) -> Flask:
     def api_info():
         """API information endpoint."""
         return jsonify({
-            'message': 'Welcome to the Fellowship Quest Tracker API',
+            'message': 'Welcome to The Fellowship\'s Quest List API',
             'version': '1.0',
             'docs': '/api/swagger/',
             'health': '/api/health'

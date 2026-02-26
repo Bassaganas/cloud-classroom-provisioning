@@ -17,7 +17,8 @@ def test_valid_login(page: Page, base_url: str, test_credentials: dict):
     # Wait for redirect to dashboard
     assert login_page.wait_for_redirect('/dashboard'), "Should redirect to dashboard after login"
     assert dashboard_page.is_loaded(), "Dashboard should be loaded"
-    assert 'Welcome' in dashboard_page.get_welcome_text(), "Welcome message should be displayed"
+    welcome_text = dashboard_page.get_welcome_text()
+    assert 'Welcome' in welcome_text or 'Council Chamber' in welcome_text, "Welcome message should be displayed with LOTR terminology"
 
 def test_invalid_login(page: Page, base_url: str):
     """Test login failure with invalid credentials."""

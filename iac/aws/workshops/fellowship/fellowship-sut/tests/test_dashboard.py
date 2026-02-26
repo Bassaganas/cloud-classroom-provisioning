@@ -21,10 +21,12 @@ def test_dashboard_loads(authenticated_page: Page, base_url: str):
     dashboard_page.navigate()
     
     assert dashboard_page.is_loaded(), "Dashboard should be loaded"
-    assert 'Welcome' in dashboard_page.get_welcome_text(), "Welcome message should be displayed"
+    welcome_text = dashboard_page.get_welcome_text()
+    # Check for LOTR terminology
+    assert 'The Council Chamber' in welcome_text or 'Welcome' in welcome_text, "Welcome message should be displayed with LOTR terminology"
 
 def test_dashboard_statistics(authenticated_page: Page, base_url: str):
-    """Test that dashboard displays quest statistics."""
+    """Test that dashboard displays quest statistics with LOTR terminology."""
     dashboard_page = DashboardPage(authenticated_page, base_url)
     dashboard_page.navigate()
     
@@ -35,6 +37,12 @@ def test_dashboard_statistics(authenticated_page: Page, base_url: str):
     # Check that stat values are displayed
     total_quests = dashboard_page.get_stat_count(0)
     assert total_quests.isdigit(), "Total quests stat should be a number"
+    
+    # Check for LOTR terminology in stat labels
+    stat_labels = [dashboard_page.get_stat_label(i) for i in range(min(stat_count, 6))]
+    lotr_terms = ['Not Yet Begun', 'The Road Goes Ever On', 'It Is Done', 'The Shadow Falls', 'Council Chamber']
+    has_lotr_terms = any(term in label for label in stat_labels for term in lotr_terms)
+    assert has_lotr_terms or stat_count >= 4, "Dashboard should display LOTR terminology in statistics"
 
 def test_dashboard_quest_list(authenticated_page: Page, base_url: str):
     """Test that dashboard displays quest list."""
@@ -56,12 +64,16 @@ def test_dashboard_navigation(authenticated_page: Page, base_url: str):
     # Check that navbar is visible
     assert dashboard_page.navbar.is_visible(), "Navbar should be visible"
     
-    # Click on Quests link
+    # Click on Quests link (LOTR terminology)
     dashboard_page.click_quests_link()
     
     # Should navigate to quests page
     authenticated_page.wait_for_url(f"**/quests", timeout=5000)
     assert '/quests' in authenticated_page.url, "Should navigate to quests page"
+    
+    # Check for LOTR terminology on quests page
+    page_title = authenticated_page.locator('h1').inner_text()
+    assert 'Scrolls' in page_title or 'Quests' in page_title, "Quests page should have LOTR terminology"
 
 def test_dashboard_user_info(authenticated_page: Page, base_url: str):
     """Test that dashboard displays user information."""

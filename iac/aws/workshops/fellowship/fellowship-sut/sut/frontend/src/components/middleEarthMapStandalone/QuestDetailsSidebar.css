@@ -1,0 +1,158 @@
+/* QuestDetailsSidebar Styles */
+
+#quest-details-container {
+  display: flex;
+  flex-direction: column;
+  flex-grow: 1;
+  align-items: center;
+  position: fixed;
+  top: 60px;
+  left: 0;
+  z-index: 500;
+  background: #F9F4ED;
+  transform: translateX(-105%);
+  transition: all 0.3s ease-in-out;
+  height: calc(100vh - 60px);
+  width: 100vw;
+  box-shadow: 7px 5px 7px -1px rgba(0, 0, 0, 0.63);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+@media (min-width: 840px) {
+  #quest-details-container {
+    width: 30vw;
+    top: 60px;
+    height: calc(100vh - 60px);
+  }
+}
+
+#quest-details-container.active {
+  transform: translateX(0%);
+}
+
+#quest-details-container.active #quest-close-btn {
+  transform: translateX(0%);
+}
+
+#quest-details-container #quest-close-btn {
+  text-decoration: none;
+  color: black;
+  position: absolute;
+  top: 0.6rem;
+  left: 1rem;
+  width: 3rem;
+  opacity: 1;
+  background: #F9F4ED;
+  box-shadow: 0 0 5px 2px rgba(0, 0, 0, 0.63);
+  border-radius: 100%;
+  padding: 0.5rem;
+  z-index: 501;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+#quest-details-container #quest-close-btn img {
+  width: 2rem;
+  height: 2rem;
+}
+
+#quest-details-container #quest-close-btn:hover {
+  background: #e8e0d5;
+}
+
+#quest-details {
+  width: 100%;
+  max-width: 500px;
+  padding: 5rem 2rem 2rem 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+@media (max-width: 839px) {
+  #quest-details {
+    padding: 4rem 2rem 2rem 2rem;
+  }
+}
+
+#quest-title {
+  font-size: 1.8rem;
+  font-weight: bold;
+  color: #2c3e50;
+  margin: 0;
+  padding: 0 1rem 0 0;
+}
+
+#quest-status-container {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+#quest-status {
+  display: inline-block;
+  padding: 0.4rem 0.8rem;
+  border-radius: 4px;
+  color: white;
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+#quest-metadata {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.metadata-row {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.95rem;
+}
+
+.metadata-label {
+  font-weight: 600;
+  color: #2c3e50;
+  min-width: 80px;
+}
+
+.metadata-value {
+  color: #555;
+}
+
+#quest-description,
+#quest-quote,
+#quest-assignee,
+#quest-location {
+  border-top: 1px solid #d4cfc6;
+  padding-top: 1rem;
+}
+
+#quest-description h3,
+#quest-quote h3,
+#quest-assignee h3,
+#quest-location h3 {
+  font-size: 1.1rem;
+  color: #2c3e50;
+  margin: 0 0 0.5rem 0;
+  font-weight: 600;
+}
+
+#quest-description p,
+#quest-quote p,
+#quest-assignee p,
+#quest-location p {
+  margin: 0;
+  color: #555;
+  line-height: 1.6;
+  font-size: 0.95rem;
+}
+
+@media (max-width: 839px) {
+  #quest-details-container {
+    width: 100vw;
+  }
+}

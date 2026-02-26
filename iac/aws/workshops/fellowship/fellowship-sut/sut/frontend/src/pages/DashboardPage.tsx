@@ -45,13 +45,15 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user, onLogout }) => {
     <div>
       <nav className="navbar">
         <Link to="/dashboard" className="navbar-brand">
-          Fellowship Quest Tracker
+          The Fellowship's Quest List
         </Link>
         <div className="navbar-nav">
-          <Link to="/dashboard" className="nav-link">Dashboard</Link>
-          <Link to="/quests" className="nav-link">Quests</Link>
+          <Link to="/dashboard" className="nav-link">The Council Chamber</Link>
+          <Link to="/quests" className="nav-link">The Scrolls of Middle-earth</Link>
+          <Link to="/map" className="nav-link">The Map of Middle-earth</Link>
+          <Link to="/middle-earth-map" className="nav-link">Middle-Earth Interactive Map</Link>
           <button className="btn btn-secondary" onClick={onLogout}>
-            Logout
+            Leave the Fellowship
           </button>
         </div>
       </nav>
