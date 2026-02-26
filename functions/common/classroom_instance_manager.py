@@ -1079,6 +1079,7 @@ export WORKSHOP_NAME={workshop_name}
                 IamInstanceProfile={'Name': IAM_INSTANCE_PROFILE},
                 SubnetId=SUBNET_ID if SUBNET_ID else None,
                 SecurityGroupIds=SECURITY_GROUP_IDS if SECURITY_GROUP_IDS else None,
+                AssociatePublicIpAddress=True,  # Ensure instance gets a public IP for domain accessibility
                 TagSpecifications=[
                     {
                         'ResourceType': 'instance',
