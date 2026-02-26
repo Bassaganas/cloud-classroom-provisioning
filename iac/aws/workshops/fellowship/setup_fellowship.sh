@@ -184,8 +184,18 @@ if [ ! -x "/home/ec2-user/.docker/cli-plugins/docker-compose" ]; then
     exit 1
 fi
 log "Starting SUT containers with CADDY_DOMAIN=${CADDY_DOMAIN}..."
-# Export CADDY_DOMAIN for docker-compose
-export CADDY_DOMAIN
+
+# Create .env file for docker-compose to read CADDY_DOMAIN
+# (docker-compose automatically reads .env file from working directory)
+log "Creating .env file with CADDY_DOMAIN for docker-compose..."
+cat > /home/ec2-user/fellowship-sut/.env << EOF
+CADDY_DOMAIN=${CADDY_DOMAIN}
+EOF
+chown ec2-user:ec2-user /home/ec2-user/fellowship-sut/.env
+log "✓ Created /home/ec2-user/fellowship-sut/.env with CADDY_DOMAIN"
+
+# Deploy SUT containers
+# Pass CADDY_DOMAIN explicitly via environment to ensure it reaches docker-compose and Caddy container
 DEPLOY_OUTPUT=$(su - ec2-user -c "cd ~/fellowship-sut && CADDY_DOMAIN='${CADDY_DOMAIN}' docker compose up -d 2>&1")
 DEPLOY_EXIT_CODE=$?
 if [ $DEPLOY_EXIT_CODE -ne 0 ]; then

@@ -55,7 +55,7 @@ services:
       - caddy_data:/data
       - caddy_config:/config
     environment:
-      - CADDY_DOMAIN=${CADDY_DOMAIN}
+      CADDY_DOMAIN: ${CADDY_DOMAIN:-localhost}
     depends_on:
       - backend
       - frontend
