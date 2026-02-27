@@ -14,7 +14,7 @@
 .map-page-container {
   flex: 1;
   position: relative;
-  overflow: hidden;
+  overflow: visible;
 }
 
 /* Filter Sidebar */
@@ -27,7 +27,7 @@
   background: var(--color-parchment-light, #F4E4BC);
   border-right: 2px solid var(--color-earth-brown-medium, #A0522D);
   box-shadow: 2px 0 12px rgba(0, 0, 0, 0.3);
-  z-index: 100;
+  z-index: 500;
   overflow-y: auto;
   transform: translateX(0);
   transition: transform 0.3s ease;
@@ -122,6 +122,32 @@
   background-color: var(--color-earth-brown-medium, #A0522D);
 }
 
+.filter-attribution {
+  padding: 1.5rem;
+  margin-top: 1rem;
+  border-top: 2px solid var(--color-earth-brown-medium, #A0522D);
+  flex-shrink: 0;
+  font-size: 0.75rem;
+  color: var(--color-earth-brown-dark, #8B4513);
+  line-height: 1.5;
+  font-family: 'Lora', serif;
+  background: rgba(160, 82, 45, 0.1);
+}
+
+.filter-attribution p {
+  margin: 0.5rem 0;
+}
+
+.filter-attribution em {
+  display: inline;
+  font-weight: 600;
+}
+
+.filter-actions {
+  padding: 0 1rem;
+  margin-bottom: auto;
+}
+
 /* Map Main Content */
 .map-main-content {
   position: absolute;
@@ -131,10 +157,12 @@
   bottom: 0;
   display: flex;
   flex-direction: column;
+  z-index: 1;
+  overflow: visible;
 }
 
 .filter-toggle-btn {
-  position: absolute;
+  position: fixed;
   bottom: 1.5rem;
   left: 1.5rem;
   width: 50px;
@@ -148,9 +176,13 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: all 0.2s;
-  z-index: 1000;
+  transition: all 0.3s ease;
+  z-index: 700;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.filter-toggle-btn.filter-open {
+  left: 340px;
 }
 
 .filter-toggle-btn:hover {
@@ -166,6 +198,7 @@
 .map-container {
   flex: 1;
   width: 100%;
+  height: 100%;
   overflow: hidden;
 }
 
@@ -174,22 +207,42 @@
   height: 100%;
 }
 
+.middle-earth-map-container .leaflet-container {
+  width: 100% !important;
+  height: 100% !important;
+}
+
 /* Quest Details Card */
 .quest-details-card {
   position: fixed;
   bottom: 1.5rem;
   right: 1.5rem;
-  width: 350px;
+  width: 380px;
   max-height: 70vh;
-  background: var(--color-parchment-light, #F4E4BC);
-  border: 2px solid var(--color-earth-brown-medium, #A0522D);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+  background: linear-gradient(135deg, #F4E4BC 0%, #E8D5B7 100%);
+  border: 3px solid #8B4513;
+  border-radius: 12px;
+  box-shadow: 
+    0 20px 40px rgba(0, 0, 0, 0.4),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2),
+    0 0 30px rgba(218, 165, 32, 0.2);
   display: flex;
   flex-direction: column;
-  z-index: 1001;
-  animation: slideUp 0.3s ease;
+  z-index: 600;
+  animation: slideUp 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
   pointer-events: auto;
+  overflow: hidden;
+}
+
+.quest-details-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--dark-red), var(--gold), var(--forest-green), var(--dark-red));
+  z-index: 0;
 }
 
 @keyframes slideUp {
@@ -207,11 +260,23 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 1.25rem;
-  border-bottom: 2px solid var(--color-earth-brown-medium, #A0522D);
+  padding: 1.5rem;
+  border-bottom: 2px solid #A0522D;
   flex-shrink: 0;
   position: relative;
+  z-index: 1;
   gap: 1rem;
+  background: linear-gradient(90deg, rgba(139, 69, 19, 0.1), transparent);
+}
+
+.quest-details-header h2 {
+  font-family: 'Cinzel', serif;
+  color: #8B4513;
+  font-size: 1.3rem;
+  margin: 0;
+  flex: 1;
+  word-wrap: break-word;
+  font-weight: 700;
 }
 
 .quest-title {
@@ -227,7 +292,7 @@
   background: none;
   border: none;
   font-size: 1.5rem;
-  color: var(--color-earth-brown-dark, #8B4513);
+  color: #8B4513;
   cursor: pointer;
   padding: 0;
   width: 28px;
@@ -245,13 +310,16 @@
 }
 
 .close-btn:hover {
-  color: var(--color-gold-dark, #FFD700);
+  color: #FFD700;
 }
 
 .quest-details-body {
   flex: 1;
-  padding: 1.25rem;
+  padding: 1.5rem;
   overflow-y: auto;
+  position: relative;
+  z-index: 1;
+  color: #3d2817;
 }
 
 .quest-meta-info {
@@ -266,41 +334,46 @@
   align-items: center;
   gap: 0.5rem;
   font-size: 0.9rem;
+  margin-bottom: 1rem;
+  color: #3d2817;
 }
 
 .quest-status-badge {
-  padding: 0.25rem 0.75rem;
-  border-radius: 4px;
-  font-size: 0.8rem;
+  padding: 0.35rem 0.85rem;
+  border-radius: 20px;
+  font-size: 0.75rem;
   font-weight: bold;
   font-family: 'Cinzel', serif;
   white-space: nowrap;
+  border: 1px solid currentColor;
+  background: transparent;
 }
 
 .quest-status-badge.not_yet_begun {
-  background-color: #E8E8E8;
-  color: #333;
+  color: #666;
+  border-color: #666;
 }
 
 .quest-status-badge.the_road_goes_ever_on {
-  background-color: #FDB813;
-  color: #333;
+  color: #F59E0B;
+  border-color: #F59E0B;
 }
 
 .quest-status-badge.it_is_done {
-  background-color: #6DB66D;
-  color: #fff;
+  color: #10B981;
+  border-color: #10B981;
 }
 
 .quest-status-badge.the_shadow_falls {
-  background-color: #C41E3A;
-  color: #fff;
+  color: #DC2626;
+  border-color: #DC2626;
 }
 
 .quest-info-row {
   display: flex;
   flex-direction: column;
   gap: 0.25rem;
+  color: #3d2817;
 }
 
 .quest-info-label {
@@ -319,9 +392,9 @@
   margin: 1rem 0;
   padding: 0.75rem;
   background-color: rgba(160, 82, 45, 0.1);
-  border-left: 3px solid var(--color-earth-brown-medium, #A0522D);
+  border-left: 3px solid #A0522D;
   border-radius: 4px;
-  color: var(--color-earth-brown-dark, #8B4513);
+  color: #3d2817;
   font-size: 0.9rem;
   font-style: italic;
   line-height: 1.5;
@@ -331,38 +404,55 @@
   margin: 1rem 0 0 0;
   padding: 0.75rem;
   background-color: rgba(218, 165, 32, 0.1);
-  border-left: 3px solid var(--color-gold-dark, #FFD700);
+  border-left: 3px solid #FFD700;
   border-radius: 4px;
-  color: var(--color-earth-brown-dark, #8B4513);
+  color: #3d2817;
   font-size: 0.85rem;
   font-style: italic;
   line-height: 1.5;
 }
 
 .quest-details-actions {
-  padding: 1.25rem;
-  border-top: 2px solid var(--color-earth-brown-medium, #A0522D);
+  padding: 1.5rem;
+  border-top: 2px solid #A0522D;
   flex-shrink: 0;
+  display: flex;
+  gap: 0.75rem;
+  position: relative;
+  z-index: 1;
+  background: linear-gradient(90deg, transparent, rgba(139, 69, 19, 0.05));
 }
 
-.quest-details-actions a,
 .quest-details-actions button {
-  display: inline-block;
-  padding: 0.75rem 1rem;
-  background-color: var(--color-earth-brown-dark, #8B4513);
-  color: var(--color-parchment-light, #F4E4BC);
+  flex: 1;
+  padding: 0.9rem 1.2rem;
+  background-color: #8B4513;
+  color: #F4E4BC;
   text-decoration: none;
-  border: none;
-  border-radius: 4px;
+  border: 2px solid #A0522D;
+  border-radius: 6px;
   cursor: pointer;
   font-family: 'Cinzel', serif;
-  transition: background-color 0.2s;
+  transition: all 0.3s ease;
   font-size: 0.9rem;
+  font-weight: 600;
+  box-shadow: 0 4px 8px rgba(139, 69, 19, 0.2);
 }
 
-.quest-details-actions a:hover,
 .quest-details-actions button:hover {
-  background-color: var(--color-earth-brown-medium, #A0522D);
+  background-color: #A0522D;
+  box-shadow: 0 6px 12px rgba(139, 69, 19, 0.3);
+  transform: translateY(-2px);
+}
+
+.quest-details-actions button.btn-primary {
+  background: linear-gradient(135deg, #DAA520, #F0E68C);
+  color: #1a1f2e;
+  border-color: #8B4513;
+}
+
+.quest-details-actions button.btn-primary:hover {
+  box-shadow: 0 8px 16px rgba(218, 165, 32, 0.4);
 }
 
 /* Responsive Design */
@@ -399,4 +489,9 @@
     bottom: 1rem;
     left: 1rem;
   }
+}
+
+/* Map Attribution - Moved to filter sidebar */
+.map-attribution {
+  display: none;
 }

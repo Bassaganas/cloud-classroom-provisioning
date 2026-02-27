@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import MiddleEarthMap from '../components/MiddleEarthMap';
 import { apiService } from '../services/api';
 import { Quest, Location, User } from '../types';
@@ -11,9 +11,12 @@ interface MapPageProps {
 }
 
 const MapPage: React.FC<MapPageProps> = ({ user, onLogout }) => {
+  const location = useLocation();
+  const navigate = useNavigate();
   const [allQuests, setAllQuests] = useState<Quest[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
   const [selectedQuestId, setSelectedQuestId] = useState<number | undefined>();
+  const [zoomToLocation, setZoomToLocation] = useState<number | undefined>();
   const [loading, setLoading] = useState(true);
   const [filterOpen, setFilterOpen] = useState(window.innerWidth > 1024);
 
@@ -23,7 +26,11 @@ const MapPage: React.FC<MapPageProps> = ({ user, onLogout }) => {
 
   useEffect(() => {
     loadData();
-  }, []);
+    // Handle zoom to location from navigation state
+    if (location.state?.zoomToLocation) {
+      setZoomToLocation(location.state.zoomToLocation);
+    }
+  }, [location.state?.zoomToLocation]);
 
   const loadData = async () => {
     try {
@@ -113,7 +120,6 @@ const MapPage: React.FC<MapPageProps> = ({ user, onLogout }) => {
           <Link to="/dashboard" className="nav-link">The Council Chamber</Link>
           <Link to="/quests" className="nav-link">The Scrolls of Middle-earth</Link>
           <Link to="/map" className="nav-link active">The Map of Middle-earth</Link>
-          <Link to="/middle-earth-map" className="nav-link">Interactive Map</Link>
           <button className="btn btn-secondary" onClick={onLogout}>
             Leave the Fellowship
           </button>
@@ -263,12 +269,19 @@ const MapPage: React.FC<MapPageProps> = ({ user, onLogout }) => {
               </button>
             </div>
           </div>
+          
+          {/* Attribution */}
+          <div className="filter-attribution">
+            <p><strong>Map Credit</strong></p>
+            <p>Credits to Emil Johansson, creator of <em>lotrproject.com</em>, for creating the map used in this website.</p>
+            <p>Created by Yohann Bethoule, 2022</p>
+          </div>
         </aside>
 
         {/* Map Section */}
         <div className="map-main-content">
           <button
-            className="filter-toggle-btn"
+            className={`filter-toggle-btn ${filterOpen ? 'filter-open' : ''}`}
             onClick={toggleFilterSidebar}
             title="Toggle filters"
           >
@@ -279,9 +292,12 @@ const MapPage: React.FC<MapPageProps> = ({ user, onLogout }) => {
             locations={locations}
             quests={filteredQuests.filter(q => q.location_id)}
             selectedQuestId={selectedQuestId}
+            zoomToLocation={zoomToLocation}
             onLocationClick={() => {}}
             onQuestClick={handleQuestClick}
           />
+
+
 
           {/* Quest Details Card */}
           {selectedQuest && (
@@ -337,9 +353,22 @@ const MapPage: React.FC<MapPageProps> = ({ user, onLogout }) => {
               </div>
 
               <div className="quest-details-actions">
-                <Link to="/quests" className="btn btn-primary">
-                  View Full Details
-                </Link>
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => {
+                    setSelectedQuestId(undefined);
+                  }}
+                >
+                  Close
+                </button>
+                <button
+                  className="btn btn-primary"
+                  onClick={() => {
+                    navigate('/quests', { state: { selectedQuestId: selectedQuest.id } });
+                  }}
+                >
+                  View Full Details →
+                </button>
               </div>
             </div>
           )}

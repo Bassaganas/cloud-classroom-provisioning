@@ -84,6 +84,7 @@ interface MiddleEarthMapProps {
   onQuestClick?: (questId: number) => void;  // Support quest click
   onCompleteQuest?: (questId: number) => void;  // Support quest completion
   focusLocationId?: number;  // Location to focus on
+  zoomToLocation?: number;  // Location to zoom to from navigation
   onFocusComplete?: () => void;  // Callback when focus animation completes
 }
 
@@ -130,6 +131,17 @@ function MapFocusHandler({ locationId, locations, convertToLatLng, onFocused }: 
       }
     }
   }, [map, locationId, locations, convertToLatLng, onFocused]);
+  
+  // Add max bounds to prevent panning outside the map
+  useEffect(() => {
+    const mapBounds: [[number, number], [number, number]] = [
+      [0, 0],
+      [4344, 5000]
+    ];
+    const bounds = L.latLngBounds(mapBounds[0], mapBounds[1]);
+    map.setMaxBounds(bounds);
+    // Don't use panInsideBounds on drag - setMaxBounds is sufficient and prevents infinite loops
+  }, [map]);
   
   return null;
 }
@@ -599,6 +611,7 @@ const MiddleEarthMap: React.FC<MiddleEarthMapProps> = ({
   onQuestClick,
   onCompleteQuest,
   focusLocationId,
+  zoomToLocation,
   onFocusComplete
 }) => {
   // Define bounds for Middle-earth map image
@@ -652,6 +665,8 @@ const MiddleEarthMap: React.FC<MiddleEarthMapProps> = ({
         scrollWheelZoom={true}
         zoomControl={true}
         attributionControl={false}
+        dragging={true}
+        boxZoom={true}
       >
         {/* Middle-earth map image overlay */}
         {/* Map image from MiddleEarthMap by Yohann Bethoule */}
@@ -670,7 +685,7 @@ const MiddleEarthMap: React.FC<MiddleEarthMapProps> = ({
         
         {/* Focus handler */}
         <MapFocusHandler 
-          locationId={focusLocationId}
+          locationId={zoomToLocation || focusLocationId}
           locations={locations}
           convertToLatLng={convertToLatLng}
           onFocused={onFocusComplete}

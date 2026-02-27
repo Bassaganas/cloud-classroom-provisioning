@@ -56,7 +56,7 @@ const QuestList: React.FC<QuestListProps> = ({ quests, onEdit, onDelete, onCompl
     if (onLocationClick) {
       onLocationClick(locationId);
     } else {
-      navigate(`/map?location=${locationId}`);
+      navigate(`/map`, { state: { zoomToLocation: locationId } });
     }
   };
 

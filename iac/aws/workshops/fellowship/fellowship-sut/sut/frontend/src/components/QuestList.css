@@ -190,6 +190,15 @@
   margin-top: 1rem;
   padding-top: 1rem;
   border-top: 2px solid var(--earth-brown);
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.quest-actions .btn {
+  flex: 1;
+  min-width: 100px;
+  max-width: 150px;
 }
 
 .quest-card-dark-magic .quest-actions {

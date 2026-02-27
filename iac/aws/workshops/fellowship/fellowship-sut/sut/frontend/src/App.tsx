@@ -4,7 +4,6 @@ import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
 import QuestsPage from './pages/QuestsPage';
 import MapPage from './pages/MapPage';
-import MiddleEarthMapPage from './pages/MiddleEarthMapPage';
 import { apiService } from './services/api';
 import { User } from './types';
 import './App.css';
@@ -80,16 +79,6 @@ function App() {
             element={
               user ? (
                 <MapPage user={user} onLogout={handleLogout} />
-              ) : (
-                <Navigate to="/login" replace />
-              )
-            }
-          />
-          <Route
-            path="/middle-earth-map"
-            element={
-              user ? (
-                <MiddleEarthMapPage user={user} onLogout={handleLogout} />
               ) : (
                 <Navigate to="/login" replace />
               )

@@ -122,7 +122,6 @@ const QuestsPage: React.FC<QuestsPageProps> = ({ user, onLogout }) => {
           <Link to="/dashboard" className="nav-link">The Council Chamber</Link>
           <Link to="/quests" className="nav-link">The Scrolls of Middle-earth</Link>
           <Link to="/map" className="nav-link">The Map of Middle-earth</Link>
-          <Link to="/middle-earth-map" className="nav-link">Middle-Earth Interactive Map</Link>
           <button className="btn btn-secondary" onClick={onLogout}>
             Leave the Fellowship
           </button>
