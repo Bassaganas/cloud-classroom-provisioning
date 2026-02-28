@@ -1,7 +1,16 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import {
+  Alert,
+  Box,
+  Button,
+  Card,
+  CardContent,
+  Container,
+  TextField,
+  Typography
+} from '@mui/material'
 import { useAuth } from '../services/auth'
-import './Login.css'
 
 function Login() {
   const [password, setPassword] = useState('')
@@ -30,29 +39,45 @@ function Login() {
   }
 
   return (
-    <div className="login-container">
-      <div className="login-card">
-        <h1>🚀 EC2 Instance Manager</h1>
-        <p className="subtitle">Enter password to continue</p>
-        <form onSubmit={handleSubmit}>
-          <div className="form-group">
-            <label htmlFor="password">Password:</label>
-            <input
-              type="password"
-              id="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              autoFocus
-            />
-          </div>
-          {error && <div className="error-message">{error}</div>}
-          <button type="submit" disabled={loading}>
-            {loading ? 'Logging in...' : 'Login'}
-          </button>
-        </form>
-      </div>
-    </div>
+    <Box
+      sx={{
+        minHeight: '100vh',
+        display: 'flex',
+        alignItems: 'center',
+        background: 'linear-gradient(135deg, #eef2ff 0%, #f0f9ff 100%)'
+      }}
+    >
+      <Container maxWidth="sm">
+        <Card>
+          <CardContent sx={{ p: 4 }}>
+            <Typography variant="h4" fontWeight={800} gutterBottom>
+              EC2 Instance Manager
+            </Typography>
+            <Typography color="text.secondary" sx={{ mb: 3 }}>
+              Enter your access password to continue.
+            </Typography>
+
+            <Box component="form" onSubmit={handleSubmit}>
+              <TextField
+                type="password"
+                id="password"
+                label="Password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                autoFocus
+                fullWidth
+                sx={{ mb: 2 }}
+              />
+              {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
+              <Button type="submit" variant="contained" size="large" disabled={loading} fullWidth>
+                {loading ? 'Logging in...' : 'Login'}
+              </Button>
+            </Box>
+          </CardContent>
+        </Card>
+      </Container>
+    </Box>
   )
 }
 

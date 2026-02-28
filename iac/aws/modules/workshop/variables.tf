@@ -180,3 +180,29 @@ variable "security_group_rules" {
   }))
   default = {}
 }
+# Spot instance configuration
+variable "enable_spot_instances" {
+  description = "Enable EC2 Spot Instance support with capacity reservation blocks"
+  type        = bool
+  default     = true
+}
+
+variable "spot_default_duration_minutes" {
+  description = "Default spot instance reservation duration in minutes (60-360, i.e., 1-6 hours)"
+  type        = number
+  default     = 120
+  validation {
+    condition     = var.spot_default_duration_minutes >= 60 && var.spot_default_duration_minutes <= 360
+    error_message = "Spot duration must be between 60 and 360 minutes (1-6 hours)."
+  }
+}
+
+variable "spot_max_price_multiplier" {
+  description = "Multiplier for on-demand price to set as max spot price (e.g., 0.9 for 90% of on-demand)"
+  type        = number
+  default     = 1.0
+  validation {
+    condition     = var.spot_max_price_multiplier > 0 && var.spot_max_price_multiplier <= 1.0
+    error_message = "Spot max price multiplier must be between 0.01 and 1.0."
+  }
+}

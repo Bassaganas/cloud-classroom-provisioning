@@ -312,26 +312,27 @@ app.post('/api/update_timeout_settings', checkAuth, async (req, res) => {
 
 app.post('/api/create_tutorial_session', checkAuth, async (req, res) => {
   await delay(800)
-  const { session_id, workshop, pool_count, admin_count, admin_cleanup_days } = req.body
+  const { session_id, workshop, workshop_name, pool_count, admin_count, admin_cleanup_days } = req.body
+  const finalWorkshop = workshop || workshop_name
   
-  if (!session_id || !workshop) {
+  if (!session_id || !finalWorkshop) {
     return res.status(400).json({ success: false, error: 'session_id and workshop are required' })
   }
   
   // Create tutorial session
   const session = {
     session_id: session_id,
-    workshop_name: workshop,
+    workshop_name: finalWorkshop,
     created_at: new Date().toISOString(),
     status: 'active',
     expected_instance_count: (pool_count || 0) + (admin_count || 0),
     actual_instance_count: 0
   }
   
-  if (!state.tutorialSessions[workshop]) {
-    state.tutorialSessions[workshop] = []
+  if (!state.tutorialSessions[finalWorkshop]) {
+    state.tutorialSessions[finalWorkshop] = []
   }
-  state.tutorialSessions[workshop].push(session)
+  state.tutorialSessions[finalWorkshop].push(session)
   
   // Create instances for the session
   const createdInstances = []
@@ -345,7 +346,7 @@ app.post('/api/create_tutorial_session', checkAuth, async (req, res) => {
       public_ip: generateIP(),
       private_ip: `10.0.1.${50 + state.instanceCounter}`,
       type: 'pool',
-      workshop: workshop,
+      workshop: finalWorkshop,
       tutorial_session_id: session_id,
       assigned_to: null,
       created_at: new Date().toISOString(),
@@ -366,7 +367,7 @@ app.post('/api/create_tutorial_session', checkAuth, async (req, res) => {
       public_ip: generateIP(),
       private_ip: `10.0.1.${50 + state.instanceCounter}`,
       type: 'admin',
-      workshop: workshop,
+      workshop: finalWorkshop,
       tutorial_session_id: session_id,
       assigned_to: null,
       created_at: new Date().toISOString(),

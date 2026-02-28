@@ -158,6 +158,54 @@ def process_instance(instance_id, ec2_client, ssm_client, table):
         launch_time = instance['LaunchTime']
         now = datetime.now(timezone.utc)
         
+        # Check if instance is spot and reservation has expired (HIGH PRIORITY)
+        if tags.get('PurchaseType') == 'spot':
+            spot_end_time_str = tags.get('SpotReservationEndTime')
+            if spot_end_time_str:
+                try:
+                    # Parse ISO 8601 timestamp
+                    spot_end_time = datetime.fromisoformat(spot_end_time_str.replace('Z', '+00:00'))
+                    # Add 5-minute buffer to account for time sync and processing delays
+                    with_buffer = spot_end_time + timedelta(minutes=5)
+                    
+                    if now > with_buffer:
+                        logger.info(f"Spot instance {instance_id}: reservation expired at {spot_end_time}, terminating immediately")
+                        try:
+                            # Clean up Route53 record before termination
+                            cleanup_route53_record(instance_id, tags)
+                            
+                            # Terminate the spot instance immediately (MUST use terminate, not stop)
+                            ec2_client.terminate_instances(InstanceIds=[instance_id])
+                            logger.info(f"Terminated spot instance {instance_id} (reservation expired)")
+                            
+                            # Delete DynamoDB record if it exists
+                            try:
+                                table.delete_item(Key={'instance_id': instance_id})
+                                logger.info(f"Deleted DynamoDB record for spot instance {instance_id}")
+                            except Exception as e:
+                                logger.warning(f"Failed to delete DynamoDB record for spot instance {instance_id}: {str(e)}")
+                            
+                            return {'instance_id': instance_id, 'status': 'terminated', 'reason': 'spot_reservation_expired'}
+                        except Exception as e:
+                            logger.error(f"Failed to terminate spot instance {instance_id}: {str(e)}")
+                            return {'instance_id': instance_id, 'status': 'error', 'error': f'Failed to terminate spot instance: {str(e)}'}
+                    else:
+                        # Still within reservation window, skip from normal lifecycle (DO NOT STOP SPOT INSTANCES)
+                        time_remaining = (with_buffer - now).total_seconds() / 60
+                        logger.info(f"Spot instance {instance_id} within reservation ({time_remaining:.1f} minutes remaining), skipping normal lifecycle checks")
+                        logger.info(f"  ⚠️ CRITICAL: Spot instances CANNOT be stopped, only terminated. Skipping stop lifecycle for {instance_id}")
+                        return {'instance_id': instance_id, 'status': 'skipped', 'reason': f'spot_within_reservation ({time_remaining:.1f} min remaining)'}
+                except ValueError as e:
+                    logger.error(f"Failed to parse SpotReservationEndTime for {instance_id}: {str(e)}")
+                    logger.error(f"  ⚠️ CRITICAL: Spot instance {instance_id} has malformed SpotReservationEndTime tag. Will treat as on-demand.")
+                    logger.error(f"  ⚠️ RISK: Attempting to stop this instance may fail. Recommend manual review.")
+                    # Fall through to normal lifecycle with warning (risky but allows manual intervention)
+            else:
+                # Spot instance without reservation end time is malformed
+                logger.error(f"Spot instance {instance_id} missing SpotReservationEndTime tag")
+                logger.error(f"  ⚠️ CRITICAL: Cannot determine when spot reservation expires. Skipping lifecycle to prevent accidental stop.")
+                return {'instance_id': instance_id, 'status': 'error', 'reason': 'spot_instance_missing_reservation_tag', 'error': 'SpotReservationEndTime tag not found'}
+        
         logger.info(f"Instance {instance_id} launched at {launch_time}, and now is {now}, so it has a remaining time of {now - launch_time}")
         # Check if instance has exceeded hard terminate timeout
         if now - launch_time > timedelta(minutes=HARD_TERMINATE_TIMEOUT_MINUTES):
@@ -213,6 +261,15 @@ def process_instance(instance_id, ec2_client, ssm_client, table):
         
         # Case 1: Running instance without assignment
         if current_state == 'running' and not is_assigned:
+            # SAFETY CHECK: Do not stop spot instances - they can only be terminated
+            if tags.get('PurchaseType') == 'spot':
+                logger.error(f"ERROR: Instance {instance_id} is marked as spot but reached stop logic!")
+                logger.error(f"  Spot instances CANNOT be stopped, only terminated.")
+                logger.error(f"  Recommendation: Check SpotReservationEndTime tag - should have returned earlier")
+                logger.error(f"  Instance will not be stopped. Manual intervention required.")
+                return {'instance_id': instance_id, 'status': 'error', 'reason': 'spot_instance_reached_stop_logic', 
+                        'error': 'Spot instance should not reach stop logic. Check reservation end time.'}
+            
             running_time = (now - launch_time).total_seconds() / 60
             if running_time < STOP_TIMEOUT_MINUTES:
                 logger.info(f"Instance {instance_id} has been running for {running_time:.2f} minutes, which is less than STOP_TIMEOUT_MINUTES ({STOP_TIMEOUT_MINUTES}). Skipping stop.")

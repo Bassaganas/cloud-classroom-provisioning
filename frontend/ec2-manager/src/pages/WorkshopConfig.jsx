@@ -1,12 +1,22 @@
 import { useState, useEffect } from 'react'
-import { useParams, useNavigate, Link } from 'react-router-dom'
+import { useParams } from 'react-router-dom'
+import {
+  Box,
+  Button,
+  Card,
+  CardContent,
+  CircularProgress,
+  Container,
+  Stack,
+  TextField,
+  Typography
+} from '@mui/material'
 import { api } from '../services/api'
+import AppToast from '../components/AppToast'
 import Header from '../components/Header'
-import './WorkshopConfig.css'
 
 function WorkshopConfig() {
   const { name: workshopName } = useParams()
-  const navigate = useNavigate()
   const [settings, setSettings] = useState({
     stop_timeout: 4,
     terminate_timeout: 20,
@@ -15,7 +25,7 @@ function WorkshopConfig() {
   })
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
-  const [message, setMessage] = useState({ text: '', type: '' })
+  const [toast, setToast] = useState({ open: false, message: '', severity: 'success' })
 
   useEffect(() => {
     loadSettings()
@@ -29,7 +39,7 @@ function WorkshopConfig() {
         setSettings(response.settings)
       }
     } catch (error) {
-      showMessage(`Error loading settings: ${error.message}`, 'error')
+      showToast(`Error loading settings: ${error.message}`, 'error')
     } finally {
       setLoading(false)
     }
@@ -47,32 +57,31 @@ function WorkshopConfig() {
         admin_cleanup_days: parseInt(settings.admin_cleanup_days),
       })
       if (response.success) {
-        showMessage(`✅ Settings saved for ${workshopName}`, 'success')
+        showToast(`Settings saved for ${workshopName}`, 'success')
       } else {
-        showMessage(`❌ Error: ${response.error}`, 'error')
+        showToast(response.error || 'Failed to save settings', 'error')
       }
     } catch (error) {
-      showMessage(`❌ Error: ${error.message}`, 'error')
+      showToast(error.message, 'error')
     } finally {
       setSaving(false)
     }
   }
 
-  const showMessage = (text, type) => {
-    setMessage({ text, type })
-    setTimeout(() => setMessage({ text: '', type: '' }), 5000)
+  const showToast = (message, severity = 'success') => {
+    setToast({ open: true, message, severity })
   }
 
   if (loading) {
     return (
-      <div className="config-container">
-        <div className="loading">Loading settings...</div>
-      </div>
+      <Box sx={{ minHeight: '70vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <CircularProgress />
+      </Box>
     )
   }
 
   return (
-    <div className="page-container">
+    <>
       <Header 
         title="Workshop Configuration"
         subtitle={`Workshop: ${workshopName}`}
@@ -80,79 +89,75 @@ function WorkshopConfig() {
         backPath="/"
         showSettings={false}
       />
-      <div className="config-container">
 
-      {message.text && (
-        <div className={`message message-${message.type}`}>{message.text}</div>
-      )}
+      <Container maxWidth="md" sx={{ py: 3 }}>
+        <Card>
+          <CardContent>
+            <Typography variant="h6" gutterBottom>Workshop Timeout Settings</Typography>
+            <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+              Configure defaults used when creating instances without custom timeout values.
+            </Typography>
 
-      <div className="card">
-        <h2>Workshop Timeout Settings (SSM Defaults)</h2>
-        <p className="description">
-          Configure default timeout values per workshop. These are used when creating instances
-          without custom timeout values.
-        </p>
-        <form onSubmit={saveSettings}>
-          <div className="form-group">
-            <label>Stop Timeout (minutes):</label>
-            <input
-              type="number"
-              min="1"
-              max="1440"
-              value={settings.stop_timeout}
-              onChange={(e) => setSettings({ ...settings, stop_timeout: e.target.value })}
-              required
-            />
-            <small>Default minutes before stopping unassigned running instances</small>
-          </div>
-          <div className="form-group">
-            <label>Terminate Timeout (minutes):</label>
-            <input
-              type="number"
-              min="1"
-              max="1440"
-              value={settings.terminate_timeout}
-              onChange={(e) => setSettings({ ...settings, terminate_timeout: e.target.value })}
-              required
-            />
-            <small>Default minutes before terminating stopped instances</small>
-          </div>
-          <div className="form-group">
-            <label>Hard Terminate Timeout (minutes):</label>
-            <input
-              type="number"
-              min="1"
-              max="10080"
-              value={settings.hard_terminate_timeout}
-              onChange={(e) => setSettings({ ...settings, hard_terminate_timeout: e.target.value })}
-              required
-            />
-            <small>Default minutes before hard terminating any instance (max: 7 days)</small>
-          </div>
-          <div className="form-group">
-            <label>Admin Cleanup Days:</label>
-            <input
-              type="number"
-              min="1"
-              max="365"
-              value={settings.admin_cleanup_days}
-              onChange={(e) => setSettings({ ...settings, admin_cleanup_days: e.target.value })}
-              required
-            />
-            <small>Default days before admin instances are deleted</small>
-          </div>
-          <div className="form-actions">
-            <button type="submit" disabled={saving}>
-              {saving ? 'Saving...' : 'Save Defaults'}
-            </button>
-            <button type="button" onClick={loadSettings} className="secondary">
-              Load Current
-            </button>
-          </div>
-        </form>
-      </div>
-      </div>
-    </div>
+            <Box component="form" onSubmit={saveSettings}>
+              <Stack spacing={2}>
+                <TextField
+                  type="number"
+                  label="Stop Timeout (minutes)"
+                  inputProps={{ min: 1, max: 1440 }}
+                  value={settings.stop_timeout}
+                  onChange={(e) => setSettings({ ...settings, stop_timeout: e.target.value })}
+                  helperText="Before stopping unassigned running instances"
+                  required
+                />
+
+                <TextField
+                  type="number"
+                  label="Terminate Timeout (minutes)"
+                  inputProps={{ min: 1, max: 1440 }}
+                  value={settings.terminate_timeout}
+                  onChange={(e) => setSettings({ ...settings, terminate_timeout: e.target.value })}
+                  helperText="Before terminating stopped instances"
+                  required
+                />
+
+                <TextField
+                  type="number"
+                  label="Hard Terminate Timeout (minutes)"
+                  inputProps={{ min: 1, max: 10080 }}
+                  value={settings.hard_terminate_timeout}
+                  onChange={(e) => setSettings({ ...settings, hard_terminate_timeout: e.target.value })}
+                  helperText="Before hard terminating any instance"
+                  required
+                />
+
+                <TextField
+                  type="number"
+                  label="Admin Cleanup Days"
+                  inputProps={{ min: 1, max: 365 }}
+                  value={settings.admin_cleanup_days}
+                  onChange={(e) => setSettings({ ...settings, admin_cleanup_days: e.target.value })}
+                  helperText="Days before admin instances are deleted"
+                  required
+                />
+
+                <Stack direction="row" spacing={1.5}>
+                  <Button type="submit" variant="contained" disabled={saving}>
+                    {saving ? 'Saving...' : 'Save Defaults'}
+                  </Button>
+                  <Button type="button" variant="outlined" onClick={loadSettings}>
+                    Load Current
+                  </Button>
+                </Stack>
+              </Stack>
+            </Box>
+          </CardContent>
+        </Card>
+      </Container>
+      <AppToast
+        toast={toast}
+        onClose={() => setToast((prev) => ({ ...prev, open: false }))}
+      />
+    </>
   )
 }
 

@@ -1,5 +1,18 @@
 import { useState } from 'react'
-import './TutorialSessionForm.css'
+import {
+  Alert,
+  Box,
+  Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
+  Stack,
+  TextField,
+  Typography
+} from '@mui/material'
+import PurchaseTypeSelector from '../components/PurchaseTypeSelector'
+import { api } from '../services/api'
 
 function TutorialSessionForm({ workshopName, onClose, onSuccess }) {
   const [formData, setFormData] = useState({
@@ -10,6 +23,10 @@ function TutorialSessionForm({ workshopName, onClose, onSuccess }) {
   })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
+  const [purchaseConfig, setPurchaseConfig] = useState({
+    purchase_type: 'on-demand',
+    spot_duration_hours: 2,
+  })
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -32,13 +49,14 @@ function TutorialSessionForm({ workshopName, onClose, onSuccess }) {
 
     try {
       setSubmitting(true)
-      const { api } = await import('../services/api')
       const response = await api.createTutorialSession({
         session_id: formData.session_id.trim(),
         workshop_name: workshopName,
         pool_count: parseInt(formData.pool_count),
         admin_count: parseInt(formData.admin_count),
         admin_cleanup_days: parseInt(formData.admin_cleanup_days),
+        purchase_type: purchaseConfig.purchase_type,
+        spot_duration_hours: purchaseConfig.spot_duration_hours,
       })
 
       if (response.success) {
@@ -55,88 +73,88 @@ function TutorialSessionForm({ workshopName, onClose, onSuccess }) {
   }
 
   return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal-content tutorial-session-form" onClick={(e) => e.stopPropagation()}>
-        <div className="modal-header">
-          <h2>Start New Tutorial Session</h2>
-          <button className="close-btn" onClick={onClose}>×</button>
-        </div>
-
-        <form onSubmit={handleSubmit}>
-          <div className="form-group">
-            <label htmlFor="session_id">Session ID *</label>
-            <input
+    <Dialog open onClose={onClose} maxWidth="md" fullWidth>
+      <DialogTitle>Start New Tutorial Session</DialogTitle>
+      <Box component="form" onSubmit={handleSubmit}>
+        <DialogContent>
+          <Stack spacing={2}>
+            <TextField
               id="session_id"
-              type="text"
+              label="Session ID"
               value={formData.session_id}
               onChange={(e) => setFormData({ ...formData, session_id: e.target.value })}
-              placeholder="e.g., tutorial_001, session_2024_01"
+              placeholder="e.g., tutorial_001"
+              helperText="Unique identifier for this tutorial session"
               required
               disabled={submitting}
+              fullWidth
             />
-            <small>Unique identifier for this tutorial session</small>
-          </div>
 
-          <div className="form-group">
-            <label htmlFor="pool_count">Pool Instances</label>
-            <input
-              id="pool_count"
-              type="number"
-              min="0"
-              max="120"
-              value={formData.pool_count}
-              onChange={(e) => setFormData({ ...formData, pool_count: e.target.value })}
-              required
-              disabled={submitting}
-            />
-            <small>Number of pool instances to create (0-120)</small>
-          </div>
-
-          <div className="form-group">
-            <label htmlFor="admin_count">Admin Instances</label>
-            <input
-              id="admin_count"
-              type="number"
-              min="0"
-              max="120"
-              value={formData.admin_count}
-              onChange={(e) => setFormData({ ...formData, admin_count: e.target.value })}
-              required
-              disabled={submitting}
-            />
-            <small>Number of admin instances to create (0-120)</small>
-          </div>
-
-          {formData.admin_count > 0 && (
-            <div className="form-group">
-              <label htmlFor="admin_cleanup_days">Admin Cleanup Days</label>
-              <input
-                id="admin_cleanup_days"
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={2}>
+              <TextField
+                id="pool_count"
+                label="Pool Instances"
                 type="number"
-                min="1"
-                max="365"
+                inputProps={{ min: 0, max: 120 }}
+                value={formData.pool_count}
+                onChange={(e) => setFormData({ ...formData, pool_count: e.target.value })}
+                helperText="Number of pool instances (0-120)"
+                required
+                disabled={submitting}
+                fullWidth
+              />
+
+              <TextField
+                id="admin_count"
+                label="Admin Instances"
+                type="number"
+                inputProps={{ min: 0, max: 120 }}
+                value={formData.admin_count}
+                onChange={(e) => setFormData({ ...formData, admin_count: e.target.value })}
+                helperText="Number of admin instances (0-120)"
+                required
+                disabled={submitting}
+                fullWidth
+              />
+            </Stack>
+
+            <Box sx={{ p: 1.25, border: '1px solid', borderColor: 'divider', borderRadius: 2, bgcolor: 'grey.50' }}>
+              <PurchaseTypeSelector
+                onPurchaseTypeChange={(config) => setPurchaseConfig(config)}
+                instanceType="pool"
+              />
+            </Box>
+
+            {formData.admin_count > 0 && (
+              <TextField
+                id="admin_cleanup_days"
+                label="Admin Cleanup Days"
+                type="number"
+                inputProps={{ min: 1, max: 365 }}
                 value={formData.admin_cleanup_days}
                 onChange={(e) => setFormData({ ...formData, admin_cleanup_days: e.target.value })}
+                helperText="Days before admin instances are deleted"
                 required
                 disabled={submitting}
               />
-              <small>Days before admin instances are automatically deleted (1-365)</small>
-            </div>
-          )}
+            )}
 
-          {error && <div className="error-message">{error}</div>}
+            {error && <Alert severity="error">{error}</Alert>}
 
-          <div className="form-actions">
-            <button type="button" onClick={onClose} disabled={submitting} className="secondary">
-              Cancel
-            </button>
-            <button type="submit" disabled={submitting}>
-              {submitting ? 'Creating...' : 'Create Session'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+            <Typography variant="caption" color="text.secondary">
+              Keyboard tip: press Enter to create the session.
+            </Typography>
+          </Stack>
+        </DialogContent>
+
+        <DialogActions>
+          <Button type="button" onClick={onClose} disabled={submitting}>Cancel</Button>
+          <Button type="submit" variant="contained" disabled={submitting}>
+            {submitting ? 'Creating...' : 'Create Session'}
+          </Button>
+        </DialogActions>
+      </Box>
+    </Dialog>
   )
 }
 

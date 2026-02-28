@@ -5,8 +5,8 @@ import sys
 import logging
 import time
 from botocore.exceptions import ClientError
-from datetime import datetime, timezone
-from decimal import Decimal
+from datetime import datetime, timezone, timedelta
+from decimal import Decimal, InvalidOperation
 import base64
 
 logger = logging.getLogger()
@@ -833,7 +833,7 @@ def get_latest_ami():
 
 def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_name=None,
                     stop_timeout=None, terminate_timeout=None, hard_terminate_timeout=None,
-                    tutorial_session_id=None):
+                    tutorial_session_id=None, purchase_type='on-demand', spot_duration_hours=2):
     """Create EC2 instance(s) for a workshop template
     
     Args:
@@ -845,6 +845,8 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
         terminate_timeout: Minutes before terminating stopped instances (optional, uses SSM default if not provided)
         hard_terminate_timeout: Minutes before hard terminating any instance (optional, uses SSM default if not provided)
         tutorial_session_id: Tutorial session ID to tag instances with (optional)
+        purchase_type: 'on-demand' or 'spot' for EC2 instance purchase type (default: 'on-demand')
+        spot_duration_hours: Duration in hours for spot reservation block (1-6, default: 2)
     """
     try:
         workshop_name = workshop_name or WORKSHOP_NAME
@@ -853,6 +855,9 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
         logger.info(f"  Workshop: {workshop_name}")
         logger.info(f"  Instance Type: {instance_type}")
         logger.info(f"  Count: {count}")
+        logger.info(f"  Purchase Type: {purchase_type}")
+        if purchase_type == 'spot':
+            logger.info(f"  Spot Duration: {spot_duration_hours} hours")
         logger.info(f"  Tutorial Session ID: {tutorial_session_id}")
         logger.info(f"  Region: {REGION}")
         logger.info(f"  Environment: {ENVIRONMENT}")
@@ -999,6 +1004,15 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
             if tutorial_session_id:
                 tags.append({'Key': 'TutorialSessionID', 'Value': tutorial_session_id})
             
+            # Add spot instance tags if using spot
+            if purchase_type == 'spot':
+                spot_duration_minutes = int(spot_duration_hours * 60)
+                spot_expiry_time = (datetime.now(timezone.utc) + timedelta(minutes=spot_duration_minutes)).isoformat()
+                tags.append({'Key': 'PurchaseType', 'Value': 'spot'})
+                tags.append({'Key': 'SpotDurationMinutes', 'Value': str(spot_duration_minutes)})
+                tags.append({'Key': 'SpotReservationEndTime', 'Value': spot_expiry_time})
+            else:
+                tags.append({'Key': 'PurchaseType', 'Value': 'on-demand'})
             # Generate predictable domain name BEFORE instance creation
             # This eliminates timing issues - domain is known immediately
             machine_name = name  # Use the same name as the instance name
@@ -1070,26 +1084,27 @@ export WORKSHOP_NAME={workshop_name}
             logger.info(f"  User Data Preview (first 200 chars): {user_data[:200]}...")
             logger.info("=" * 80)
             
-            response = ec2.run_instances(
-                ImageId=ami_id,
-                InstanceType=selected_instance_type,
-                MinCount=1,
-                MaxCount=1,
-                UserData=user_data,
-                IamInstanceProfile={'Name': IAM_INSTANCE_PROFILE},
-                SubnetId=SUBNET_ID if SUBNET_ID else None,
-                SecurityGroupIds=SECURITY_GROUP_IDS if SECURITY_GROUP_IDS else None,
-                TagSpecifications=[
+            # Build EC2 run_instances parameters
+            run_instances_params = {
+                'ImageId': ami_id,
+                'InstanceType': selected_instance_type,
+                'MinCount': 1,
+                'MaxCount': 1,
+                'UserData': user_data,
+                'IamInstanceProfile': {'Name': IAM_INSTANCE_PROFILE},
+                'SubnetId': SUBNET_ID if SUBNET_ID else None,
+                'SecurityGroupIds': SECURITY_GROUP_IDS if SECURITY_GROUP_IDS else None,
+                'TagSpecifications': [
                     {
                         'ResourceType': 'instance',
                         'Tags': tags
                     }
                 ],
-                MetadataOptions={
+                'MetadataOptions': {
                     'HttpTokens': 'required',
                     'HttpEndpoint': 'enabled'
                 },
-                BlockDeviceMappings=[
+                'BlockDeviceMappings': [
                     {
                         'DeviceName': '/dev/xvda',
                         'Ebs': {
@@ -1099,7 +1114,25 @@ export WORKSHOP_NAME={workshop_name}
                         }
                     }
                 ]
-            )
+            }
+            
+            # Add spot instance options if using spot market
+            if purchase_type == 'spot':
+                spot_duration_minutes = int(spot_duration_hours * 60)
+                run_instances_params['InstanceMarketOptions'] = {
+                    'MarketType': 'spot',
+                    'SpotOptions': {
+                        'MaxPrice': None,  # Use default max price (on-demand price)
+                        'SpotInstanceType': 'persistent',
+                        'BlockDurationMinutes': spot_duration_minutes,
+                        'ValidUntil': (datetime.now(timezone.utc) + timedelta(minutes=spot_duration_minutes + 5)).isoformat()
+                    }
+                }
+                logger.info(f"  Purchase Type: SPOT (with {spot_duration_minutes} min reservation block)")
+            else:
+                logger.info(f"  Purchase Type: ON-DEMAND")
+            
+            response = ec2.run_instances(**run_instances_params)
             
             instance_id = response['Instances'][0]['InstanceId']
             initial_state = response['Instances'][0]['State']['Name']
@@ -1111,6 +1144,7 @@ export WORKSHOP_NAME={workshop_name}
             logger.info(f"  Initial State: {initial_state}")
             logger.info(f"  Private IP: {private_ip}")
             logger.info(f"  Workshop: {workshop_name}")
+            logger.info(f"  Purchase Type: {purchase_type.upper()}")
             logger.info(f"  Type: {instance_type}")
             logger.info(f"  Template Source: {ssm_param_path if template_config else 'FALLBACK (no template)'}")
             logger.info(f"  User Data Source: {'SSM Template' if template_config and template_config.get('user_data_base64') else 'Fallback Script'}")
@@ -1131,7 +1165,9 @@ export WORKSHOP_NAME={workshop_name}
                 'state': initial_state,  # Current state (pending -> running -> stopping -> stopped)
                 'launch_time': response['Instances'][0]['LaunchTime'].isoformat(),
                 'type': instance_type,
-                'workshop': workshop_name
+                'workshop': workshop_name,
+                'purchase_type': purchase_type,
+                'spot_duration_hours': float(spot_duration_hours) if purchase_type == 'spot' else None
             })
             
             logger.info(f"Created {instance_type} instance {instance_id} ({i+1}/{count}) - will be stopped automatically once running")
@@ -1341,6 +1377,9 @@ def stop_instances(instance_ids):
     
     Args:
         instance_ids: List of instance IDs to stop
+    
+    NOTE: Spot instances CANNOT be stopped, only terminated. This function will
+    reject any attempt to stop a spot instance and return an error.
     """
     try:
         if not instance_ids:
@@ -1354,7 +1393,7 @@ def stop_instances(instance_ids):
         
         for instance_id in instance_ids:
             try:
-                # Check instance state first
+                # Check instance state and purchase type first
                 response = ec2.describe_instances(InstanceIds=[instance_id])
                 if not response.get('Reservations') or not response['Reservations'][0].get('Instances'):
                     errors.append(f'{instance_id}: not found')
@@ -1362,6 +1401,16 @@ def stop_instances(instance_ids):
                 
                 instance = response['Reservations'][0]['Instances'][0]
                 state = instance['State']['Name']
+                tags = {tag['Key']: tag['Value'] for tag in instance.get('Tags', [])}
+                
+                # CRITICAL CHECK: Prevent stopping spot instances
+                if tags.get('PurchaseType') == 'spot':
+                    error_msg = f'{instance_id}: CANNOT STOP SPOT INSTANCE - Spot instances can only be terminated (not stopped). Reservation expires at {tags.get("SpotReservationEndTime", "unknown")}. Use terminate_instances() if reservation has expired.'
+                    errors.append(error_msg)
+                    logger.error(f"Rejected stop request for spot instance {instance_id}")
+                    logger.error(f"  Spot instances CANNOT be stopped, only terminated when reservation expires")
+                    logger.error(f"  Reservation End Time: {tags.get('SpotReservationEndTime', 'UNKNOWN')}")
+                    continue
                 
                 if state == 'stopped':
                     stopped.append(instance_id)
@@ -1370,10 +1419,10 @@ def stop_instances(instance_ids):
                     stopped.append(instance_id)
                     logger.info(f"Instance {instance_id} is already stopping")
                 elif state in ['running', 'pending']:
-                    # Stop the instance
+                    # Stop the instance (safe for on-demand instances only)
                     ec2.stop_instances(InstanceIds=[instance_id])
                     stopped.append(instance_id)
-                    logger.info(f"Initiated stop for instance {instance_id} (state: {state})")
+                    logger.info(f"Initiated stop for on-demand instance {instance_id} (state: {state})")
                 elif state in ['terminated', 'shutting-down']:
                     errors.append(f'{instance_id}: cannot stop {state} instance')
                 else:
@@ -2040,8 +2089,21 @@ def lambda_handler(event, context):
             instance_type = body.get('type', query_params.get('type', 'pool'))
             cleanup_days = body.get('cleanup_days') or query_params.get('cleanup_days')
             workshop_name = body.get('workshop') or query_params.get('workshop') or WORKSHOP_NAME
+            purchase_type = body.get('purchase_type') or query_params.get('purchase_type', 'on-demand')
+            spot_duration_hours_raw = body.get('spot_duration_hours') or query_params.get('spot_duration_hours', 2)
             if cleanup_days is not None:
                 cleanup_days = int(cleanup_days)
+            try:
+                spot_duration_hours = Decimal(str(spot_duration_hours_raw))
+            except (TypeError, ValueError, InvalidOperation):
+                return {
+                    'statusCode': 400,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({
+                        'success': False,
+                        'error': 'spot_duration_hours must be a number between 1 and 6'
+                    })
+                }
             
             # Get timeout parameters from request or use defaults
             stop_timeout = body.get('stop_timeout') or query_params.get('stop_timeout')
@@ -2065,6 +2127,26 @@ def lambda_handler(event, context):
                     'body': json.dumps({
                         'success': False,
                         'error': 'Type must be "pool" or "admin"'
+                    })
+                }
+
+            if purchase_type not in ['on-demand', 'spot']:
+                return {
+                    'statusCode': 400,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({
+                        'success': False,
+                        'error': 'purchase_type must be "on-demand" or "spot"'
+                    })
+                }
+
+            if purchase_type == 'spot' and (spot_duration_hours < 1 or spot_duration_hours > 6):
+                return {
+                    'statusCode': 400,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({
+                        'success': False,
+                        'error': 'spot_duration_hours must be between 1 and 6'
                     })
                 }
             
@@ -2102,7 +2184,9 @@ def lambda_handler(event, context):
                 stop_timeout=stop_timeout,
                 terminate_timeout=terminate_timeout,
                 hard_terminate_timeout=hard_terminate_timeout,
-                tutorial_session_id=tutorial_session_id
+                tutorial_session_id=tutorial_session_id,
+                purchase_type=purchase_type,
+                spot_duration_hours=spot_duration_hours
             )
             # Add a message indicating the operation is async
             if result['success']:
@@ -2547,6 +2631,16 @@ def lambda_handler(event, context):
             pool_count = int(body.get('pool_count', 0))
             admin_count = int(body.get('admin_count', 0))
             admin_cleanup_days = int(body.get('admin_cleanup_days', 7))
+            purchase_type = body.get('purchase_type', 'on-demand')
+            spot_duration_hours_raw = body.get('spot_duration_hours', 2)
+            try:
+                spot_duration_hours = Decimal(str(spot_duration_hours_raw))
+            except (TypeError, ValueError, InvalidOperation):
+                return {
+                    'statusCode': 400,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({'success': False, 'error': 'spot_duration_hours must be a number between 1 and 6'})
+                }
             
             if not session_id:
                 return {
@@ -2574,6 +2668,20 @@ def lambda_handler(event, context):
                     'statusCode': 400,
                     'headers': get_cors_headers(),
                     'body': json.dumps({'success': False, 'error': 'At least one pool or admin instance must be created'})
+                }
+
+            if purchase_type not in ['on-demand', 'spot']:
+                return {
+                    'statusCode': 400,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({'success': False, 'error': 'purchase_type must be "on-demand" or "spot"'})
+                }
+
+            if purchase_type == 'spot' and (spot_duration_hours < 1 or spot_duration_hours > 6):
+                return {
+                    'statusCode': 400,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({'success': False, 'error': 'spot_duration_hours must be between 1 and 6'})
                 }
             
             try:
@@ -2619,6 +2727,8 @@ def lambda_handler(event, context):
                     'pool_count': pool_count,
                     'admin_count': admin_count,
                     'admin_cleanup_days': admin_cleanup_days,
+                    'purchase_type': purchase_type,
+                    'spot_duration_hours': spot_duration_hours if purchase_type == 'spot' else None,
                     'status': 'creating'
                 }
                 sessions_table.put_item(Item=session_item)
@@ -2633,7 +2743,9 @@ def lambda_handler(event, context):
                         count=pool_count,
                         instance_type='pool',
                         workshop_name=workshop_name,
-                        tutorial_session_id=session_id
+                        tutorial_session_id=session_id,
+                        purchase_type=purchase_type,
+                        spot_duration_hours=spot_duration_hours
                     )
                     if pool_result['success']:
                         created_instances.extend(pool_result['instances'])
@@ -2647,7 +2759,9 @@ def lambda_handler(event, context):
                         instance_type='admin',
                         cleanup_days=admin_cleanup_days,
                         workshop_name=workshop_name,
-                        tutorial_session_id=session_id
+                        tutorial_session_id=session_id,
+                        purchase_type=purchase_type,
+                        spot_duration_hours=spot_duration_hours
                     )
                     if admin_result['success']:
                         created_instances.extend(admin_result['instances'])
@@ -2680,6 +2794,8 @@ def lambda_handler(event, context):
                             'workshop_name': workshop_name,
                             'pool_count': pool_count,
                             'admin_count': admin_count,
+                            'purchase_type': purchase_type,
+                            'spot_duration_hours': float(spot_duration_hours) if purchase_type == 'spot' else None,
                             'created_at': session_item['created_at'],
                             'status': 'partial' if errors else 'active'
                         },

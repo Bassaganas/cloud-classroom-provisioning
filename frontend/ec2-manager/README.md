@@ -62,6 +62,32 @@ npm run build
 
 This creates a `dist/` directory with the production build.
 
+## Playwright E2E Tests
+
+The frontend includes Playwright tests for key tutorial-instance workflows.
+
+### One-time setup
+
+```bash
+npm install
+npm --prefix mock-server install
+npm run test:e2e:install
+```
+
+### Run tests
+
+```bash
+npm run test:e2e
+```
+
+### Included scenarios
+
+1. Create tutorial session with initial instances
+2. Delete tutorial session and delete all associated instances
+3. Create additional EC2 instances for an existing tutorial session
+4. Create admin instances with configurable cleanup days
+5. View tutorial dashboard and verify all tutorial instances are shown
+
 ## Deployment
 
 Use the build script from the project root:
