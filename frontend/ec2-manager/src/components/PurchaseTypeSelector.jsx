@@ -2,10 +2,9 @@ import { useMemo, useState } from 'react'
 import {
   Alert,
   Box,
-  Button,
   Chip,
-  Slider,
   Stack,
+  TextField,
   ToggleButton,
   ToggleButtonGroup,
   Typography
@@ -19,36 +18,33 @@ const PRICING = {
 }
 
 const INSTANCE_TYPE = 't3.small'
-const MIN_DURATION = 1
-const MAX_DURATION = 6
 
-function PurchaseTypeSelector({ onPurchaseTypeChange, instanceType = 'pool' }) {
+function PurchaseTypeSelector({ onPurchaseTypeChange, instanceType = 'pool', session = null }) {
   const [purchaseType, setPurchaseType] = useState('on-demand')
-  const [spotDurationHours, setSpotDurationHours] = useState(2)
+  const [spotMaxPrice, setSpotMaxPrice] = useState('')
 
-  const handlePurchaseTypeChange = (value) => {
+  const handlePurchaseTypeChange = (value, nextSpotMaxPrice = spotMaxPrice) => {
     setPurchaseType(value)
+    if (value !== 'spot') {
+      setSpotMaxPrice('')
+    }
     onPurchaseTypeChange({
       purchase_type: value,
-      spot_duration_hours: value === 'spot' ? spotDurationHours : null
+      spot_duration_hours: null,
+      spot_max_price: value === 'spot' ? (nextSpotMaxPrice || null) : null
     })
   }
 
-  const handleSpotDurationChange = (value) => {
-    setSpotDurationHours(value)
-    onPurchaseTypeChange({
-      purchase_type: 'spot',
-      spot_duration_hours: value
-    })
-  }
+  const defaultSpotPrice = session?.spot_max_price ? `$${session.spot_max_price}` : 'market price'
+  const hasHighSpotPrice = Number(spotMaxPrice) > 1
 
   const estimatedCost = useMemo(() => {
     const onDemandPrice = PRICING[INSTANCE_TYPE]['on-demand']
     const spotPrice = PRICING[INSTANCE_TYPE].spot
 
     if (purchaseType === 'spot') {
-      const onDemandCost = onDemandPrice * spotDurationHours
-      const spotCost = spotPrice * spotDurationHours
+      const onDemandCost = onDemandPrice * 1
+      const spotCost = spotPrice * 1
       const savings = onDemandCost - spotCost
       const savingsPercent = onDemandCost > 0 ? Math.round((savings / onDemandCost) * 100) : 0
 
@@ -66,9 +62,7 @@ function PurchaseTypeSelector({ onPurchaseTypeChange, instanceType = 'pool' }) {
       savings: null,
       savingsPercent: null
     }
-  }, [purchaseType, spotDurationHours])
-
-  const quickDurations = [1, 2, 3, 4, 5, 6]
+  }, [purchaseType])
 
   return (
     <Stack spacing={1.5}>
@@ -87,35 +81,6 @@ function PurchaseTypeSelector({ onPurchaseTypeChange, instanceType = 'pool' }) {
         <ToggleButton value="spot">Spot (-70%)</ToggleButton>
       </ToggleButtonGroup>
 
-      {purchaseType === 'spot' && (
-        <Box sx={{ px: 0.5 }}>
-          <Typography variant="body2" sx={{ mb: 0.5 }}>
-            Reservation Duration: <strong>{spotDurationHours}h</strong>
-          </Typography>
-          <Slider
-            value={spotDurationHours}
-            onChange={(_, value) => handleSpotDurationChange(value)}
-            min={MIN_DURATION}
-            max={MAX_DURATION}
-            step={0.25}
-            marks={[{ value: MIN_DURATION, label: '1h' }, { value: MAX_DURATION, label: '6h' }]}
-            valueLabelDisplay="auto"
-          />
-          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
-            {quickDurations.map((duration) => (
-              <Button
-                key={duration}
-                size="small"
-                variant={spotDurationHours === duration ? 'contained' : 'outlined'}
-                onClick={() => handleSpotDurationChange(duration)}
-              >
-                {duration}h
-              </Button>
-            ))}
-          </Stack>
-        </Box>
-      )}
-
       <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, p: 1.25, bgcolor: 'background.paper' }}>
         {purchaseType === 'spot' ? (
           <Stack spacing={0.75}>
@@ -129,12 +94,36 @@ function PurchaseTypeSelector({ onPurchaseTypeChange, instanceType = 'pool' }) {
       </Box>
 
       <Alert severity="info" sx={{ py: 0.25 }}>
-        Spot capacity blocks are ideal for time-bounded tutorials and are guaranteed for the selected duration.
+        Spot instances reduce cost and can be stopped by classroom lifecycle controls.
       </Alert>
+
+      {purchaseType === 'spot' && (
+        <Stack spacing={0.75}>
+          <TextField
+            type="number"
+            label="Spot Max Price ($/hour, optional)"
+            inputProps={{ min: 0.0001, step: 0.0001 }}
+            value={spotMaxPrice}
+            onChange={(event) => {
+              const nextValue = event.target.value
+              setSpotMaxPrice(nextValue)
+              handlePurchaseTypeChange('spot', nextValue)
+            }}
+            error={hasHighSpotPrice}
+            helperText={`Default: ${defaultSpotPrice}/h. Leave empty to use tutorial default (typically 2-3x the on-demand price for better availability).`}
+            FormHelperTextProps={hasHighSpotPrice ? { sx: { color: 'error.main' } } : undefined}
+          />
+          {hasHighSpotPrice && (
+            <Alert severity="error" sx={{ py: 0.25 }}>
+              Spot max price is unusually high (&gt; $1.00/h). Please confirm before continuing.
+            </Alert>
+          )}
+        </Stack>
+      )}
 
       {purchaseType === 'spot' && instanceType === 'admin' && (
         <Alert severity="warning" sx={{ py: 0.25 }}>
-          Admin instance will terminate automatically after {spotDurationHours} hour{spotDurationHours !== 1 ? 's' : ''}.
+          Admin lifecycle still follows cleanup policy and timeout settings.
         </Alert>
       )}
     </Stack>

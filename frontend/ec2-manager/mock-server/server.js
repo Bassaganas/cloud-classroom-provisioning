@@ -88,7 +88,7 @@ app.get('/api/list', checkAuth, async (req, res) => {
 
 app.post('/api/create', checkAuth, async (req, res) => {
   await delay(500)
-  const { count, type, workshop, tutorial_session_id, cleanup_days } = req.body
+  const { count, type, workshop, tutorial_session_id, cleanup_days, purchase_type, spot_max_price } = req.body
   
   const newInstances = []
   for (let i = 0; i < (count || 1); i++) {
@@ -101,6 +101,8 @@ app.post('/api/create', checkAuth, async (req, res) => {
       type: type || 'pool',
       workshop: workshop || 'fellowship',
       tutorial_session_id: tutorial_session_id || null,
+      purchase_type: purchase_type || 'on-demand',
+      spot_max_price: purchase_type === 'spot' && spot_max_price ? spot_max_price : null,
       assigned_to: null,
       created_at: new Date().toISOString(),
       https_url: null,
@@ -312,8 +314,19 @@ app.post('/api/update_timeout_settings', checkAuth, async (req, res) => {
 
 app.post('/api/create_tutorial_session', checkAuth, async (req, res) => {
   await delay(800)
-  const { session_id, workshop, workshop_name, pool_count, admin_count, admin_cleanup_days } = req.body
+  const {
+    session_id,
+    workshop,
+    workshop_name,
+    pool_count,
+    admin_count,
+    admin_cleanup_days,
+    productive_tutorial,
+    spot_max_price
+  } = req.body
   const finalWorkshop = workshop || workshop_name
+  const productiveTutorial = productive_tutorial === true
+  const sessionPurchaseType = productiveTutorial ? 'on-demand' : 'spot'
   
   if (!session_id || !finalWorkshop) {
     return res.status(400).json({ success: false, error: 'session_id and workshop are required' })
@@ -324,6 +337,9 @@ app.post('/api/create_tutorial_session', checkAuth, async (req, res) => {
     session_id: session_id,
     workshop_name: finalWorkshop,
     created_at: new Date().toISOString(),
+    productive_tutorial: productiveTutorial,
+    purchase_type: sessionPurchaseType,
+    spot_max_price: !productiveTutorial && spot_max_price ? spot_max_price : null,
     status: 'active',
     expected_instance_count: (pool_count || 0) + (admin_count || 0),
     actual_instance_count: 0
@@ -348,6 +364,8 @@ app.post('/api/create_tutorial_session', checkAuth, async (req, res) => {
       type: 'pool',
       workshop: finalWorkshop,
       tutorial_session_id: session_id,
+      purchase_type: sessionPurchaseType,
+      spot_max_price: !productiveTutorial && spot_max_price ? spot_max_price : null,
       assigned_to: null,
       created_at: new Date().toISOString(),
       https_url: null,
@@ -369,6 +387,8 @@ app.post('/api/create_tutorial_session', checkAuth, async (req, res) => {
       type: 'admin',
       workshop: finalWorkshop,
       tutorial_session_id: session_id,
+      purchase_type: sessionPurchaseType,
+      spot_max_price: !productiveTutorial && spot_max_price ? spot_max_price : null,
       assigned_to: null,
       created_at: new Date().toISOString(),
       https_url: null,

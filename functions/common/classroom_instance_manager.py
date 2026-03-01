@@ -4,10 +4,21 @@ import os
 import sys
 import logging
 import time
+import urllib.request
+import urllib.error
 from botocore.exceptions import ClientError
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal, InvalidOperation
 import base64
+
+# Initialize test mode BEFORE boto3 clients are created
+# This allows moto mocks to intercept all boto3 calls during testing
+try:
+    from common import test_mode as test_mode_module
+    test_mode_module.init_test_mode()
+except ImportError:
+    # test_mode module not available (production Lambda) - continue normally
+    pass
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -61,6 +72,20 @@ def convert_decimal(obj):
         return [convert_decimal(item) for item in obj]
     return obj
 
+def parse_bool(value):
+    """Parse a value into boolean, returning None when ambiguous."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, Decimal)):
+        return value != 0
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in ['true', '1', 'yes', 'y', 'on']:
+            return True
+        if normalized in ['false', '0', 'no', 'n', 'off']:
+            return False
+    return None
+
 # Get configuration from environment variables
 INSTANCE_TYPE = os.environ.get('EC2_INSTANCE_TYPE', 't3.medium')
 SUBNET_ID = os.environ.get('EC2_SUBNET_ID')
@@ -88,6 +113,45 @@ _template_map_cache_time = None
 # Cache TTL: Reduced to 60 seconds for faster template updates during development
 # Can be overridden via TEMPLATE_MAP_CACHE_TTL environment variable
 TEMPLATE_MAP_CACHE_TTL = int(os.environ.get('TEMPLATE_MAP_CACHE_TTL', '60'))
+
+HEALTH_CHECK_CONFIG = {
+    'fellowship': {'endpoint': '/api/health', 'port': 5000, 'timeout': 2.0},
+    'testus_patronus': {'endpoint': '/health', 'port': 5000, 'timeout': 2.0},
+}
+
+def get_health_check_config(workshop_name):
+    """Get health check config for workshop. Returns None if not configured."""
+    if not workshop_name:
+        return None
+    normalized = str(workshop_name).strip().lower().replace('-', '_')
+    if normalized in ['fellowship_of_the_build']:
+        normalized = 'fellowship'
+    return HEALTH_CHECK_CONFIG.get(normalized)
+
+def check_instance_health(public_ip, workshop_name):
+    """Check instance health endpoint. Returns (status, checked_at_iso, error_message)."""
+    checked_at = datetime.now(timezone.utc).isoformat()
+    config = get_health_check_config(workshop_name)
+
+    if not config:
+        return None, checked_at, 'Health check not configured for workshop'
+
+    if not public_ip:
+        return 'unreachable', checked_at, 'Instance has no public IP'
+
+    url = f"http://{public_ip}:{config['port']}{config['endpoint']}"
+    request = urllib.request.Request(url, method='GET')
+
+    try:
+        with urllib.request.urlopen(request, timeout=config['timeout']) as response:
+            status_code = response.getcode()
+            if 200 <= status_code < 300:
+                return 'healthy', checked_at, None
+            return 'unhealthy', checked_at, f'HTTP {status_code}'
+    except urllib.error.HTTPError as error:
+        return 'unhealthy', checked_at, f'HTTP {error.code}'
+    except Exception as error:
+        return 'unreachable', checked_at, str(error)
 
 def get_password_from_secret():
     """Get the instance manager password from AWS Secrets Manager"""
@@ -833,7 +897,8 @@ def get_latest_ami():
 
 def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_name=None,
                     stop_timeout=None, terminate_timeout=None, hard_terminate_timeout=None,
-                    tutorial_session_id=None, purchase_type='on-demand', spot_duration_hours=2):
+                    tutorial_session_id=None, purchase_type='on-demand', spot_duration_hours=2,
+                    spot_max_price=None):
     """Create EC2 instance(s) for a workshop template
     
     Args:
@@ -846,9 +911,21 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
         hard_terminate_timeout: Minutes before hard terminating any instance (optional, uses SSM default if not provided)
         tutorial_session_id: Tutorial session ID to tag instances with (optional)
         purchase_type: 'on-demand' or 'spot' for EC2 instance purchase type (default: 'on-demand')
-        spot_duration_hours: Duration in hours for spot reservation block (1-6, default: 2)
+        spot_duration_hours: Deprecated, ignored for regular Spot instances
+        spot_max_price: Optional maximum Spot price in USD/hour (string or Decimal)
     """
     try:
+        if purchase_type == 'spot':
+            if spot_max_price is not None:
+                try:
+                    spot_max_price = Decimal(str(spot_max_price))
+                    if spot_max_price <= 0:
+                        logger.warning(f"Invalid spot_max_price ({spot_max_price}); ignoring and using market default")
+                        spot_max_price = None
+                except (TypeError, ValueError, InvalidOperation):
+                    logger.warning(f"Invalid spot_max_price format ({spot_max_price}); ignoring and using market default")
+                    spot_max_price = None
+        
         workshop_name = workshop_name or WORKSHOP_NAME
         logger.info("=" * 80)
         logger.info(f"INSTANCE CREATION REQUEST")
@@ -857,7 +934,7 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
         logger.info(f"  Count: {count}")
         logger.info(f"  Purchase Type: {purchase_type}")
         if purchase_type == 'spot':
-            logger.info(f"  Spot Duration: {spot_duration_hours} hours")
+            logger.info(f"  Spot Max Price: {spot_max_price if spot_max_price is not None else 'market default'}")
         logger.info(f"  Tutorial Session ID: {tutorial_session_id}")
         logger.info(f"  Region: {REGION}")
         logger.info(f"  Environment: {ENVIRONMENT}")
@@ -953,12 +1030,38 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
         final_hard_terminate_timeout = hard_terminate_timeout if hard_terminate_timeout is not None else timeouts.get('hard_terminate_timeout', 45)
         
         instances = []
+        
+        # Get the next instance index for this tutorial session
+        # This ensures unique naming even if create_instance is called multiple times
+        instance_index_offset = 0
+        if tutorial_session_id:
+            try:
+                # Query for existing instances in this tutorial session
+                ec2_filter_response = ec2.describe_instances(
+                    Filters=[
+                        {'Name': 'tag:TutorialSessionID', 'Values': [tutorial_session_id]},
+                        {'Name': 'tag:Type', 'Values': [instance_type]},
+                        {'Name': 'instance-state-name', 'Values': ['pending', 'running', 'stopped']}
+                    ]
+                )
+                existing_count = 0
+                for reservation in ec2_filter_response.get('Reservations', []):
+                    existing_count += len(reservation.get('Instances', []))
+                instance_index_offset = existing_count
+                logger.info(f"Found {existing_count} existing {instance_type} instances in session {tutorial_session_id}")
+            except Exception as e:
+                logger.warning(f"Could not query existing instances for session {tutorial_session_id}: {str(e)}, starting index from 0")
+                instance_index_offset = 0
+        
         for i in range(count):
+            # Calculate actual instance index to ensure unique naming
+            instance_index = instance_index_offset + i
+            
             # Determine naming and tags based on type
             if instance_type == 'admin':
-                name = f'{workshop_name}-admin-{i}'
+                name = f'{workshop_name}-admin-{instance_index}'
                 if tutorial_session_id:
-                    name = f'{workshop_name}-{tutorial_session_id}-admin-{i}'
+                    name = f'{workshop_name}-{tutorial_session_id}-admin-{instance_index}'
                 # Default cleanup days to 7 if not specified
                 cleanup_days_value = str(cleanup_days if cleanup_days is not None else 7)
                 tags = [
@@ -980,9 +1083,9 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
                     {'Key': 'HardTerminateTimeout', 'Value': str(final_hard_terminate_timeout)}
                 ]
             else:  # pool
-                name = f'{workshop_name}-pool-{i}'
+                name = f'{workshop_name}-pool-{instance_index}'
                 if tutorial_session_id:
-                    name = f'{workshop_name}-{tutorial_session_id}-pool-{i}'
+                    name = f'{workshop_name}-{tutorial_session_id}-pool-{instance_index}'
                 tags = [
                     {'Key': 'Name', 'Value': name},
                     {'Key': 'Status', 'Value': 'available'},
@@ -1006,11 +1109,9 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
             
             # Add spot instance tags if using spot
             if purchase_type == 'spot':
-                spot_duration_minutes = int(spot_duration_hours * 60)
-                spot_expiry_time = (datetime.now(timezone.utc) + timedelta(minutes=spot_duration_minutes)).isoformat()
                 tags.append({'Key': 'PurchaseType', 'Value': 'spot'})
-                tags.append({'Key': 'SpotDurationMinutes', 'Value': str(spot_duration_minutes)})
-                tags.append({'Key': 'SpotReservationEndTime', 'Value': spot_expiry_time})
+                if spot_max_price is not None:
+                    tags.append({'Key': 'SpotMaxPrice', 'Value': str(spot_max_price)})
             else:
                 tags.append({'Key': 'PurchaseType', 'Value': 'on-demand'})
             # Generate predictable domain name BEFORE instance creation
@@ -1118,17 +1219,20 @@ export WORKSHOP_NAME={workshop_name}
             
             # Add spot instance options if using spot market
             if purchase_type == 'spot':
-                spot_duration_minutes = int(spot_duration_hours * 60)
                 run_instances_params['InstanceMarketOptions'] = {
                     'MarketType': 'spot',
                     'SpotOptions': {
-                        'MaxPrice': None,  # Use default max price (on-demand price)
                         'SpotInstanceType': 'persistent',
-                        'BlockDurationMinutes': spot_duration_minutes,
-                        'ValidUntil': (datetime.now(timezone.utc) + timedelta(minutes=spot_duration_minutes + 5)).isoformat()
+                        # Keep Spot instances stoppable and restartable for test workflows.
+                        'InstanceInterruptionBehavior': 'stop'
                     }
                 }
-                logger.info(f"  Purchase Type: SPOT (with {spot_duration_minutes} min reservation block)")
+                if spot_max_price is not None:
+                    run_instances_params['InstanceMarketOptions']['SpotOptions']['MaxPrice'] = str(spot_max_price)
+                logger.info(f"  Purchase Type: SPOT (persistent with stop behavior)")
+                logger.info(f"  SpotInstanceType: persistent")
+                logger.info(f"  InstanceInterruptionBehavior: stop")
+                logger.info(f"  Spot MaxPrice: {run_instances_params['InstanceMarketOptions']['SpotOptions'].get('MaxPrice', 'market default')}")
             else:
                 logger.info(f"  Purchase Type: ON-DEMAND")
             
@@ -1167,7 +1271,7 @@ export WORKSHOP_NAME={workshop_name}
                 'type': instance_type,
                 'workshop': workshop_name,
                 'purchase_type': purchase_type,
-                'spot_duration_hours': float(spot_duration_hours) if purchase_type == 'spot' else None
+                'spot_max_price': float(spot_max_price) if (purchase_type == 'spot' and spot_max_price is not None) else None
             })
             
             logger.info(f"Created {instance_type} instance {instance_id} ({i+1}/{count}) - will be stopped automatically once running")
@@ -1232,12 +1336,13 @@ export WORKSHOP_NAME={workshop_name}
             'error': str(e)
         }
 
-def list_instances(include_terminated=False, tutorial_session_id=None):
+def list_instances(include_terminated=False, tutorial_session_id=None, include_health=False):
     """List all EC2 instances with their assignments and IPs
     
     Args:
         include_terminated: If True, include terminated instances in the results
         tutorial_session_id: If provided, filter instances by this tutorial session ID
+        include_health: If True, fetch health status from workshop endpoint for each instance
     """
     try:
         # Get all instances (both pool and admin)
@@ -1322,6 +1427,17 @@ def list_instances(include_terminated=False, tutorial_session_id=None):
                     'https_domain': https_domain,  # HTTPS domain from tags
                     'https_url': https_url  # Full HTTPS URL from tags
                 }
+
+                if include_health:
+                    workshop_for_health = tags.get('WorkshopID', tags.get('Template', WORKSHOP_NAME))
+                    health_status, health_checked_at, health_error = check_instance_health(
+                        instance.get('PublicIpAddress'),
+                        workshop_for_health
+                    )
+                    instance_info['health_status'] = health_status
+                    instance_info['health_checked_at'] = health_checked_at
+                    if health_error:
+                        instance_info['health_error'] = health_error
                 
                 instances.append(instance_info)
         
@@ -1377,9 +1493,6 @@ def stop_instances(instance_ids):
     
     Args:
         instance_ids: List of instance IDs to stop
-    
-    NOTE: Spot instances CANNOT be stopped, only terminated. This function will
-    reject any attempt to stop a spot instance and return an error.
     """
     try:
         if not instance_ids:
@@ -1401,16 +1514,6 @@ def stop_instances(instance_ids):
                 
                 instance = response['Reservations'][0]['Instances'][0]
                 state = instance['State']['Name']
-                tags = {tag['Key']: tag['Value'] for tag in instance.get('Tags', [])}
-                
-                # CRITICAL CHECK: Prevent stopping spot instances
-                if tags.get('PurchaseType') == 'spot':
-                    error_msg = f'{instance_id}: CANNOT STOP SPOT INSTANCE - Spot instances can only be terminated (not stopped). Reservation expires at {tags.get("SpotReservationEndTime", "unknown")}. Use terminate_instances() if reservation has expired.'
-                    errors.append(error_msg)
-                    logger.error(f"Rejected stop request for spot instance {instance_id}")
-                    logger.error(f"  Spot instances CANNOT be stopped, only terminated when reservation expires")
-                    logger.error(f"  Reservation End Time: {tags.get('SpotReservationEndTime', 'UNKNOWN')}")
-                    continue
                 
                 if state == 'stopped':
                     stopped.append(instance_id)
@@ -1419,10 +1522,10 @@ def stop_instances(instance_ids):
                     stopped.append(instance_id)
                     logger.info(f"Instance {instance_id} is already stopping")
                 elif state in ['running', 'pending']:
-                    # Stop the instance (safe for on-demand instances only)
+                    # Stop the instance (on-demand or spot)
                     ec2.stop_instances(InstanceIds=[instance_id])
                     stopped.append(instance_id)
-                    logger.info(f"Initiated stop for on-demand instance {instance_id} (state: {state})")
+                    logger.info(f"Initiated stop for instance {instance_id} (state: {state})")
                 elif state in ['terminated', 'shutting-down']:
                     errors.append(f'{instance_id}: cannot stop {state} instance')
                 else:
@@ -1722,6 +1825,12 @@ def get_swagger_spec():
                         },
                         {
                             'name': 'include_terminated',
+                            'in': 'query',
+                            'required': False,
+                            'schema': {'type': 'boolean'}
+                        },
+                        {
+                            'name': 'include_health',
                             'in': 'query',
                             'required': False,
                             'schema': {'type': 'boolean'}
@@ -2090,20 +2199,32 @@ def lambda_handler(event, context):
             cleanup_days = body.get('cleanup_days') or query_params.get('cleanup_days')
             workshop_name = body.get('workshop') or query_params.get('workshop') or WORKSHOP_NAME
             purchase_type = body.get('purchase_type') or query_params.get('purchase_type', 'on-demand')
-            spot_duration_hours_raw = body.get('spot_duration_hours') or query_params.get('spot_duration_hours', 2)
+            spot_max_price_raw = body.get('spot_max_price') or query_params.get('spot_max_price')
             if cleanup_days is not None:
                 cleanup_days = int(cleanup_days)
-            try:
-                spot_duration_hours = Decimal(str(spot_duration_hours_raw))
-            except (TypeError, ValueError, InvalidOperation):
-                return {
-                    'statusCode': 400,
-                    'headers': get_cors_headers(),
-                    'body': json.dumps({
-                        'success': False,
-                        'error': 'spot_duration_hours must be a number between 1 and 6'
-                    })
-                }
+
+            spot_max_price = None
+            if spot_max_price_raw not in [None, '']:
+                try:
+                    spot_max_price = Decimal(str(spot_max_price_raw))
+                    if spot_max_price <= 0:
+                        return {
+                            'statusCode': 400,
+                            'headers': get_cors_headers(),
+                            'body': json.dumps({
+                                'success': False,
+                                'error': 'spot_max_price must be greater than 0'
+                            })
+                        }
+                except (TypeError, ValueError, InvalidOperation):
+                    return {
+                        'statusCode': 400,
+                        'headers': get_cors_headers(),
+                        'body': json.dumps({
+                            'success': False,
+                            'error': 'spot_max_price must be a valid number'
+                        })
+                    }
             
             # Get timeout parameters from request or use defaults
             stop_timeout = body.get('stop_timeout') or query_params.get('stop_timeout')
@@ -2140,16 +2261,6 @@ def lambda_handler(event, context):
                     })
                 }
 
-            if purchase_type == 'spot' and (spot_duration_hours < 1 or spot_duration_hours > 6):
-                return {
-                    'statusCode': 400,
-                    'headers': get_cors_headers(),
-                    'body': json.dumps({
-                        'success': False,
-                        'error': 'spot_duration_hours must be between 1 and 6'
-                    })
-                }
-            
             if instance_type == 'admin' and cleanup_days is not None:
                 if cleanup_days < 1 or cleanup_days > 365:
                     return {
@@ -2175,6 +2286,48 @@ def lambda_handler(event, context):
 
             # Get optional tutorial_session_id
             tutorial_session_id = body.get('tutorial_session_id') or query_params.get('tutorial_session_id')
+
+            # Enforce tutorial-level purchase policy when creating inside a tutorial session
+            if tutorial_session_id:
+                try:
+                    sessions_table = get_tutorial_sessions_table(workshop_name)
+                    session_response = sessions_table.get_item(Key={'session_id': tutorial_session_id})
+                    session_item = session_response.get('Item')
+
+                    if not session_item:
+                        return {
+                            'statusCode': 404,
+                            'headers': get_cors_headers(),
+                            'body': json.dumps({
+                                'success': False,
+                                'error': f'Tutorial session {tutorial_session_id} not found for workshop {workshop_name}'
+                            })
+                        }
+
+                    productive_tutorial = parse_bool(session_item.get('productive_tutorial'))
+                    if productive_tutorial is None:
+                        productive_tutorial = session_item.get('purchase_type', 'on-demand') == 'on-demand'
+
+                    if productive_tutorial:
+                        purchase_type = 'on-demand'
+                        spot_max_price = None
+                    else:
+                        purchase_type = 'spot'
+                        stored_spot_max_price = session_item.get('spot_max_price')
+                        try:
+                            spot_max_price = Decimal(str(stored_spot_max_price)) if stored_spot_max_price not in [None, ''] else spot_max_price
+                        except (TypeError, ValueError, InvalidOperation):
+                            pass
+                except Exception as e:
+                    logger.error(f"Failed to enforce tutorial purchase policy for {tutorial_session_id}: {str(e)}", exc_info=True)
+                    return {
+                        'statusCode': 500,
+                        'headers': get_cors_headers(),
+                        'body': json.dumps({
+                            'success': False,
+                            'error': 'Failed to resolve tutorial purchase policy'
+                        })
+                    }
             
             result = create_instance(
                 count=count,
@@ -2186,7 +2339,7 @@ def lambda_handler(event, context):
                 hard_terminate_timeout=hard_terminate_timeout,
                 tutorial_session_id=tutorial_session_id,
                 purchase_type=purchase_type,
-                spot_duration_hours=spot_duration_hours
+                spot_max_price=spot_max_price
             )
             # Add a message indicating the operation is async
             if result['success']:
@@ -2200,9 +2353,15 @@ def lambda_handler(event, context):
         elif api_path == '/list' and http_method == 'GET':
             # Check if include_terminated parameter is set
             include_terminated = query_params.get('include_terminated', 'false').lower() == 'true'
+            # Check if include_health parameter is set (manual/on-demand only)
+            include_health = query_params.get('include_health', 'false').lower() == 'true'
             # Check if tutorial_session_id filter is provided
             tutorial_session_id = query_params.get('tutorial_session_id')
-            result = list_instances(include_terminated=include_terminated, tutorial_session_id=tutorial_session_id)
+            result = list_instances(
+                include_terminated=include_terminated,
+                tutorial_session_id=tutorial_session_id,
+                include_health=include_health
+            )
             return {
                 'statusCode': 200 if result['success'] else 500,
                 'headers': get_cors_headers(),
@@ -2631,16 +2790,37 @@ def lambda_handler(event, context):
             pool_count = int(body.get('pool_count', 0))
             admin_count = int(body.get('admin_count', 0))
             admin_cleanup_days = int(body.get('admin_cleanup_days', 7))
-            purchase_type = body.get('purchase_type', 'on-demand')
-            spot_duration_hours_raw = body.get('spot_duration_hours', 2)
-            try:
-                spot_duration_hours = Decimal(str(spot_duration_hours_raw))
-            except (TypeError, ValueError, InvalidOperation):
+            productive_tutorial = parse_bool(body.get('productive_tutorial', False))
+
+            if productive_tutorial is None:
                 return {
                     'statusCode': 400,
                     'headers': get_cors_headers(),
-                    'body': json.dumps({'success': False, 'error': 'spot_duration_hours must be a number between 1 and 6'})
+                    'body': json.dumps({'success': False, 'error': 'productive_tutorial must be a boolean'})
                 }
+
+            if productive_tutorial:
+                purchase_type = 'on-demand'
+                spot_max_price = None
+            else:
+                purchase_type = 'spot'
+                spot_max_price_raw = body.get('spot_max_price')
+                spot_max_price = None
+                if spot_max_price_raw not in [None, '']:
+                    try:
+                        spot_max_price = Decimal(str(spot_max_price_raw))
+                        if spot_max_price <= 0:
+                            return {
+                                'statusCode': 400,
+                                'headers': get_cors_headers(),
+                                'body': json.dumps({'success': False, 'error': 'spot_max_price must be greater than 0'})
+                            }
+                    except (TypeError, ValueError, InvalidOperation):
+                        return {
+                            'statusCode': 400,
+                            'headers': get_cors_headers(),
+                            'body': json.dumps({'success': False, 'error': 'spot_max_price must be a valid number'})
+                        }
             
             if not session_id:
                 return {
@@ -2670,20 +2850,6 @@ def lambda_handler(event, context):
                     'body': json.dumps({'success': False, 'error': 'At least one pool or admin instance must be created'})
                 }
 
-            if purchase_type not in ['on-demand', 'spot']:
-                return {
-                    'statusCode': 400,
-                    'headers': get_cors_headers(),
-                    'body': json.dumps({'success': False, 'error': 'purchase_type must be "on-demand" or "spot"'})
-                }
-
-            if purchase_type == 'spot' and (spot_duration_hours < 1 or spot_duration_hours > 6):
-                return {
-                    'statusCode': 400,
-                    'headers': get_cors_headers(),
-                    'body': json.dumps({'success': False, 'error': 'spot_duration_hours must be between 1 and 6'})
-                }
-            
             try:
                 # Get tutorial sessions table for this workshop
                 sessions_table = get_tutorial_sessions_table(workshop_name)
@@ -2727,8 +2893,9 @@ def lambda_handler(event, context):
                     'pool_count': pool_count,
                     'admin_count': admin_count,
                     'admin_cleanup_days': admin_cleanup_days,
+                    'productive_tutorial': productive_tutorial,
                     'purchase_type': purchase_type,
-                    'spot_duration_hours': spot_duration_hours if purchase_type == 'spot' else None,
+                    'spot_max_price': spot_max_price if purchase_type == 'spot' else None,
                     'status': 'creating'
                 }
                 sessions_table.put_item(Item=session_item)
@@ -2745,7 +2912,7 @@ def lambda_handler(event, context):
                         workshop_name=workshop_name,
                         tutorial_session_id=session_id,
                         purchase_type=purchase_type,
-                        spot_duration_hours=spot_duration_hours
+                        spot_max_price=spot_max_price
                     )
                     if pool_result['success']:
                         created_instances.extend(pool_result['instances'])
@@ -2761,7 +2928,7 @@ def lambda_handler(event, context):
                         workshop_name=workshop_name,
                         tutorial_session_id=session_id,
                         purchase_type=purchase_type,
-                        spot_duration_hours=spot_duration_hours
+                        spot_max_price=spot_max_price
                     )
                     if admin_result['success']:
                         created_instances.extend(admin_result['instances'])
@@ -2794,8 +2961,9 @@ def lambda_handler(event, context):
                             'workshop_name': workshop_name,
                             'pool_count': pool_count,
                             'admin_count': admin_count,
+                            'productive_tutorial': productive_tutorial,
                             'purchase_type': purchase_type,
-                            'spot_duration_hours': float(spot_duration_hours) if purchase_type == 'spot' else None,
+                            'spot_max_price': float(spot_max_price) if (purchase_type == 'spot' and spot_max_price is not None) else None,
                             'created_at': session_item['created_at'],
                             'status': 'partial' if errors else 'active'
                         },
@@ -2841,10 +3009,16 @@ def lambda_handler(event, context):
                     # Convert Decimal values to int/float for JSON serialization
                     pool_count = item.get('pool_count', 0)
                     admin_count = item.get('admin_count', 0)
+                    spot_max_price = item.get('spot_max_price')
+                    productive_tutorial = parse_bool(item.get('productive_tutorial'))
+                    if productive_tutorial is None:
+                        productive_tutorial = item.get('purchase_type', 'on-demand') == 'on-demand'
                     if isinstance(pool_count, Decimal):
                         pool_count = int(pool_count) if pool_count % 1 == 0 else float(pool_count)
                     if isinstance(admin_count, Decimal):
                         admin_count = int(admin_count) if admin_count % 1 == 0 else float(admin_count)
+                    if isinstance(spot_max_price, Decimal):
+                        spot_max_price = int(spot_max_price) if spot_max_price % 1 == 0 else float(spot_max_price)
                     
                     sessions.append({
                         'session_id': item['session_id'],
@@ -2852,6 +3026,9 @@ def lambda_handler(event, context):
                         'created_at': item['created_at'],
                         'pool_count': pool_count,
                         'admin_count': admin_count,
+                        'productive_tutorial': productive_tutorial,
+                        'purchase_type': item.get('purchase_type', 'on-demand' if productive_tutorial else 'spot'),
+                        'spot_max_price': spot_max_price,
                         'status': item.get('status', 'unknown'),
                         'actual_instance_count': instance_count
                     })
@@ -2914,12 +3091,18 @@ def lambda_handler(event, context):
                 pool_count = item.get('pool_count', 0)
                 admin_count = item.get('admin_count', 0)
                 admin_cleanup_days = item.get('admin_cleanup_days', 7)
+                spot_max_price = item.get('spot_max_price')
+                productive_tutorial = parse_bool(item.get('productive_tutorial'))
+                if productive_tutorial is None:
+                    productive_tutorial = item.get('purchase_type', 'on-demand') == 'on-demand'
                 if isinstance(pool_count, Decimal):
                     pool_count = int(pool_count) if pool_count % 1 == 0 else float(pool_count)
                 if isinstance(admin_count, Decimal):
                     admin_count = int(admin_count) if admin_count % 1 == 0 else float(admin_count)
                 if isinstance(admin_cleanup_days, Decimal):
                     admin_cleanup_days = int(admin_cleanup_days) if admin_cleanup_days % 1 == 0 else float(admin_cleanup_days)
+                if isinstance(spot_max_price, Decimal):
+                    spot_max_price = int(spot_max_price) if spot_max_price % 1 == 0 else float(spot_max_price)
                 
                 return {
                     'statusCode': 200,
@@ -2933,6 +3116,9 @@ def lambda_handler(event, context):
                             'pool_count': pool_count,
                             'admin_count': admin_count,
                             'admin_cleanup_days': admin_cleanup_days,
+                            'productive_tutorial': productive_tutorial,
+                            'purchase_type': item.get('purchase_type', 'on-demand' if productive_tutorial else 'spot'),
+                            'spot_max_price': spot_max_price,
                             'status': item.get('status', 'unknown')
                         },
                         'stats': {

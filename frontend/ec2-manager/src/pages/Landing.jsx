@@ -31,6 +31,8 @@ import AddRoundedIcon from '@mui/icons-material/AddRounded'
 import SettingsRoundedIcon from '@mui/icons-material/SettingsRounded'
 import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded'
 import OpenInNewRoundedIcon from '@mui/icons-material/OpenInNewRounded'
+import ScienceRoundedIcon from '@mui/icons-material/ScienceRounded'
+import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded'
 import { api } from '../services/api'
 import AppToast from '../components/AppToast'
 import TutorialSessionForm from './TutorialSessionForm'
@@ -249,15 +251,29 @@ function Landing() {
                             sx={{ borderRadius: 2, mb: 1 }}
                             onClick={() => navigate(`/tutorial/${workshop.name}/${session.session_id}`)}
                           >
+                            {(() => {
+                              const isProductiveTutorial = session?.productive_tutorial === true ||
+                                (session?.productive_tutorial === undefined && session?.purchase_type === 'on-demand')
+
+                              return (
                             <ListItemText
                               primary={
                                 <Stack direction="row" alignItems="center" spacing={1}>
                                   <Typography variant="body2" fontWeight={600}>{session.session_id}</Typography>
+                                  <Chip
+                                    size="small"
+                                    icon={isProductiveTutorial ? <CheckCircleRoundedIcon /> : <ScienceRoundedIcon />}
+                                    color={isProductiveTutorial ? 'success' : 'warning'}
+                                    variant={isProductiveTutorial ? 'filled' : 'outlined'}
+                                    label={isProductiveTutorial ? 'Productive' : 'Test'}
+                                  />
                                   <Chip size="small" label={`${session.actual_instance_count || 0} inst`} />
                                 </Stack>
                               }
                               secondary={new Date(session.created_at).toLocaleDateString()}
                             />
+                              )
+                            })()}
                             <IconButton
                               edge="end"
                               aria-label="Delete session"

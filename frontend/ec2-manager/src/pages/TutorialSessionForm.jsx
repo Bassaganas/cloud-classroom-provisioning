@@ -3,15 +3,16 @@ import {
   Alert,
   Box,
   Button,
+  Checkbox,
   Dialog,
   DialogActions,
   DialogContent,
   DialogTitle,
+  FormControlLabel,
   Stack,
   TextField,
   Typography
 } from '@mui/material'
-import PurchaseTypeSelector from '../components/PurchaseTypeSelector'
 import { api } from '../services/api'
 
 function TutorialSessionForm({ workshopName, onClose, onSuccess }) {
@@ -20,13 +21,11 @@ function TutorialSessionForm({ workshopName, onClose, onSuccess }) {
     pool_count: 1,
     admin_count: 0,
     admin_cleanup_days: 7,
+    productive_tutorial: false,
+    spot_max_price: '',
   })
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
-  const [purchaseConfig, setPurchaseConfig] = useState({
-    purchase_type: 'on-demand',
-    spot_duration_hours: 2,
-  })
 
   const handleSubmit = async (e) => {
     e.preventDefault()
@@ -55,8 +54,8 @@ function TutorialSessionForm({ workshopName, onClose, onSuccess }) {
         pool_count: parseInt(formData.pool_count),
         admin_count: parseInt(formData.admin_count),
         admin_cleanup_days: parseInt(formData.admin_cleanup_days),
-        purchase_type: purchaseConfig.purchase_type,
-        spot_duration_hours: purchaseConfig.spot_duration_hours,
+        productive_tutorial: formData.productive_tutorial,
+        spot_max_price: formData.productive_tutorial || !formData.spot_max_price ? null : formData.spot_max_price,
       })
 
       if (response.success) {
@@ -118,12 +117,36 @@ function TutorialSessionForm({ workshopName, onClose, onSuccess }) {
               />
             </Stack>
 
-            <Box sx={{ p: 1.25, border: '1px solid', borderColor: 'divider', borderRadius: 2, bgcolor: 'grey.50' }}>
-              <PurchaseTypeSelector
-                onPurchaseTypeChange={(config) => setPurchaseConfig(config)}
-                instanceType="pool"
+            <FormControlLabel
+              control={
+                <Checkbox
+                  checked={formData.productive_tutorial}
+                  onChange={(e) => setFormData({ ...formData, productive_tutorial: e.target.checked })}
+                  disabled={submitting}
+                />
+              }
+              label="Productive tutorial (use On-Demand only)"
+            />
+
+            <Alert severity={formData.productive_tutorial ? 'info' : 'warning'}>
+              {formData.productive_tutorial
+                ? 'Productive tutorial: all instances in this tutorial will be created as On-Demand.'
+                : 'Test tutorial: all instances in this tutorial will be created as Spot.'}
+            </Alert>
+
+            {!formData.productive_tutorial && (
+              <TextField
+                id="spot_max_price"
+                label="Spot Max Price ($/hour, optional)"
+                type="number"
+                inputProps={{ min: 0.0001, step: 0.0001 }}
+                value={formData.spot_max_price}
+                onChange={(e) => setFormData({ ...formData, spot_max_price: e.target.value })}
+                helperText="Leave empty to use market Spot price. Example: 0.011"
+                disabled={submitting}
+                fullWidth
               />
-            </Box>
+            )}
 
             {formData.admin_count > 0 && (
               <TextField

@@ -398,6 +398,8 @@ function WorkshopDashboard() {
                     const instanceType = instance.instance_type || instance.type || 'pool'
                     const sessionId = instance.tutorial_session_id
                     const assignedTo = instance.assigned || instance.assigned_to || '-'
+                    const resolvedHttpsUrl = instance.https_url || instance.tags?.HttpsUrl
+                    const visitUrl = resolvedHttpsUrl || (instance.public_ip ? `http://${instance.public_ip}` : null)
 
                     return (
                       <TableRow hover key={instance.instance_id}>
@@ -423,9 +425,9 @@ function WorkshopDashboard() {
                           />
                         </TableCell>
                         <TableCell>
-                          {instance.public_ip ? (
-                            <Link href={`http://${instance.public_ip}`} target="_blank" rel="noopener noreferrer">
-                              {instance.public_ip}
+                          {visitUrl ? (
+                            <Link href={visitUrl} target="_blank" rel="noopener noreferrer">
+                              visit me
                             </Link>
                           ) : (
                             '-'
@@ -449,7 +451,7 @@ function WorkshopDashboard() {
                               </Button>
                             )}
 
-                            {instance.public_ip && !instance.https_url && (
+                            {instance.public_ip && !resolvedHttpsUrl && (
                               <Button
                                 size="small"
                                 variant="outlined"
@@ -460,12 +462,12 @@ function WorkshopDashboard() {
                               </Button>
                             )}
 
-                            {instance.https_url && (
+                            {resolvedHttpsUrl && (
                               <Button
                                 size="small"
                                 variant="outlined"
                                 component="a"
-                                href={instance.https_url}
+                                href={resolvedHttpsUrl}
                                 target="_blank"
                                 rel="noopener noreferrer"
                               >

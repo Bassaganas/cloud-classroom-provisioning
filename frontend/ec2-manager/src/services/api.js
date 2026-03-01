@@ -77,9 +77,12 @@ export const api = {
   }),
 
   // Instances
-  listInstances: (includeTerminated = false) => {
-    const query = includeTerminated ? '?include_terminated=true' : ''
-    return apiRequest(`/list${query}`)
+  listInstances: (includeTerminated = false, includeHealth = false) => {
+    const queryParams = new URLSearchParams()
+    if (includeTerminated) queryParams.append('include_terminated', 'true')
+    if (includeHealth) queryParams.append('include_health', 'true')
+    const query = queryParams.toString()
+    return apiRequest(`/list${query ? `?${query}` : ''}`)
   },
   
   createInstances: (data) => apiRequest('/create', {
@@ -143,5 +146,10 @@ export const api = {
   }),
 
   // List instances with optional tutorial session filter
-  listInstancesBySession: (tutorialSessionId) => apiRequest(`/list?tutorial_session_id=${tutorialSessionId}`),
+  listInstancesBySession: (tutorialSessionId, includeHealth = false, includeTerminated = false) => {
+    const queryParams = new URLSearchParams({ tutorial_session_id: tutorialSessionId })
+    if (includeHealth) queryParams.append('include_health', 'true')
+    if (includeTerminated) queryParams.append('include_terminated', 'true')
+    return apiRequest(`/list?${queryParams.toString()}`)
+  },
 }
