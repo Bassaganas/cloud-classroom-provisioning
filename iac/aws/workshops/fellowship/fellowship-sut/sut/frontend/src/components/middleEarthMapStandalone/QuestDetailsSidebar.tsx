@@ -17,21 +17,36 @@ interface QuestDetailsSidebarProps {
 const getStatusLabel = (status: string): string => {
   const statusMap: Record<string, string> = {
     'not_yet_begun': 'Not Yet Begun',
-    'the_road_goes_ever_on': 'In Progress',
-    'it_is_done': 'Completed',
-    'the_shadow_falls': 'Failed'
+    'the_road_goes_ever_on': 'The Road Goes Ever On...',
+    'it_is_done': 'It Is Done',
+    'the_shadow_falls': 'The Shadow Falls',
+    'pending': 'Not Yet Begun',
+    'in_progress': 'The Road Goes Ever On...',
+    'completed': 'It Is Done',
+    'blocked': 'The Shadow Falls'
   };
   return statusMap[status] || status;
 };
 
-const getStatusColor = (status: string): string => {
-  const colorMap: Record<string, string> = {
-    'not_yet_begun': '#999',
-    'the_road_goes_ever_on': '#e74c3c',
-    'it_is_done': '#27ae60',
-    'the_shadow_falls': '#2c3e50'
+const getStatusClass = (status: string): string => {
+  const classMap: Record<string, string> = {
+    'pending': 'not_yet_begun',
+    'in_progress': 'the_road_goes_ever_on',
+    'completed': 'it_is_done',
+    'blocked': 'the_shadow_falls'
   };
-  return colorMap[status] || '#999';
+  return classMap[status] || status;
+};
+
+const getQuestTypeIcon = (questType?: string): string => {
+  const iconMap: Record<string, string> = {
+    'The Journey': '🧭',
+    'The Battle': '⚔️',
+    'The Fellowship': '👥',
+    'The Ring': '💍',
+    'Dark Magic': '👁️'
+  };
+  return iconMap[questType || ''] || '📜';
 };
 
 export const QuestDetailsSidebar: React.FC<QuestDetailsSidebarProps> = ({
@@ -58,11 +73,14 @@ export const QuestDetailsSidebar: React.FC<QuestDetailsSidebarProps> = ({
         <h2 id="quest-title">{quest.title}</h2>
         
         <div id="quest-status-container">
-          <span 
-            id="quest-status" 
-            style={{ backgroundColor: getStatusColor(quest.status) }}
-          >
-            {getStatusLabel(quest.status)}
+          {quest.quest_type && (
+            <span className="qds-chip qds-type-badge" title={quest.quest_type}>
+              <span className="qds-chip-icon" aria-hidden="true">{getQuestTypeIcon(quest.quest_type)}</span>
+              <span className="qds-chip-label">{quest.quest_type}</span>
+            </span>
+          )}
+          <span id="quest-status" className={`qds-chip qds-status qds-status-${getStatusClass(quest.status)}`}>
+            <span className="qds-chip-label">{getStatusLabel(quest.status)}</span>
           </span>
         </div>
 
@@ -110,20 +128,10 @@ export const QuestDetailsSidebar: React.FC<QuestDetailsSidebarProps> = ({
           </div>
         )}
 
-        <div id="quest-actions" style={{ marginTop: '20px', display: 'flex', gap: '10px' }}>
+        <div id="quest-actions">
           <button 
+            className="qds-action-btn"
             onClick={handleLearnMore}
-            style={{
-              flex: 1,
-              padding: '10px',
-              backgroundColor: '#8B4513',
-              color: '#fff',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              fontSize: '14px',
-              fontWeight: 'bold'
-            }}
           >
             Learn More
           </button>

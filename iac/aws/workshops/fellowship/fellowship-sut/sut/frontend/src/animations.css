@@ -1,0 +1,451 @@
+/* ========================================
+   LOTR Fellowship - Immersive Animations
+   ======================================== */
+
+/* ========== PAGE TRANSITIONS ========== */
+
+/* Fade in animation for page load */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* Slide in from left */
+@keyframes slideInLeft {
+  from {
+    opacity: 0;
+    transform: translateX(-30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* Slide in from right */
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(30px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+/* Slide in from top */
+@keyframes slideInDown {
+  from {
+    opacity: 0;
+    transform: translateY(-20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Slide in from bottom */
+@keyframes slideInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Scale and fade for modal/dialog entrance */
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.95);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* ========== SHIMMER & GLOW EFFECTS ========== */
+
+/* Enhanced shimmer effect for buttons and cards */
+@keyframes shimmer {
+  0% {
+    background-position: -1000px 0;
+  }
+  100% {
+    background-position: 1000px 0;
+  }
+}
+
+/* Arcane shimmer - gradient sweep across element */
+@keyframes arcaneShimmer {
+  0% {
+    background-position: -200% center;
+  }
+  50% {
+    background-position: 200% center;
+  }
+  100% {
+    background-position: -200% center;
+  }
+}
+
+/* Gold glow pulse - pulsing aura effect */
+@keyframes goldGlow {
+  0%, 100% {
+    box-shadow: 0 0 5px rgba(218, 165, 32, 0.2),
+                0 0 10px rgba(218, 165, 32, 0.1);
+  }
+  50% {
+    box-shadow: 0 0 15px rgba(218, 165, 32, 0.5),
+                0 0 25px rgba(218, 165, 32, 0.3);
+  }
+}
+
+/* Danger glow pulse - red warning aura */
+@keyframes dangerGlow {
+  0%, 100% {
+    box-shadow: 0 0 5px rgba(220, 38, 38, 0.2),
+                0 0 10px rgba(220, 38, 38, 0.1);
+  }
+  50% {
+    box-shadow: 0 0 15px rgba(220, 38, 38, 0.5),
+                0 0 25px rgba(220, 38, 38, 0.3);
+  }
+}
+
+/* Success glow pulse - green shimmer */
+@keyframes successGlow {
+  0%, 100% {
+    box-shadow: 0 0 5px rgba(81, 207, 102, 0.2),
+                0 0 10px rgba(81, 207, 102, 0.1);
+  }
+  50% {
+    box-shadow: 0 0 15px rgba(81, 207, 102, 0.5),
+                0 0 25px rgba(81, 207, 102, 0.3);
+  }
+}
+
+/* Text glow - subtle text shadow animation */
+@keyframes textGlow {
+  0%, 100% {
+    text-shadow: 0 0 5px rgba(218, 165, 32, 0.2);
+  }
+  50% {
+    text-shadow: 0 0 15px rgba(218, 165, 32, 0.5),
+                 0 0 25px rgba(218, 165, 32, 0.3);
+  }
+}
+
+/* ========== ELEVATION & HOVER EFFECTS ========== */
+
+/* Hover lift effect - elevates elements on hover */
+@keyframes hoverLift {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(-4px);
+  }
+}
+
+/* Subtle scale on hover */
+@keyframes hoverScale {
+  from {
+    transform: scale(1);
+  }
+  to {
+    transform: scale(1.02);
+  }
+}
+
+/* ========== INTERACTIVE EFFECTS ========== */
+
+/* Ripple effect on button press */
+@keyframes ripple {
+  0% {
+    transform: scale(0);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(4);
+    opacity: 0;
+  }
+}
+
+/* Pulse effect for important elements */
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+/* Quick pulse for form validation */
+@keyframes quickPulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.05);
+  }
+}
+
+/* Bounce effect */
+@keyframes bounce {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-10px);
+  }
+}
+
+/* Shake effect for errors */
+@keyframes shake {
+  0%, 100% {
+    transform: translateX(0);
+  }
+  10%, 30%, 50%, 70%, 90% {
+    transform: translateX(-5px);
+  }
+  20%, 40%, 60%, 80% {
+    transform: translateX(5px);
+  }
+}
+
+/* ========== NUMBER COUNTERS ========== */
+
+/* Counter animation for stats */
+@keyframes countUp {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* ========== PARALLAX & DEPTH ========== */
+
+/* Subtle parallax scroll effect */
+@keyframes parallaxFloat {
+  0%, 100% {
+    transform: translateY(0px);
+  }
+  50% {
+    transform: translateY(-5px);
+  }
+}
+
+/* ========== CHARACTER ANIMATIONS ========== */
+
+/* Quest completion cascade - staggered reveal */
+@keyframes cascadeReveal {
+  0% {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Character quote entrance */
+@keyframes quoteEntrance {
+  0% {
+    opacity: 0;
+    transform: scale(0.8) rotate(-2deg);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1) rotate(0deg);
+  }
+}
+
+/* ========== STATE TRANSITIONS ========== */
+
+/* Smooth color transition */
+@keyframes colorShift {
+  0%, 100% {
+    color: currentColor;
+  }
+  50% {
+    color: var(--gold);
+  }
+}
+
+/* Border glow on focus */
+@keyframes focusGlow {
+  0% {
+    box-shadow: 0 0 0 0 rgba(218, 165, 32, 0.4);
+  }
+  70% {
+    box-shadow: 0 0 0 10px rgba(218, 165, 32, 0);
+  }
+  100% {
+    box-shadow: 0 0 0 0 rgba(218, 165, 32, 0);
+  }
+}
+
+/* ========== LOADING STATES ========== */
+
+/* Rotating loader */
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Pulsing skeleton loader */
+@keyframes skeletonPulse {
+  0%, 100% {
+    background-color: var(--parchment);
+  }
+  50% {
+    background-color: var(--parchment-light);
+  }
+}
+
+/* ========== UTILITY ANIMATION CLASSES ========== */
+
+.page-enter {
+  animation: fadeIn 0.6s ease-out;
+}
+
+.page-enter-left {
+  animation: slideInLeft 0.6s ease-out;
+}
+
+.page-enter-right {
+  animation: slideInRight 0.6s ease-out;
+}
+
+.page-enter-down {
+  animation: slideInDown 0.5s ease-out;
+}
+
+.page-enter-up {
+  animation: slideInUp 0.5s ease-out;
+}
+
+.modal-enter {
+  animation: scaleIn 0.3s ease-out;
+}
+
+/* Card hover elevation */
+.card-elevated:hover {
+  transform: translateY(-4px);
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+/* Ripple button class */
+.btn-ripple {
+  position: relative;
+  overflow: hidden;
+}
+
+.btn-ripple::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 10px;
+  height: 10px;
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  animation: ripple 0.6s ease-out;
+  pointer-events: none;
+}
+
+/* Glow variants for different element types */
+.glow-gold {
+  animation: goldGlow 3s ease-in-out infinite;
+}
+
+.glow-danger {
+  animation: dangerGlow 2s ease-in-out infinite;
+}
+
+.glow-success {
+  animation: successGlow 2s ease-in-out infinite;
+}
+
+/* Text glow class */
+.text-glow {
+  animation: textGlow 3s ease-in-out infinite;
+}
+
+/* Pulse for badges and notifications */
+.pulse {
+  animation: pulse 2s ease-in-out infinite;
+}
+
+/* Quick pulse for form feedback */
+.quick-pulse {
+  animation: quickPulse 0.4s ease-out;
+}
+
+/* Shake effect for errors */
+.shake {
+  animation: shake 0.5s;
+}
+
+/* Bounce effect */
+.bounce-in {
+  animation: bounce 0.6s ease-out;
+}
+
+/* Loading spinner with shimmer */
+.loading-shimmer {
+  animation: arcaneShimmer 2s infinite;
+  background-size: 200% 100%;
+}
+
+/* Parallax floating effect */
+.parallax-float {
+  animation: parallaxFloat 4s ease-in-out infinite;
+}
+
+/* Cascade reveal for list items */
+.cascade-reveal {
+  animation: cascadeReveal 0.6s ease-out;
+}
+
+/* Staggered cascade for multiple items */
+.cascade-item {
+  animation: cascadeReveal 0.6s ease-out backwards;
+}
+
+.cascade-item:nth-child(1) { animation-delay: 0s; }
+.cascade-item:nth-child(2) { animation-delay: 0.1s; }
+.cascade-item:nth-child(3) { animation-delay: 0.2s; }
+.cascade-item:nth-child(4) { animation-delay: 0.3s; }
+.cascade-item:nth-child(5) { animation-delay: 0.4s; }
+.cascade-item:nth-child(n+6) { animation-delay: 0.5s; }
+
+/* ========== ACCESSIBILITY ========== */
+/* Respect prefers-reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

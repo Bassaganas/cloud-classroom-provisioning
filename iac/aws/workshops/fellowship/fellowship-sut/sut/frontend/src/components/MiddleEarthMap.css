@@ -169,6 +169,49 @@
   border: 3px solid var(--color-parchment-light, #F4E4BC) !important;
 }
 
+/* Quest marker cluster styling - aggregates quest markers on zoom out */
+.quest-marker-cluster-icon {
+  background: transparent !important;
+  border: none !important;
+}
+
+.quest-marker-cluster {
+  background: linear-gradient(135deg, #CD853F, #8B4513);
+  border: 2px solid #DAA520;
+  border-radius: 50%;
+  color: #F4E4BC;
+  font-weight: bold;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.3);
+  font-size: 13px;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.quest-marker-cluster-small {
+  width: 35px;
+  height: 35px;
+}
+
+.quest-marker-cluster-medium {
+  width: 45px;
+  height: 45px;
+  font-size: 15px;
+}
+
+.quest-marker-cluster-large {
+  width: 55px;
+  height: 55px;
+  font-size: 17px;
+}
+
+.quest-marker-cluster:hover {
+  transform: scale(1.15);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.4);
+}
+
 /* Ensure quest markers are always on top and clickable */
 .middle-earth-map-container .leaflet-marker-pane .quest-marker-icon {
   z-index: 2000 !important;

@@ -1,7 +1,7 @@
 import React, { useState, FormEvent } from 'react';
 import { apiService } from '../services/api';
 import { User } from '../types';
-import './Login.css';
+import { Alert, Button, Input } from './ui';
 
 interface LoginProps {
   onLogin: (user: User) => void;
@@ -10,6 +10,8 @@ interface LoginProps {
 const Login: React.FC<LoginProps> = ({ onLogin }) => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [rememberMe, setRememberMe] = useState(true);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
@@ -29,52 +31,70 @@ const Login: React.FC<LoginProps> = ({ onLogin }) => {
   };
 
   return (
-    <div className="login-container">
-      <div className="login-card">
-        <h1 className="login-title">Welcome to the Fellowship Quest Tracker</h1>
-        <p className="login-subtitle">Enter Middle-earth and track your epic journey</p>
-        
-        {error && <div className="error-message">{error}</div>}
-        
-        <form onSubmit={handleSubmit} className="login-form">
-          <div className="form-group">
-            <label htmlFor="username" className="form-label">Username</label>
-            <input
-              type="text"
-              id="username"
-              className="form-input"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              required
-              placeholder="e.g., frodo_baggins"
-            />
-          </div>
-          
-          <div className="form-group">
-            <label htmlFor="password" className="form-label">Password</label>
-            <input
-              type="password"
+    <div className="w-full max-w-md">
+      <div className="card-parchment shadow-epic border border-gold-dark/30">
+        <h1 className="text-3xl md:text-4xl text-center text-text-primary mb-2">Enter the Fellowship</h1>
+        <p className="text-center text-pending mb-6 italic">One does not simply walk into Middle-earth without credentials.</p>
+
+        {error && (
+          <Alert variant="error" title="The Gate Remains Closed" className="mb-4">
+            {error}
+          </Alert>
+        )}
+
+        <form onSubmit={handleSubmit} className="space-y-4" noValidate>
+          <Input
+            id="username"
+            label="Username"
+            value={username}
+            onChange={(event) => setUsername(event.target.value)}
+            required
+            placeholder="e.g., frodo_baggins"
+            autoComplete="username"
+          />
+
+          <div>
+            <Input
               id="password"
-              className="form-input"
+              label="Password"
+              type={showPassword ? 'text' : 'password'}
               value={password}
-              onChange={(e) => setPassword(e.target.value)}
+              onChange={(event) => setPassword(event.target.value)}
               required
               placeholder="Enter your password"
+              autoComplete="current-password"
             />
+            <button
+              type="button"
+              className="mt-2 text-sm text-forest hover:text-forest-light"
+              onClick={() => setShowPassword((current) => !current)}
+            >
+              {showPassword ? 'Hide password' : 'Show password'}
+            </button>
           </div>
-          
-          <button
-            type="submit"
-            className="btn btn-primary login-button"
-            disabled={loading}
-          >
-            {loading ? 'Logging in...' : 'Enter Middle-earth'}
-          </button>
+
+          <label className="flex items-center gap-2 text-sm text-text-primary">
+            <input
+              type="checkbox"
+              checked={rememberMe}
+              onChange={(event) => setRememberMe(event.target.checked)}
+              className="h-4 w-4 accent-gold"
+            />
+            Keep me in the Fellowship on this device
+          </label>
+
+          <Button type="submit" variant="epic" className="w-full" isLoading={loading}>
+            {loading ? 'Opening the Gates...' : 'Enter Middle-earth'}
+          </Button>
         </form>
-        
-        <div className="login-hint">
-          <p>Default password: <strong>fellowship123</strong></p>
-          <p>Try: frodo_baggins, samwise_gamgee, aragorn, legolas, gimli, gandalf</p>
+
+        <div className="mt-6 pt-4 border-t border-gold-dark/30 text-sm text-text-primary">
+          <p>
+            Default password: <strong>fellowship123</strong>
+          </p>
+          <p className="mt-1 text-text-secondary">
+            Try: frodo_baggins, samwise_gamgee, aragorn, legolas, gimli, gandalf
+          </p>
         </div>
       </div>
     </div>

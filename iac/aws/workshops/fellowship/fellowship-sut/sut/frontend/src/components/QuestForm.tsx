@@ -3,7 +3,7 @@ import { Quest, Location, Member } from '../types';
 import './QuestForm.css';
 
 interface QuestFormProps {
-  quest?: Quest;
+  quest?: Partial<Quest>;
   locations: Location[];
   members: Member[];
   onSubmit: (quest: Partial<Quest>) => Promise<void>;

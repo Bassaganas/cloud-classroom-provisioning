@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import MiddleEarthMap from '../components/MiddleEarthMap';
 import { apiService } from '../services/api';
 import { Quest, Location, User } from '../types';
+import { Button } from '../components/ui/Button';
 import './MapPage.css';
 
 interface MapPageProps {
@@ -16,6 +17,7 @@ const MapPage: React.FC<MapPageProps> = ({ user, onLogout }) => {
   const [allQuests, setAllQuests] = useState<Quest[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
   const [selectedQuestId, setSelectedQuestId] = useState<number | undefined>();
+  const [selectedLocationId, setSelectedLocationId] = useState<number | undefined>();
   const [zoomToLocation, setZoomToLocation] = useState<number | undefined>();
   const [loading, setLoading] = useState(true);
   const [filterOpen, setFilterOpen] = useState(window.innerWidth > 1024);
@@ -31,6 +33,26 @@ const MapPage: React.FC<MapPageProps> = ({ user, onLogout }) => {
       setZoomToLocation(location.state.zoomToLocation);
     }
   }, [location.state?.zoomToLocation]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(location.search);
+    const zoomToLocationParam = params.get('zoomToLocation');
+    const selectedQuestIdParam = params.get('selectedQuestId');
+
+    if (zoomToLocationParam) {
+      const zoomToLocationId = Number(zoomToLocationParam);
+      if (!Number.isNaN(zoomToLocationId)) {
+        setZoomToLocation(zoomToLocationId);
+      }
+    }
+
+    if (selectedQuestIdParam) {
+      const parsedQuestId = Number(selectedQuestIdParam);
+      if (!Number.isNaN(parsedQuestId)) {
+        setSelectedQuestId(parsedQuestId);
+      }
+    }
+  }, [location.search]);
 
   const loadData = async () => {
     try {
@@ -60,13 +82,40 @@ const MapPage: React.FC<MapPageProps> = ({ user, onLogout }) => {
     setFilterOpen(!filterOpen);
   };
 
+  const normalizeStatus = (status?: string): string => {
+    const statusMap: Record<string, string> = {
+      pending: 'not_yet_begun',
+      in_progress: 'the_road_goes_ever_on',
+      completed: 'it_is_done',
+      blocked: 'the_shadow_falls',
+    };
+    if (!status) {
+      return '';
+    }
+    return statusMap[status] || status;
+  };
+
+  const handleLocationClick = (locationId: number) => {
+    setSelectedLocationId(locationId);
+  };
+
+  const handleCompleteQuest = async (questId: number) => {
+    try {
+      await apiService.completeQuest(questId);
+      setSelectedQuestId(questId);
+      await loadData();
+    } catch (error) {
+      console.error('Failed to complete quest from map:', error);
+    }
+  };
+
   // Apply filters
   const getFilteredQuests = (): Quest[] => {
     let filtered = allQuests;
 
     // Filter by status
     if (statusFilter.length > 0 && !statusFilter.includes('all')) {
-      filtered = filtered.filter(q => statusFilter.includes(q.status || ''));
+      filtered = filtered.filter((q) => statusFilter.includes(normalizeStatus(q.status)));
     }
 
     // Filter by type
@@ -81,52 +130,97 @@ const MapPage: React.FC<MapPageProps> = ({ user, onLogout }) => {
 
   // Get selected quest details
   const selectedQuest = allQuests.find(q => q.id === selectedQuestId);
+  const selectedLocation = locations.find((loc) => loc.id === selectedLocationId);
 
-  const getStatusColor = (status: string): string => {
-    const colors: Record<string, string> = {
-      'not_yet_begun': '#888888',
-      'the_road_goes_ever_on': '#FF6B6B',
-      'it_is_done': '#51CF66',
-      'the_shadow_falls': '#1A1A1A',
+  const getStatusClass = (status: string): string => {
+    const statusClassMap: Record<string, string> = {
+      'pending': 'not_yet_begun',
+      'in_progress': 'the_road_goes_ever_on',
+      'completed': 'it_is_done',
+      'blocked': 'the_shadow_falls'
     };
-    return colors[status] || '#888888';
+    return statusClassMap[status] || status;
   };
 
   const getStatusText = (status: string): string => {
     const texts: Record<string, string> = {
       'not_yet_begun': 'Not Yet Begun',
-      'the_road_goes_ever_on': 'The Road Goes Ever On',
+      'the_road_goes_ever_on': 'The Road Goes Ever On...',
       'it_is_done': 'It Is Done',
       'the_shadow_falls': 'The Shadow Falls',
+      'pending': 'Not Yet Begun',
+      'in_progress': 'The Road Goes Ever On...',
+      'completed': 'It Is Done',
+      'blocked': 'The Shadow Falls'
     };
     return texts[status] || status;
   };
 
+  const getQuestTypeIcon = (questType?: string): string => {
+    const iconMap: Record<string, string> = {
+      'The Journey': '🧭',
+      'The Battle': '⚔️',
+      'The Fellowship': '👥',
+      'The Ring': '💍',
+      'Dark Magic': '👁️'
+    };
+    return iconMap[questType || ''] || '📜';
+  };
+
   if (loading) {
     return (
-      <div className="app-loading">
-        <div className="loading-spinner">Loading the map of Middle-earth...</div>
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="text-center">
+          <div className="text-4xl mb-4">🗺️</div>
+          <p className="text-text-primary font-readable">Charting the Map of Middle-earth...</p>
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="map-page-full">
-      <nav className="navbar">
-        <Link to="/dashboard" className="navbar-brand">
-          The Fellowship's Quest List
-        </Link>
-        <div className="navbar-nav">
-          <Link to="/dashboard" className="nav-link">The Council Chamber</Link>
-          <Link to="/quests" className="nav-link">The Scrolls of Middle-earth</Link>
-          <Link to="/map" className="nav-link active">The Map of Middle-earth</Link>
-          <button className="btn btn-secondary" onClick={onLogout}>
-            Leave the Fellowship
-          </button>
+    <div className="min-h-screen bg-background flex flex-col">
+      {/* Navigation Header */}
+      <nav className="bg-gradient-to-r from-forest to-forest-dark shadow-lg border-b-2 border-gold">
+        <div className="max-w-7xl mx-auto w-full px-4 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-2xl">🗺️</span>
+            <Link to="/dashboard" className="font-epic text-2xl text-gold hover:text-gold-light transition-colors">
+              Map of Middle-earth
+            </Link>
+          </div>
+          <div className="flex items-center gap-4">
+            <Link
+              to="/dashboard"
+              className="text-parchment hover:text-gold transition-colors font-readable"
+            >
+              Council Chamber
+            </Link>
+            <Link
+              to="/quests"
+              className="text-parchment hover:text-gold transition-colors font-readable"
+            >
+              Scrolls of Middle-earth
+            </Link>
+            <Link
+              to="/map"
+              className="text-gold font-readable font-bold"
+            >
+              Map of Middle-earth
+            </Link>
+            <Button
+              onClick={onLogout}
+              variant="secondary"
+              className="text-sm"
+            >
+              Leave Fellowship
+            </Button>
+          </div>
         </div>
       </nav>
 
-      <div className="map-page-container">
+      {/* Map Container */}
+      <div className="flex-1 map-page-container">
         {/* Filter Sidebar */}
         <aside className={`filter-sidebar ${filterOpen ? 'open' : 'closed'}`}>
           <div className="filter-sidebar-header">
@@ -257,12 +351,18 @@ const MapPage: React.FC<MapPageProps> = ({ user, onLogout }) => {
             </div>
 
             <div className="filter-actions">
+              {selectedLocation && (
+                <div className="mb-3 text-sm text-amber-900 font-semibold">
+                  Focused Location: {selectedLocation.name}
+                </div>
+              )}
               <button 
                 className="btn btn-secondary btn-sm"
                 onClick={() => {
                   setStatusFilter(['all']);
                   setTypeFilter(['all']);
                   setSelectedQuestId(undefined);
+                  setSelectedLocationId(undefined);
                 }}
               >
                 Clear All
@@ -291,10 +391,12 @@ const MapPage: React.FC<MapPageProps> = ({ user, onLogout }) => {
           <MiddleEarthMap
             locations={locations}
             quests={filteredQuests.filter(q => q.location_id)}
+            selectedLocationId={selectedLocationId}
             selectedQuestId={selectedQuestId}
             zoomToLocation={zoomToLocation}
-            onLocationClick={() => {}}
+            onLocationClick={handleLocationClick}
             onQuestClick={handleQuestClick}
+            onCompleteQuest={handleCompleteQuest}
           />
 
 
@@ -314,9 +416,15 @@ const MapPage: React.FC<MapPageProps> = ({ user, onLogout }) => {
               </div>
 
               <div className="quest-details-body">
-                <div className="quest-status" style={{ borderLeftColor: getStatusColor(selectedQuest.status || '') }}>
-                  <span className="status-badge" style={{ backgroundColor: getStatusColor(selectedQuest.status || '') }}>
-                    {getStatusText(selectedQuest.status || '')}
+                <div className="quest-badges quest-badges-map">
+                  {selectedQuest.quest_type && (
+                    <span className="quest-type-badge quest-chip" title={selectedQuest.quest_type}>
+                      <span className="quest-chip-icon" aria-hidden="true">{getQuestTypeIcon(selectedQuest.quest_type)}</span>
+                      <span className="quest-chip-label">{selectedQuest.quest_type}</span>
+                    </span>
+                  )}
+                  <span className={`quest-status quest-status-${getStatusClass(selectedQuest.status || '')} quest-chip`}>
+                    <span className="quest-chip-label">{getStatusText(selectedQuest.status || '')}</span>
                   </span>
                   {selectedQuest.priority && <span className="priority-badge">Priority: {selectedQuest.priority}</span>}
                 </div>
@@ -353,8 +461,16 @@ const MapPage: React.FC<MapPageProps> = ({ user, onLogout }) => {
               </div>
 
               <div className="quest-details-actions">
+                {selectedQuest.status !== 'it_is_done' && selectedQuest.status !== 'completed' && (
+                  <button
+                    className="btn btn-secondary btn-sm map-action-btn"
+                    onClick={() => handleCompleteQuest(selectedQuest.id)}
+                  >
+                    Complete Quest
+                  </button>
+                )}
                 <button
-                  className="btn btn-secondary"
+                  className="btn btn-secondary btn-sm map-action-btn"
                   onClick={() => {
                     setSelectedQuestId(undefined);
                   }}
@@ -362,7 +478,7 @@ const MapPage: React.FC<MapPageProps> = ({ user, onLogout }) => {
                   Close
                 </button>
                 <button
-                  className="btn btn-primary"
+                  className="btn btn-primary btn-sm map-action-btn"
                   onClick={() => {
                     navigate('/quests', { state: { selectedQuestId: selectedQuest.id } });
                   }}

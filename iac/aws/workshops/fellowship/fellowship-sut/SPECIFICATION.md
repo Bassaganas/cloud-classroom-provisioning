@@ -894,3 +894,31 @@ CREATE TABLE locations (
 4. **Accessibility**: WCAG 2.1 AA compliance
 5. **Test Coverage**: > 80% code coverage
 6. **Documentation**: Complete API documentation and user guide
+
+## Azure NPC Chat Specification (Phase 7-8)
+
+### Functional behavior
+- NPC chat is available from Dashboard side panel.
+- Characters supported: Frodo, Sam, Gandalf.
+- NPC initiates first with randomized opener style (question/judgement/reflection).
+- User can continue a natural multi-turn conversation.
+- NPC always nudges toward a concrete next action in the app.
+
+### API contract
+- `POST /api/chat/start`
+- `POST /api/chat/message`
+- `GET /api/chat/session`
+- `POST /api/chat/reset`
+
+Each response includes:
+- character
+- messages transcript
+- suggested_action `{ goal_type, title, reason, target }`
+
+### Security constraints
+- Azure AI credentials are backend-only.
+- Frontend never receives endpoint keys or deployment secrets.
+
+### MVP memory model
+- Conversation memory persists for the user login session only.
+- Reset action starts a new opener and clears transcript.

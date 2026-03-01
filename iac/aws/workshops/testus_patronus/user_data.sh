@@ -12,15 +12,49 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
 }
 
+IMDS_BASE_URL="http://169.254.169.254/latest"
+IMDS_TOKEN=""
+
+get_imds_token() {
+    if [ -n "$IMDS_TOKEN" ]; then
+        echo "$IMDS_TOKEN"
+        return 0
+    fi
+
+    IMDS_TOKEN=$(curl -s --max-time 5 --connect-timeout 2 -X PUT "${IMDS_BASE_URL}/api/token" \
+        -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null || echo "")
+
+    if [ -n "$IMDS_TOKEN" ]; then
+        echo "$IMDS_TOKEN"
+        return 0
+    fi
+
+    return 1
+}
+
+get_instance_metadata() {
+    local path="$1"
+    local token
+    token=$(get_imds_token 2>/dev/null || echo "")
+
+    if [ -n "$token" ]; then
+        curl -s --max-time 5 --connect-timeout 2 -H "X-aws-ec2-metadata-token: ${token}" \
+            "${IMDS_BASE_URL}/meta-data/${path}" 2>/dev/null || echo ""
+    else
+        curl -s --max-time 5 --connect-timeout 2 "${IMDS_BASE_URL}/meta-data/${path}" 2>/dev/null || echo ""
+    fi
+}
+
 log "=========================================="
 log "Starting EC2 instance user data script"
-log "Instance: $(curl -s http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null || echo 'N/A')"
+INSTANCE_ID=$(get_instance_metadata "instance-id")
+log "Instance: ${INSTANCE_ID:-N/A}"
 log "=========================================="
 
 # Get AWS region with retries and fallback
 AWS_REGION=""
 for i in {1..5}; do
-    AWS_REGION=$(curl -s --max-time 5 --connect-timeout 2 http://169.254.169.254/latest/meta-data/placement/region 2>/dev/null || echo "")
+    AWS_REGION=$(get_instance_metadata "placement/region")
     [ -n "$AWS_REGION" ] && break
     [ $i -lt 5 ] && sleep 2
 done

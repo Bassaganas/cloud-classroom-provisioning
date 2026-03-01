@@ -2,42 +2,54 @@
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 1.5rem;
+  animation: fadeIn 0.8s ease-out;
+  align-items: stretch;
 }
 
 .quest-list-empty {
   text-align: center;
   padding: 3rem;
   color: var(--earth-brown);
-  background: var(--parchment);
+  background: linear-gradient(135deg, var(--parchment-light) 0%, var(--parchment) 100%);
   border-radius: 8px;
   border: 2px solid var(--earth-brown);
   font-family: 'Lora', serif;
+  grid-column: 1 / -1;
+  animation: slideInUp 0.6s ease-out;
 }
 
 .quest-card {
-  background: var(--parchment);
+  background: linear-gradient(135deg, var(--parchment) 0%, var(--parchment-light) 100%);
   border-radius: 8px;
   padding: 1.25rem;
-  box-shadow: 0 2px 8px rgba(139, 69, 19, 0.2);
+  box-shadow: 0 4px 12px rgba(139, 69, 19, 0.2);
   border: 2px solid var(--earth-brown);
-  transition: transform 0.2s ease, box-shadow 0.2s ease;
+  transition: all 0.3s ease;
   position: relative;
+  animation: cascade-item;
+  display: flex;
+  flex-direction: column;
+  height: 100%;
 }
 
 .quest-card:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 4px 15px rgba(139, 69, 19, 0.3);
+  transform: translateY(-4px);
+  box-shadow: 0 8px 20px rgba(139, 69, 19, 0.3),
+              0 0 15px rgba(218, 165, 32, 0.15);
 }
 
 .quest-card-dark-magic {
   background: linear-gradient(135deg, #2a1a1a 0%, #3d2525 100%);
   border-color: var(--dark-red);
-  box-shadow: 0 0 10px rgba(220, 38, 38, 0.5);
+  box-shadow: 0 0 15px rgba(220, 38, 38, 0.5);
   color: var(--parchment);
+  animation: dangerGlow 2s ease-in-out infinite;
 }
 
 .quest-card-dark-magic:hover {
-  box-shadow: 0 0 15px rgba(220, 38, 38, 0.7);
+  box-shadow: 0 0 25px rgba(220, 38, 38, 0.8),
+              0 8px 20px rgba(0, 0, 0, 0.3);
+  transform: translateY(-4px);
 }
 
 .quest-card-header {
@@ -58,6 +70,7 @@
   font-family: 'Cinzel', serif;
   font-weight: 600;
   flex: 1;
+  letter-spacing: 0.5px;
 }
 
 .quest-card-dark-magic .quest-title-row h3 {
@@ -65,44 +78,79 @@
 }
 
 .quest-badges {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
+  display: grid;
+  gap: 0.45rem;
   margin-top: 0.5rem;
+}
+
+.quest-badge-main-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-wrap: nowrap;
+  min-height: var(--quest-chip-height);
+}
+
+.quest-badge-secondary-row {
+  display: flex;
+  align-items: center;
+  min-height: var(--quest-chip-height);
+}
+
+.quest-chip {
+  min-height: var(--quest-chip-height);
+  border-radius: var(--quest-chip-radius);
+  padding: 0.35rem var(--quest-chip-padding-x);
+  line-height: 1;
+}
+
+.quest-chip-icon {
+  font-size: 0.95em;
+  line-height: 1;
+}
+
+.quest-chip-label {
+  display: inline-block;
+  line-height: 1.2;
+  white-space: nowrap;
 }
 
 .quest-type-badge {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
-  padding: 0.25rem 0.75rem;
-  background: var(--forest-green-light);
+  background: linear-gradient(135deg, var(--forest-green-light) 0%, var(--forest-green) 100%);
   color: var(--parchment);
-  border-radius: 12px;
   font-size: 0.85rem;
   font-weight: 600;
+  box-shadow: 0 2px 6px rgba(45, 80, 22, 0.3);
+  transition: all 0.3s ease;
+  flex: 1 1 auto;
+  min-width: 0;
+  justify-content: center;
+}
+
+.quest-type-badge:hover {
+  transform: scale(1.05);
+  box-shadow: 0 4px 12px rgba(45, 80, 22, 0.5);
 }
 
 .dark-magic-badge {
   display: inline-flex;
   align-items: center;
   gap: 0.25rem;
-  padding: 0.25rem 0.75rem;
   background: var(--dark-red);
   color: var(--parchment);
-  border-radius: 12px;
   font-size: 0.85rem;
   font-weight: 600;
-  animation: pulse-glow 2s ease-in-out infinite;
+  animation: pulse 2s ease-in-out infinite;
+  box-shadow: 0 0 10px rgba(220, 38, 38, 0.4);
+  transition: all 0.3s ease;
+  justify-content: center;
 }
 
-@keyframes pulse-glow {
-  0%, 100% {
-    box-shadow: 0 0 5px rgba(220, 38, 38, 0.5);
-  }
-  50% {
-    box-shadow: 0 0 15px rgba(220, 38, 38, 0.8);
-  }
+.dark-magic-badge:hover {
+  box-shadow: 0 0 15px rgba(220, 38, 38, 0.8);
 }
 
 .priority-ring {
@@ -127,6 +175,7 @@
   margin-bottom: 1rem;
   line-height: 1.6;
   font-family: 'Lora', serif;
+  flex: 1 1 auto;
 }
 
 .quest-card-dark-magic .quest-description {
@@ -158,6 +207,7 @@
   font-size: 0.9rem;
   color: var(--earth-brown-light);
   font-family: 'Lora', serif;
+  min-height: 1.5rem;
 }
 
 .quest-card-dark-magic .quest-meta {
@@ -185,20 +235,41 @@
 }
 
 .quest-actions {
-  display: flex;
-  gap: 0.5rem;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--quest-action-gap);
   margin-top: 1rem;
   padding-top: 1rem;
   border-top: 2px solid var(--earth-brown);
-  justify-content: center;
-  align-items: center;
-  flex-wrap: wrap;
+  align-items: stretch;
+  margin-top: auto;
 }
 
-.quest-actions .btn {
-  flex: 1;
-  min-width: 100px;
-  max-width: 150px;
+.quest-action-btn {
+  width: 100%;
+  height: var(--quest-action-min-height);
+  min-height: var(--quest-action-min-height);
+  display: inline-flex;
+  justify-content: center;
+  align-items: center;
+  text-align: center;
+  padding: 0.58rem 0.72rem;
+  font-size: 0.84rem;
+  line-height: 1.2;
+  letter-spacing: 0.2px;
+  text-transform: none;
+  white-space: normal;
+}
+
+.quest-action-btn-complete {
+  font-size: 0.78rem;
+  line-height: 1.15;
+  padding: 0.5rem 0.6rem;
+}
+
+.quest-action-spacer {
+  width: 100%;
+  min-height: var(--quest-action-min-height);
 }
 
 .quest-card-dark-magic .quest-actions {
@@ -206,11 +277,12 @@
 }
 
 .quest-status {
-  padding: 0.25rem 0.75rem;
-  border-radius: 12px;
+  display: inline-flex;
+  align-items: center;
   font-size: 0.85rem;
   font-weight: 600;
-  display: inline-block;
+  justify-content: center;
+  min-width: 12.5rem;
 }
 
 .quest-status-not_yet_begun,
@@ -238,6 +310,24 @@
 }
 
 .btn-sm {
-  padding: 0.5rem 1rem;
+  padding: 0.5rem 0.85rem;
   font-size: 0.9rem;
+}
+
+@media (max-width: 680px) {
+  .quest-badge-main-row {
+    flex-wrap: wrap;
+  }
+
+  .quest-status {
+    min-width: 0;
+  }
+
+  .quest-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .quest-action-spacer {
+    display: none;
+  }
 }

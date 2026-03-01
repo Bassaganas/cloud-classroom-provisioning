@@ -1,8 +1,8 @@
 """Tests for login functionality."""
 import pytest
 from playwright.sync_api import Page
-from playwright.page_objects.login_page import LoginPage
-from playwright.page_objects.dashboard_page import DashboardPage
+from tests.page_objects.login_page import LoginPage
+from tests.page_objects.dashboard_page import DashboardPage
 
 def test_valid_login(page: Page, base_url: str, test_credentials: dict):
     """Test successful login with valid credentials."""

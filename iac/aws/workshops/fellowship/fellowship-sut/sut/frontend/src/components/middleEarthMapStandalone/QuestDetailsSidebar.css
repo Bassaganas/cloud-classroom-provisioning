@@ -92,13 +92,54 @@
   flex-wrap: wrap;
 }
 
-#quest-status {
-  display: inline-block;
-  padding: 0.4rem 0.8rem;
-  border-radius: 4px;
-  color: white;
+.qds-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: var(--quest-chip-height);
+  padding: 0.35rem var(--quest-chip-padding-x);
+  border-radius: var(--quest-chip-radius);
   font-size: 0.85rem;
   font-weight: 600;
+  line-height: 1;
+}
+
+.qds-chip-icon {
+  font-size: 0.95em;
+  line-height: 1;
+}
+
+.qds-chip-label {
+  line-height: 1.2;
+}
+
+.qds-type-badge {
+  background: linear-gradient(135deg, var(--forest-green-light) 0%, var(--forest-green) 100%);
+  color: var(--parchment-light);
+}
+
+#quest-status {
+  color: #ffffff;
+}
+
+.qds-status-not_yet_begun,
+.qds-status-pending {
+  background: var(--status-not-yet-begun);
+}
+
+.qds-status-the_road_goes_ever_on,
+.qds-status-in_progress {
+  background: var(--status-road-goes-on);
+}
+
+.qds-status-it_is_done,
+.qds-status-completed {
+  background: var(--status-it-is-done);
+}
+
+.qds-status-the_shadow_falls,
+.qds-status-blocked {
+  background: var(--status-shadow-falls);
 }
 
 #quest-metadata {
@@ -155,4 +196,34 @@
   #quest-details-container {
     width: 100vw;
   }
+}
+
+#quest-actions {
+  margin-top: 1.25rem;
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--quest-action-gap);
+}
+
+.qds-action-btn {
+  width: 100%;
+  min-height: var(--quest-action-min-height);
+  padding: 0.6rem 0.9rem;
+  border-radius: 6px;
+  border: 2px solid var(--earth-brown);
+  background: linear-gradient(135deg, var(--gold) 0%, var(--gold-light) 100%);
+  color: var(--deep-blue);
+  cursor: pointer;
+  font-family: 'Cinzel', serif;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  transition: all 0.25s ease;
+  box-shadow: 0 4px 12px rgba(218, 165, 32, 0.35);
+}
+
+.qds-action-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(218, 165, 32, 0.45);
 }

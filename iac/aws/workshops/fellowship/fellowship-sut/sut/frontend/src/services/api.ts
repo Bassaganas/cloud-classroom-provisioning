@@ -1,9 +1,17 @@
 import axios, { AxiosInstance } from 'axios';
-import { User, Quest, Member, Location, LoginRequest, LoginResponse } from '../types';
+import {
+  User,
+  Quest,
+  Member,
+  Location,
+  LoginRequest,
+  LoginResponse,
+  NpcCharacter,
+  NpcChatResponse,
+} from '../types';
 
 // Determine API URL based on environment and current location
-// When accessing via Caddy (port 80), use relative path /api
-// When accessing directly via port 3000, use full URL through Caddy (port 80) or backend (port 5000)
+// Always route through Caddy proxy (port 80) for consistent CORS handling
 // Type declaration for webpack's process.env
 interface ProcessEnv {
   REACT_APP_API_URL?: string;
@@ -22,18 +30,21 @@ const getApiUrl = (): string => {
     return envUrl;
   }
   
-  // In browser, detect if we're accessing via port 3000 directly
+  // Detect if running in development mode (direct access to port 3000)
+  // vs production/test mode (accessed through Caddy on port 80)
   if (typeof window !== 'undefined') {
     const port = window.location.port;
+    const hostname = window.location.hostname;
     
-    // If accessing via port 3000, use Caddy on port 80 (or backend on 5000)
+    // If accessed directly on port 3000, route API calls through Caddy on port 80
+    // Otherwise use relative path which works through Caddy proxy
     if (port === '3000') {
-      // Use Caddy proxy on port 80 (recommended) or backend directly on 5000
-      return `${window.location.protocol}//${window.location.hostname}/api`;
+      return `http://${hostname}/api`;
     }
   }
   
-  // Default: use relative path (works when accessing through Caddy on port 80)
+  // Default: use relative path /api
+  // This works when accessed via Caddy on port 80 (production/tests)
   return envUrl || '/api';
 };
 
@@ -134,6 +145,27 @@ class ApiService {
 
   async getLocation(id: number): Promise<Location> {
     const response = await this.api.get<Location>(`/locations/${id}`);
+    return response.data;
+  }
+
+  // NPC Chat
+  async startNpcChat(character: NpcCharacter): Promise<NpcChatResponse> {
+    const response = await this.api.post<NpcChatResponse>('/chat/start', { character });
+    return response.data;
+  }
+
+  async sendNpcMessage(character: NpcCharacter, message: string): Promise<NpcChatResponse> {
+    const response = await this.api.post<NpcChatResponse>('/chat/message', { character, message });
+    return response.data;
+  }
+
+  async getNpcChatSession(character: NpcCharacter): Promise<NpcChatResponse> {
+    const response = await this.api.get<NpcChatResponse>(`/chat/session?character=${character}`);
+    return response.data;
+  }
+
+  async resetNpcChat(character: NpcCharacter): Promise<NpcChatResponse> {
+    const response = await this.api.post<NpcChatResponse>('/chat/reset', { character });
     return response.data;
   }
 }

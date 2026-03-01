@@ -174,14 +174,14 @@ function QuestMarkersComponent({
   onCompleteQuest?: (questId: number) => void;
 }) {
   const map = useMap();
-  const layerGroupRef = useRef<L.LayerGroup | null>(null);
+  const clusterGroupRef = useRef<any>(null);
 
   // Group quests by location for offset calculation
   // Filter out quests without location_id
   const questsByLocation = useMemo(() => {
     const questsWithLocations = quests.filter(quest => quest.location_id);
-    if (quests.length > questsWithLocations.length) {
-      console.warn(`Warning: ${quests.length - questsWithLocations.length} quest(s) without location_id will not be displayed on the map.`);
+    if (quests.length > 0 && questsWithLocations.length < quests.length) {
+      console.warn(`⚠ ${quests.length - questsWithLocations.length} quest(s) of ${quests.length} total without location_id will not be displayed on the map.`);
     }
     return questsWithLocations.reduce((acc, quest) => {
       if (quest.location_id) {
@@ -232,18 +232,34 @@ function QuestMarkersComponent({
           setTimeout(tryAddMarkers, 100);
           return;
         } else {
-          console.warn('Map not ready after max retries, adding markers anyway');
+          console.warn('⚠ Map not ready after max retries, adding markers anyway');
         }
       }
 
-      // Remove existing layer group if it exists
-      if (layerGroupRef.current) {
-        map.removeLayer(layerGroupRef.current);
-        layerGroupRef.current = null;
+      // Remove existing cluster group if it exists
+      if (clusterGroupRef.current) {
+        map.removeLayer(clusterGroupRef.current);
+        clusterGroupRef.current = null;
       }
 
-      // Create a new layer group for quest markers (ensures they render on top)
-      const questLayerGroup = L.layerGroup();
+      // Create cluster group with custom icon function for quest markers
+      // @ts-ignore - markerClusterGroup is added by leaflet.markercluster plugin
+      const questClusterGroup = L.markerClusterGroup({
+        maxClusterRadius: 50,
+        spiderfyOnMaxZoom: true,
+        showCoverageOnHover: false,
+        zoomToBoundsOnClick: true,
+        // Custom cluster icon for quests
+        iconCreateFunction: (cluster: { getChildCount: () => number }) => {
+          const count = cluster.getChildCount();
+          const size = count < 10 ? 'small' : count < 50 ? 'medium' : 'large';
+          return L.divIcon({
+            html: `<div class="quest-marker-cluster quest-marker-cluster-${size}"><span>${count}</span></div>`,
+            className: 'quest-marker-cluster-icon',
+            iconSize: size === 'small' ? [35, 35] : size === 'medium' ? [45, 45] : [55, 55]
+          });
+        }
+      });
       
       // Add markers for quests with locations
       Object.entries(questsByLocation).forEach(([locationIdStr, locationQuests]) => {
@@ -254,161 +270,104 @@ function QuestMarkersComponent({
           const [baseLat, baseLng] = convertToLatLng(location.map_x, location.map_y);
           
           locationQuests.forEach((quest, index) => {
-          // Calculate offset for this quest
-          const [offsetY, offsetX] = getQuestOffset(index, locationQuests.length);
-          const [lat, lng] = [baseLat + offsetY, baseLng + offsetX];
-          const isSelected = selectedQuestId === quest.id;
-          
-          // Create quest marker icon (slightly larger for better visibility)
-          const questIcon = L.divIcon({
-            className: 'quest-marker-icon',
-            html: `
-              <div class="quest-marker ${isSelected ? 'quest-marker-selected' : ''}" 
-                   style="background-color: ${isSelected ? '#DAA520' : '#8B4513'}; pointer-events: auto;"
-                   data-quest-id="${quest.id}"
-                   data-quest-title="${quest.title.replace(/"/g, '&quot;')}">
-                <div class="quest-marker-inner">${getQuestTypeIcon(quest.quest_type)}</div>
-              </div>
-            `,
-            iconSize: [35, 35],
-            iconAnchor: [17, 17],
-            popupAnchor: [0, -17]
-          });
+            // Calculate offset for this quest
+            const [offsetY, offsetX] = getQuestOffset(index, locationQuests.length);
+            const [lat, lng] = [baseLat + offsetY, baseLng + offsetX];
+            const isSelected = selectedQuestId === quest.id;
+            
+            // Create quest marker icon (slightly larger for better visibility)
+            const questIcon = L.divIcon({
+              className: 'quest-marker-icon',
+              html: `
+                <div class="quest-marker ${isSelected ? 'quest-marker-selected' : ''}" 
+                     style="background-color: ${isSelected ? '#DAA520' : '#8B4513'}; pointer-events: auto;"
+                     data-quest-id="${quest.id}"
+                     data-quest-title="${quest.title.replace(/"/g, '&quot;')}">
+                  <div class="quest-marker-inner">${getQuestTypeIcon(quest.quest_type)}</div>
+                </div>
+              `,
+              iconSize: [35, 35],
+              iconAnchor: [17, 17],
+              popupAnchor: [0, -17]
+            });
 
-          const marker = L.marker([lat, lng], { 
-            icon: questIcon,
-            zIndexOffset: 2000, // Ensure quest markers appear above location markers
-            interactive: true, // Explicitly make marker interactive
-            keyboard: true, // Enable keyboard navigation
-            title: quest.title, // Tooltip on hover
-            riseOnHover: true, // Raise marker on hover
-            bubblingMouseEvents: false // Prevent event bubbling to map
-          });
+            const marker = L.marker([lat, lng], { 
+              icon: questIcon,
+              interactive: true,
+              keyboard: true,
+              title: quest.title,
+              riseOnHover: true,
+              bubblingMouseEvents: false
+            });
 
-          // Add popup with full quest info
-          const location = locations.find(loc => loc.id === quest.location_id);
-          const popupContent = `
-            <div class="quest-popup">
-              <h4>${quest.title}</h4>
-              ${quest.quest_type ? `<p class="quest-popup-type"><strong>${getQuestTypeIcon(quest.quest_type)} ${quest.quest_type}</strong>${quest.priority ? ` - ${quest.priority}` : ''}</p>` : ''}
-              <p class="quest-popup-status">${getStatusText(quest.status)}</p>
-              ${quest.description ? `<p class="quest-popup-description">${quest.description}</p>` : ''}
-              ${location ? `<p class="quest-popup-location">📍 ${location.name}, ${location.region}</p>` : ''}
-              ${quest.assignee_name ? `<p class="quest-popup-assignee">👤 Assigned to: ${quest.assignee_name}</p>` : ''}
-              <div class="quest-popup-actions">
-                <button class="btn-view-quest" onclick="window.questClickHandler && window.questClickHandler(${quest.id})">
-                  View Quest
-                </button>
-                ${quest.status !== 'it_is_done' && quest.status !== 'completed' ? `
-                  <button class="btn-complete-quest" onclick="window.completeQuestHandler && window.completeQuestHandler(${quest.id})">
-                    Complete Quest
+            // Add popup with full quest info
+            const locationName = locations.find(loc => loc.id === quest.location_id)?.name || 'Unknown';
+            const popupContent = `
+              <div class="quest-popup">
+                <h4>${quest.title}</h4>
+                ${quest.quest_type ? `<p class="quest-popup-type"><strong>${getQuestTypeIcon(quest.quest_type)} ${quest.quest_type}</strong>${quest.priority ? ` - ${quest.priority}` : ''}</p>` : ''}
+                <p class="quest-popup-status">${getStatusText(quest.status)}</p>
+                ${quest.description ? `<p class="quest-popup-description">${quest.description}</p>` : ''}
+                ${locationName ? `<p class="quest-popup-location">📍 ${locationName}</p>` : ''}
+                ${quest.assignee_name ? `<p class="quest-popup-assignee">👤 Assigned to: ${quest.assignee_name}</p>` : ''}
+                <div class="quest-popup-actions">
+                  <button class="btn-view-quest" onclick="window.questClickHandler && window.questClickHandler(${quest.id})">
+                    View Quest
                   </button>
-                ` : ''}
+                  ${quest.status !== 'it_is_done' && quest.status !== 'completed' ? `
+                    <button class="btn-complete-quest" onclick="window.completeQuestHandler && window.completeQuestHandler(${quest.id})">
+                      Complete Quest
+                    </button>
+                  ` : ''}
+                </div>
               </div>
-            </div>
-          `;
-          marker.bindPopup(popupContent, {
-            maxWidth: 350,
-            className: 'quest-popup-wrapper',
-            autoPan: true, // Auto-pan map to show popup
-            autoPanPadding: [50, 50], // Padding around popup
-            closeOnClick: false, // Don't close on map click
-            autoClose: false, // Don't auto-close when another popup opens
-            keepInView: true // Keep popup in view when panning
-          });
+            `;
+            marker.bindPopup(popupContent, {
+              maxWidth: 350,
+              className: 'quest-popup-wrapper',
+              autoPan: true,
+              autoPanPadding: [50, 50],
+              closeOnClick: false,
+              autoClose: false,
+              keepInView: true
+            });
 
-          // Add multiple event handlers for better interactivity
-          marker.on('click', (e) => {
-            // Stop event propagation to prevent map click
-            if (e.originalEvent) {
-              e.originalEvent.stopPropagation();
-              e.originalEvent.stopImmediatePropagation();
-            }
-            // Open popup immediately
-            marker.openPopup();
-            // Call callback if provided
-            if (onQuestClick) {
-              onQuestClick(quest.id);
-            }
-          });
+            // Click handler
+            marker.on('click', (e) => {
+              if (e.originalEvent) {
+                e.originalEvent.stopPropagation();
+                e.originalEvent.stopImmediatePropagation();
+              }
+              marker.openPopup();
+              if (onQuestClick) {
+                onQuestClick(quest.id);
+              }
+            });
 
-          // Add hover effects for better UX
-          marker.on('mouseover', () => {
-            marker.setZIndexOffset(3000); // Raise on hover
-          });
+            // Hover effects
+            marker.on('mouseover', () => {
+              const icon = getMarkerIcon(marker);
+              if (icon) {
+                icon.style.zIndex = '3000';
+              }
+            });
 
-          marker.on('mouseout', () => {
-            marker.setZIndexOffset(2000); // Reset z-index
-          });
+            marker.on('mouseout', () => {
+              const icon = getMarkerIcon(marker);
+              if (icon) {
+                icon.style.zIndex = '2000';
+              }
+            });
 
-          // Ensure marker is clickable
-          marker.options.interactive = true;
-          
-          // Add marker to layer group
-          questLayerGroup.addLayer(marker);
-          
-          // After marker is added, ensure icon is clickable
-          marker.on('add', () => {
-            const iconElement = getMarkerIcon(marker);
-            if (iconElement) {
-              iconElement.style.pointerEvents = 'auto';
-              iconElement.style.cursor = 'pointer';
-              iconElement.setAttribute('data-quest-id', quest.id.toString());
-              iconElement.setAttribute('data-quest-title', quest.title);
-            }
-          });
-          
-          // Also set immediately if icon already exists
-          setTimeout(() => {
-            const iconElement = getMarkerIcon(marker);
-            if (iconElement) {
-              iconElement.style.pointerEvents = 'auto';
-              iconElement.style.cursor = 'pointer';
-            }
-          }, 100);
+            // Add marker to cluster group
+            questClusterGroup.addLayer(marker);
           });
         }
       });
 
-      // Add layer group to map (this ensures quest markers render on top)
-      // Add quest markers after location markers to ensure they're on top
-      questLayerGroup.addTo(map);
-      layerGroupRef.current = questLayerGroup;
-      
-      // Ensure all markers in the group are interactive
-      let interactiveCount = 0;
-      questLayerGroup.eachLayer((layer) => {
-        if (layer instanceof L.Marker) {
-          layer.options.interactive = true;
-          interactiveCount++;
-          // Force marker to be clickable - use setTimeout to ensure icon is rendered
-          setTimeout(() => {
-            const iconElement = getMarkerIcon(layer);
-            if (iconElement) {
-              iconElement.style.pointerEvents = 'auto';
-              iconElement.style.cursor = 'pointer';
-              // Also set on child elements
-              const children = iconElement.querySelectorAll('*');
-              children.forEach((child) => {
-                if (child instanceof HTMLElement) {
-                  child.style.pointerEvents = 'auto';
-                  child.style.cursor = 'pointer';
-                }
-              });
-            }
-          }, 50);
-        }
-      });
-      
-      // Debug: Log marker count and details
-      const markerCount = Object.values(questsByLocation).flat().length;
-      if (markerCount > 0) {
-        console.log(`✓ Added ${markerCount} quest markers to map (${interactiveCount} interactive)`);
-        console.log(`  Quest locations: ${Object.keys(questsByLocation).join(', ')}`);
-      } else {
-        console.warn('⚠ No quest markers to display - ensure quests have location_id');
-        console.warn(`  Total quests: ${quests.length}, Quests with locations: ${quests.filter(q => q.location_id).length}`);
-      }
+      // Add cluster group to map
+      questClusterGroup.addTo(map);
+      clusterGroupRef.current = questClusterGroup;
 
       // Store click handlers globally for popup buttons
       if (onQuestClick) {
@@ -417,6 +376,21 @@ function QuestMarkersComponent({
       if (onCompleteQuest) {
         (window as any).completeQuestHandler = onCompleteQuest;
       }
+
+      // Debug: Log marker count and details
+      const markerCount = Object.values(questsByLocation).flat().length;
+      const totalQuestCount = quests.length;
+      const questsWithLocationCount = quests.filter(q => q.location_id).length;
+      
+      if (markerCount > 0) {
+        console.log(`✓ Quest Markers: Added ${markerCount} clustered quest markers (${totalQuestCount} total quests, ${questsWithLocationCount} with locations)`);
+        console.log(`  Quest locations: ${Object.keys(questsByLocation).join(', ')}`);
+      } else if (totalQuestCount > 0) {
+        console.warn(`⚠ No quest markers displayed: ${totalQuestCount} total quests found, but only ${questsWithLocationCount} have location_id`);
+        console.warn(`  Ensure all quests have a valid location_id assigned`);
+      } else {
+        console.debug('ℹ No quests to display on map');
+      }
     };
 
     // Start the retry mechanism
@@ -424,9 +398,9 @@ function QuestMarkersComponent({
 
     // Cleanup
     return () => {
-      if (layerGroupRef.current) {
-        map.removeLayer(layerGroupRef.current);
-        layerGroupRef.current = null;
+      if (clusterGroupRef.current) {
+        map.removeLayer(clusterGroupRef.current);
+        clusterGroupRef.current = null;
       }
       delete (window as any).questClickHandler;
       delete (window as any).completeQuestHandler;

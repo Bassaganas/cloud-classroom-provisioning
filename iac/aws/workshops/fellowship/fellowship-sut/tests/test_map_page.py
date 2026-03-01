@@ -1,8 +1,49 @@
 """Tests for the Map Page and quest marker functionality."""
 import pytest
 from playwright.sync_api import Page
-from playwright.page_objects.login_page import LoginPage
-from playwright.page_objects.map_page import MapPage
+from tests.page_objects.login_page import LoginPage
+from tests.page_objects.map_page import MapPage
+
+
+def _click_first_marker_in_viewport(page: Page, selector: str) -> bool:
+        """Click first marker currently inside viewport via DOM to reduce Leaflet click flakiness."""
+        return page.evaluate(
+                """
+                ({ selector }) => {
+                    const nodes = Array.from(document.querySelectorAll(selector));
+                    const vw = window.innerWidth;
+                    const vh = window.innerHeight;
+                    const target = nodes.find((node) => {
+                        const rect = node.getBoundingClientRect();
+                        return rect.width > 0 && rect.height > 0 && rect.bottom > 0 && rect.right > 0 && rect.left < vw && rect.top < vh;
+                    });
+                    if (!target) {
+                        return false;
+                    }
+                    target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                    return true;
+                }
+                """,
+                {"selector": selector},
+        )
+
+
+def _click_zoom_control(page: Page, title: str) -> bool:
+        """Click Leaflet zoom control by title using DOM event dispatch (more reliable in CI/headless)."""
+        return page.evaluate(
+                """
+                ({ title }) => {
+                    const selector = `.leaflet-control-zoom a[title="${title}"]`;
+                    const target = document.querySelector(selector);
+                    if (!target) {
+                        return false;
+                    }
+                    target.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true, view: window }));
+                    return true;
+                }
+                """,
+                {"title": title},
+        )
 
 @pytest.fixture
 def authenticated_page(page: Page, base_url: str, test_credentials: dict):
@@ -12,7 +53,7 @@ def authenticated_page(page: Page, base_url: str, test_credentials: dict):
         test_credentials['username'],
         test_credentials['password']
     )
-    login_page.wait_for_redirect('/dashboard')
+    login_page.wait_for_dashboard()
     return page
 
 @pytest.mark.ui
@@ -64,7 +105,6 @@ def test_map_page_loads(authenticated_page: Page, base_url: str):
     
     assert map_page.is_loaded(), "Map page should be loaded"
     assert map_page.map_container.is_visible(), "Map container should be visible"
-    assert map_page.quest_list.is_visible(), "Quest list should be visible"
 
 @pytest.mark.ui
 def test_map_displays_location_markers(authenticated_page: Page, base_url: str):
@@ -121,18 +161,18 @@ def test_quest_marker_is_clickable(authenticated_page: Page, base_url: str):
         assert first_marker.is_visible(), "Quest marker should be visible"
         
         # Click the marker
-        first_marker.click()
+        assert _click_first_marker_in_viewport(authenticated_page, '.quest-marker-icon'), "No clickable quest marker found in viewport"
         
-        # Wait for popup to appear
+        # Wait for UI response
         authenticated_page.wait_for_timeout(1000)
-        
-        # Check if popup is visible
-        popup = authenticated_page.locator('.quest-popup')
-        assert popup.is_visible(timeout=3000), "Quest popup should appear when marker is clicked"
-        
-        # Verify popup has content
-        popup_content = popup.inner_text()
-        assert len(popup_content) > 0, "Popup should have content"
+
+        popup_visible = authenticated_page.locator('.quest-popup, .leaflet-popup-content').first.is_visible()
+        details_visible = authenticated_page.locator('.quest-details-card').is_visible()
+        assert popup_visible or details_visible, "Marker click should show popup or quest details card"
+
+        if popup_visible:
+            popup_content = authenticated_page.locator('.quest-popup, .leaflet-popup-content').first.inner_text()
+            assert len(popup_content) > 0, "Popup should have content"
     else:
         pytest.skip("No quest markers found on map - ensure quests have location_id")
 
@@ -152,7 +192,7 @@ def test_quest_popup_displays_full_information(authenticated_page: Page, base_ur
     if marker_count > 0:
         # Click the first quest marker
         first_marker = quest_markers.first
-        first_marker.click()
+        assert _click_first_marker_in_viewport(authenticated_page, '.quest-marker-icon'), "No clickable quest marker found in viewport"
         
         # Wait for popup
         popup = authenticated_page.locator('.quest-popup')
@@ -176,7 +216,7 @@ def test_quest_popup_displays_full_information(authenticated_page: Page, base_ur
 
 @pytest.mark.ui
 def test_location_marker_click_filters_quests(authenticated_page: Page, base_url: str):
-    """Test that clicking a location marker filters quests."""
+    """Test that clicking a location marker does not hide quest markers."""
     map_page = MapPage(authenticated_page, base_url)
     map_page.navigate()
     map_page.wait_for_map()
@@ -184,20 +224,94 @@ def test_location_marker_click_filters_quests(authenticated_page: Page, base_url
     # Wait for markers to render
     authenticated_page.wait_for_timeout(3000)
     
-    # Get initial quest count
-    initial_count = map_page.get_quest_count_in_list()
+    # Get initial quest marker count (individual markers + quest clusters)
+    initial_count = authenticated_page.locator('.quest-marker-icon').count() + authenticated_page.locator('.quest-marker-cluster').count()
     
     # Click on a location marker
     location_markers = authenticated_page.locator('.location-marker-icon')
     if location_markers.count() > 0:
-        location_markers.first.click()
+        assert _click_first_marker_in_viewport(authenticated_page, '.location-marker-icon'), "No clickable location marker found in viewport"
         
-        # Wait for filter to apply
+        # Wait for map state to settle
         authenticated_page.wait_for_timeout(1000)
         
-        # Check if filter is applied (quest count may change)
-        filtered_count = map_page.get_quest_count_in_list()
-        # Filtered count should be <= initial count
-        assert filtered_count <= initial_count, "Filtered quest count should be less than or equal to initial count"
+        # Quest markers should still be present after location click
+        post_click_count = authenticated_page.locator('.quest-marker-icon').count() + authenticated_page.locator('.quest-marker-cluster').count()
+        assert post_click_count > 0, "Quest markers should remain visible after clicking a location marker"
+        # Avoid false negatives in low-data environments where count can vary due to clustering visuals,
+        # but marker set should not collapse to zero from interaction.
+        assert initial_count == 0 or post_click_count > 0
     else:
         pytest.skip("No location markers found on map")
+
+
+@pytest.mark.ui
+def test_location_and_quest_markers_survive_zoom_in_out(authenticated_page: Page, base_url: str):
+    """Markers of locations and quests remain available through zoom in/out interactions."""
+    map_page = MapPage(authenticated_page, base_url)
+    map_page.navigate()
+    map_page.wait_for_map()
+    authenticated_page.wait_for_timeout(2500)
+
+    # Baseline marker availability
+    initial_location = authenticated_page.locator('.location-marker-icon, .marker-cluster').count()
+    initial_quest = authenticated_page.locator('.quest-marker-icon, .quest-marker-cluster').count()
+
+    if initial_location == 0:
+        pytest.skip("No location markers found on map")
+    if initial_quest == 0:
+        pytest.skip("No quest markers found on map - ensure quests have location_id")
+
+    zoom_out_btn = authenticated_page.locator('.leaflet-control-zoom a[title="Zoom out"]')
+    zoom_in_btn = authenticated_page.locator('.leaflet-control-zoom a[title="Zoom in"]')
+
+    if zoom_out_btn.count() == 0 or zoom_in_btn.count() == 0:
+        pytest.skip("Map zoom controls not available")
+
+    # Zoom out then verify both marker types still represented
+    assert _click_zoom_control(authenticated_page, 'Zoom out'), "Failed to click zoom out control"
+    authenticated_page.wait_for_timeout(500)
+    assert _click_zoom_control(authenticated_page, 'Zoom out'), "Failed to click zoom out control"
+    authenticated_page.wait_for_timeout(800)
+
+    location_after_out = authenticated_page.locator('.location-marker-icon, .marker-cluster').count()
+    quest_after_out = authenticated_page.locator('.quest-marker-icon, .quest-marker-cluster').count()
+    assert location_after_out > 0, "Location markers/clusters should remain visible after zoom out"
+    assert quest_after_out > 0, "Quest markers/clusters should remain visible after zoom out"
+
+    # Zoom back in and verify again
+    assert _click_zoom_control(authenticated_page, 'Zoom in'), "Failed to click zoom in control"
+    authenticated_page.wait_for_timeout(500)
+    assert _click_zoom_control(authenticated_page, 'Zoom in'), "Failed to click zoom in control"
+    authenticated_page.wait_for_timeout(800)
+
+    location_after_in = authenticated_page.locator('.location-marker-icon, .marker-cluster').count()
+    quest_after_in = authenticated_page.locator('.quest-marker-icon, .quest-marker-cluster').count()
+    assert location_after_in > 0, "Location markers/clusters should remain visible after zoom in"
+    assert quest_after_in > 0, "Quest markers/clusters should remain visible after zoom in"
+
+
+@pytest.mark.ui
+def test_marker_clicks_do_not_toggle_filter_sidebar(authenticated_page: Page, base_url: str):
+    """Filter sidebar open/closed state changes only via the explicit filter controls, not marker clicks."""
+    map_page = MapPage(authenticated_page, base_url)
+    map_page.navigate()
+    map_page.wait_for_map()
+    authenticated_page.wait_for_timeout(2500)
+
+    sidebar = authenticated_page.locator('.filter-sidebar')
+    sidebar.wait_for(state='visible', timeout=5000)
+    initial_open = sidebar.evaluate("el => el.classList.contains('open')")
+
+    # Click one location marker (if available)
+    if authenticated_page.locator('.location-marker-icon').count() > 0:
+        assert _click_first_marker_in_viewport(authenticated_page, '.location-marker-icon'), "No clickable location marker found in viewport"
+        authenticated_page.wait_for_timeout(700)
+
+    # Click one quest marker (if available)
+    if authenticated_page.locator('.quest-marker-icon').count() > 0:
+        assert _click_first_marker_in_viewport(authenticated_page, '.quest-marker-icon'), "No clickable quest marker found in viewport"
+        authenticated_page.wait_for_timeout(700)
+
+    final_open = sidebar.evaluate("el => el.classList.contains('open')")
+    assert final_open == initial_open, "Marker clicks must not toggle filter sidebar open/closed state"

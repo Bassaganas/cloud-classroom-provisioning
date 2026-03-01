@@ -29,6 +29,14 @@ class Config:
     RESTX_VALIDATE = True
     RESTX_ERROR_404_HELP = False
 
+    # Azure OpenAI configuration (server-side only)
+    AZURE_OPENAI_ENDPOINT = os.environ.get('AZURE_OPENAI_ENDPOINT', '').strip()
+    AZURE_OPENAI_API_KEY = os.environ.get('AZURE_OPENAI_API_KEY', '').strip()
+    AZURE_OPENAI_DEPLOYMENT = os.environ.get('AZURE_OPENAI_DEPLOYMENT', '').strip()
+    AZURE_OPENAI_API_VERSION = os.environ.get('AZURE_OPENAI_API_VERSION', '2024-02-15-preview').strip()
+    AZURE_OPENAI_MAX_TOKENS = int(os.environ.get('AZURE_OPENAI_MAX_TOKENS', '220'))
+    AZURE_OPENAI_TEMPERATURE = float(os.environ.get('AZURE_OPENAI_TEMPERATURE', '0.85'))
+
 class DevelopmentConfig(Config):
     """Development configuration."""
     DEBUG = True

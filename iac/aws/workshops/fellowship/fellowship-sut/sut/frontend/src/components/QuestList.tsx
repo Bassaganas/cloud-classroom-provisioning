@@ -1,7 +1,10 @@
 import React from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Quest } from '../types';
-import './QuestList.css';
+import { Card } from './ui/Card';
+import { Button } from './ui/Button';
+import { Badge } from './ui/Badge';
+import { motion } from 'framer-motion';
 
 interface QuestListProps {
   quests: Quest[];
@@ -39,14 +42,29 @@ const getQuestTypeIcon = (questType?: string): string => {
   return iconMap[questType || ''] || '📜';
 };
 
-// Helper function to get priority ring color
-const getPriorityClass = (priority?: string): string => {
-  const priorityMap: { [key: string]: string } = {
-    'Critical': 'priority-critical',
-    'Important': 'priority-important',
-    'Standard': 'priority-standard'
+// Helper function to get priority badge variant
+const getPriorityVariant = (priority?: string): 'critical' | 'important' | 'standard' => {
+  const priorityMap: { [key: string]: 'critical' | 'important' | 'standard' } = {
+    'Critical': 'critical',
+    'Important': 'important',
+    'Standard': 'standard'
   };
-  return priorityMap[priority || ''] || '';
+  return priorityMap[priority || ''] || 'standard';
+};
+
+// Helper function to get status badge variant
+const getStatusVariant = (status: string): 'ready' | 'inprogress' | 'blocked' | 'pending' => {
+  const statusMap: { [key: string]: 'ready' | 'inprogress' | 'blocked' | 'pending' } = {
+    'it_is_done': 'ready',
+    'the_road_goes_ever_on': 'inprogress',
+    'the_shadow_falls': 'blocked',
+    'not_yet_begun': 'pending',
+    'completed': 'ready',
+    'in_progress': 'inprogress',
+    'blocked': 'blocked',
+    'pending': 'pending'
+  };
+  return statusMap[status] || 'pending';
 };
 
 const QuestList: React.FC<QuestListProps> = ({ quests, onEdit, onDelete, onComplete, onLocationClick }) => {
@@ -62,97 +80,143 @@ const QuestList: React.FC<QuestListProps> = ({ quests, onEdit, onDelete, onCompl
 
   if (quests.length === 0) {
     return (
-      <div className="quest-list-empty">
-        <p>No quests found. Propose your first quest to begin the journey!</p>
+      <div className="text-center py-12">
+        <p className="text-lg sm:text-2xl text-text-secondary font-readable px-4">
+          No quests found. Propose your first quest to begin the journey! 📜
+        </p>
       </div>
     );
   }
 
+  const containerVariants = {
+    hidden: { opacity: 0 },
+    visible: {
+      opacity: 1,
+      transition: {
+        staggerChildren: 0.1,
+      },
+    },
+  };
+
+  const itemVariants = {
+    hidden: { opacity: 0, y: 20 },
+    visible: {
+      opacity: 1,
+      y: 0,
+      transition: { duration: 0.5, ease: 'easeOut' },
+    },
+  };
+
   return (
-    <div className="quest-list">
-      {quests.map((quest) => {
-        const isDarkMagic = quest.is_dark_magic;
-        const cardClass = `quest-card ${isDarkMagic ? 'quest-card-dark-magic' : ''}`;
-        
-        return (
-          <div key={quest.id} className={cardClass}>
-            <div className="quest-card-header">
-              <div className="quest-title-row">
-                <h3>{quest.title}</h3>
+    <motion.div
+      variants={containerVariants}
+      initial="hidden"
+      animate="visible"
+      className="grid grid-cols-1 lg:grid-cols-2 gap-4"
+    >
+      {quests.map((quest) => (
+        <motion.div key={quest.id} variants={itemVariants}>
+          <Card
+            variant={quest.is_dark_magic ? 'dark' : 'parchment'}
+            className="hover:shadow-lg transition-shadow"
+          >
+            <div className="space-y-3 sm:space-y-4 min-w-0">
+              {/* Header with Title and Priority */}
+              <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 sm:gap-4 min-w-0">
+                <div className="flex-1 min-w-0">
+                  <h3 className="font-epic text-lg sm:text-xl text-forest-dark mb-2 break-words">
+                    {getQuestTypeIcon(quest.quest_type)} {quest.title}
+                  </h3>
+                  <p className="font-readable text-text-secondary text-sm break-words line-clamp-3">{quest.description}</p>
+                </div>
                 {quest.priority && (
-                  <span className={`priority-ring ${getPriorityClass(quest.priority)}`} title={quest.priority}>
-                    {quest.priority === 'Critical' ? '🔴' : quest.priority === 'Important' ? '🟡' : '⚪'}
-                  </span>
+                  <div className="flex-shrink-0 self-start">
+                    <Badge variant={getPriorityVariant(quest.priority)}>
+                      {quest.priority === 'Critical' ? '🔴' : quest.priority === 'Important' ? '🟡' : '⚪'} {quest.priority}
+                    </Badge>
+                  </div>
                 )}
               </div>
-              <div className="quest-badges">
+
+              {/* Status and Type Badges */}
+              <div className="flex gap-2 flex-wrap items-center">
                 {quest.quest_type && (
-                  <span className="quest-type-badge" title={quest.quest_type}>
-                    {getQuestTypeIcon(quest.quest_type)} {quest.quest_type}
-                  </span>
+                  <Badge variant="standard" className="text-xs">
+                    {quest.quest_type}
+                  </Badge>
                 )}
-                {isDarkMagic && (
-                  <span className="dark-magic-badge" title="Dark Magic">
-                    👁️ Dark Magic
-                  </span>
-                )}
-                <span className={`quest-status quest-status-${quest.status}`}>
+                <Badge variant={getStatusVariant(quest.status)}>
                   {getStatusText(quest.status)}
-                </span>
+                </Badge>
+                {quest.is_dark_magic && (
+                  <Badge variant="critical" className="text-xs">
+                    👁️ Dark Magic
+                  </Badge>
+                )}
               </div>
-            </div>
-            <p className="quest-description">{quest.description}</p>
-            {quest.character_quote && quest.status === 'it_is_done' && (
-              <div className="character-quote">
-                <em>"{quest.character_quote}"</em>
-              </div>
-            )}
-            <div className="quest-meta">
-              {quest.location_name && quest.location_id && (
-                <span 
-                  className="quest-meta-item quest-location-clickable" 
-                  onClick={() => handleLocationClick(quest.location_id!)}
-                  title="Click to view on map"
-                >
-                  📍 {quest.location_name}
-                </span>
+
+              {/* Character Quote (if completed) */}
+              {quest.character_quote && (quest.status === 'it_is_done' || quest.status === 'completed') && (
+                <div className="p-3 bg-forest/10 rounded border-l-4 border-gold">
+                  <em className="text-sm text-text-secondary block break-words line-clamp-3">
+                    "{quest.character_quote}"
+                  </em>
+                </div>
               )}
-              {quest.assignee_name && (
-                <span className="quest-meta-item">👤 {quest.assignee_name}</span>
-              )}
-            </div>
-            {(onEdit || onDelete || onComplete) && (
-              <div className="quest-actions">
-                {onComplete && quest.status !== 'it_is_done' && quest.status !== 'completed' && (
+
+              {/* Meta Information */}
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs sm:text-sm text-text-secondary">
+                {quest.location_name && quest.location_id && (
                   <button
-                    className="btn btn-primary btn-sm"
-                    onClick={() => onComplete(quest.id)}
+                    className="text-left hover:text-gold transition-colors cursor-pointer break-words"
+                    onClick={() => handleLocationClick(quest.location_id!)}
+                    title="Click to view on map"
                   >
-                    Mark Complete
+                    📍 {quest.location_name}
                   </button>
                 )}
-                {onEdit && (
-                  <button
-                    className="btn btn-secondary btn-sm"
-                    onClick={() => onEdit(quest)}
-                  >
-                    Revise Quest
-                  </button>
-                )}
-                {onDelete && (
-                  <button
-                    className="btn btn-danger btn-sm"
-                    onClick={() => onDelete(quest.id)}
-                  >
-                    Abandon Quest
-                  </button>
+                {quest.assignee_name && (
+                  <div className="break-words">👤 {quest.assignee_name}</div>
                 )}
               </div>
-            )}
-          </div>
-        );
-      })}
-    </div>
+
+              {/* Action Buttons */}
+              {(onEdit || onDelete || onComplete) && (
+                <div className="flex flex-col sm:flex-row gap-2 pt-4 border-t border-text-secondary/20">
+                  {onComplete && quest.status !== 'it_is_done' && quest.status !== 'completed' && (
+                    <Button
+                      variant="epic"
+                      className="text-sm w-full sm:flex-1"
+                      onClick={() => onComplete(quest.id)}
+                    >
+                      ✓ Complete Quest
+                    </Button>
+                  )}
+                  {onEdit && (
+                    <Button
+                      variant="secondary"
+                      className="text-sm w-full sm:flex-1"
+                      onClick={() => onEdit(quest)}
+                    >
+                      ✏️ Revise
+                    </Button>
+                  )}
+                  {onDelete && (
+                    <Button
+                      variant="danger"
+                      className="text-sm w-full sm:flex-1"
+                      onClick={() => onDelete(quest.id)}
+                    >
+                      ✕ Abandon
+                    </Button>
+                  )}
+                </div>
+              )}
+            </div>
+          </Card>
+        </motion.div>
+      ))}
+    </motion.div>
   );
 };
 

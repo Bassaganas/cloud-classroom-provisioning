@@ -13,6 +13,39 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
 }
 
+IMDS_BASE_URL="http://169.254.169.254/latest"
+IMDS_TOKEN=""
+
+get_imds_token() {
+    if [ -n "$IMDS_TOKEN" ]; then
+        echo "$IMDS_TOKEN"
+        return 0
+    fi
+
+    IMDS_TOKEN=$(curl -s --max-time 5 --connect-timeout 2 -X PUT "${IMDS_BASE_URL}/api/token" \
+        -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null || echo "")
+
+    if [ -n "$IMDS_TOKEN" ]; then
+        echo "$IMDS_TOKEN"
+        return 0
+    fi
+
+    return 1
+}
+
+get_instance_metadata() {
+    local path="$1"
+    local token
+    token=$(get_imds_token 2>/dev/null || echo "")
+
+    if [ -n "$token" ]; then
+        curl -s --max-time 5 --connect-timeout 2 -H "X-aws-ec2-metadata-token: ${token}" \
+            "${IMDS_BASE_URL}/meta-data/${path}" 2>/dev/null || echo ""
+    else
+        curl -s --max-time 5 --connect-timeout 2 "${IMDS_BASE_URL}/meta-data/${path}" 2>/dev/null || echo ""
+    fi
+}
+
 log "=========================================="
 log "Testus Patronus Setup Script Started"
 log "=========================================="
@@ -20,7 +53,7 @@ log "=========================================="
 # Get AWS region with retries and fallback
 AWS_REGION=""
 for i in {1..5}; do
-    AWS_REGION=$(curl -s --max-time 5 --connect-timeout 2 http://169.254.169.254/latest/meta-data/placement/region 2>/dev/null || echo "")
+    AWS_REGION=$(get_instance_metadata "placement/region")
     [ -n "$AWS_REGION" ] && break
     [ $i -lt 5 ] && sleep 2
 done
@@ -60,6 +93,13 @@ else
     exit 1
 fi
 
+# Helper function to run docker commands as ec2-user with proper group membership
+run_as_ec2user_docker() {
+    local cmd="$1"
+    # Use sg (switch group) to ensure docker group is active in the subshell
+    sg docker -c "su - ec2-user -c '$cmd'"
+}
+
 # Clone and configure Dify as ec2-user with specific version
 log "Setting up Dify..."
 su - ec2-user -c "git clone https://github.com/langgenius/dify.git ~/dify"
@@ -96,11 +136,11 @@ EOF
 
 # Pre-pull specific Docker images to ensure version consistency
 log "Pre-pulling Dify Docker images with specific versions..."
-su - ec2-user -c "cd ~/dify/docker && docker compose pull"
+run_as_ec2user_docker "cd ~/dify/docker && docker compose pull"
 
 # Start Dify services
 log "Starting Dify services..."
-su - ec2-user -c "cd ~/dify/docker && docker compose up -d"
+run_as_ec2user_docker "cd ~/dify/docker && docker compose up -d"
 
 # Wait for services to be ready
 log "Waiting for Dify services to start..."
@@ -131,7 +171,7 @@ else
     
     # Retry getting instance ID (metadata service may not be ready immediately)
     for i in {1..10}; do
-        INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null || echo "")
+        INSTANCE_ID=$(get_instance_metadata "instance-id")
         if [ -n "$INSTANCE_ID" ]; then
             log "✓ Got instance ID: $INSTANCE_ID"
             break
@@ -192,8 +232,42 @@ log "✓ Caddyfile created with domain: ${CADDY_DOMAIN}"
 cat > /home/ec2-user/caddy/update-domain.sh << 'SCRIPT_EOF'
 #!/bin/bash
 # Script to update Caddyfile when HttpsDomain tag becomes available
-INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id 2>/dev/null || echo "")
-AWS_REGION=$(curl -s http://169.254.169.254/latest/meta-data/placement/region 2>/dev/null || echo "eu-west-3")
+IMDS_BASE_URL="http://169.254.169.254/latest"
+IMDS_TOKEN=""
+
+get_imds_token() {
+    if [ -n "$IMDS_TOKEN" ]; then
+        echo "$IMDS_TOKEN"
+        return 0
+    fi
+
+    IMDS_TOKEN=$(curl -s --max-time 5 --connect-timeout 2 -X PUT "${IMDS_BASE_URL}/api/token" \
+        -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null || echo "")
+
+    if [ -n "$IMDS_TOKEN" ]; then
+        echo "$IMDS_TOKEN"
+        return 0
+    fi
+
+    return 1
+}
+
+get_instance_metadata() {
+    local path="$1"
+    local token
+    token=$(get_imds_token 2>/dev/null || echo "")
+
+    if [ -n "$token" ]; then
+        curl -s --max-time 5 --connect-timeout 2 -H "X-aws-ec2-metadata-token: ${token}" \
+            "${IMDS_BASE_URL}/meta-data/${path}" 2>/dev/null || echo ""
+    else
+        curl -s --max-time 5 --connect-timeout 2 "${IMDS_BASE_URL}/meta-data/${path}" 2>/dev/null || echo ""
+    fi
+}
+
+INSTANCE_ID=$(get_instance_metadata "instance-id")
+AWS_REGION=$(get_instance_metadata "placement/region")
+[ -z "$AWS_REGION" ] && AWS_REGION="eu-west-3"
 
 if [ -z "$INSTANCE_ID" ]; then
     exit 1
@@ -272,7 +346,8 @@ systemctl start caddy
 log "✓ Caddy service started"
 
 # Final status
-PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4 2>/dev/null || echo "N/A")
+PUBLIC_IP=$(get_instance_metadata "public-ipv4")
+[ -z "$PUBLIC_IP" ] && PUBLIC_IP="N/A"
 log "=========================================="
 log "Setup Complete"
 log "=========================================="

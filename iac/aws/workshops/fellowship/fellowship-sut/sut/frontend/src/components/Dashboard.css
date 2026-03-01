@@ -1,11 +1,13 @@
 .dashboard {
   padding: 2rem;
+  animation: fadeIn 0.8s ease-out;
 }
 
 .dashboard-header {
   margin-bottom: 2rem;
   text-align: center;
   color: var(--deep-blue);
+  animation: slideInDown 0.6s ease-out;
 }
 
 .dashboard-header h1 {
@@ -14,12 +16,17 @@
   font-family: 'Cinzel', serif;
   font-weight: 700;
   color: var(--deep-blue);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  text-shadow: var(--text-shadow-dm);
 }
 
 .dashboard-subtitle {
   font-size: 1.2rem;
   color: var(--earth-brown);
   font-family: 'Lora', serif;
+  font-style: italic;
+  letter-spacing: 0.3px;
 }
 
 .stats-grid {
@@ -27,15 +34,24 @@
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
   gap: 1.5rem;
   margin-bottom: 2rem;
+  animation: fadeIn 0.8s ease-out 0.2s both;
 }
 
 .stat-card {
-  background: var(--parchment);
+  background: linear-gradient(135deg, var(--parchment) 0%, var(--parchment-light) 100%);
   border-radius: 8px;
   padding: 1.5rem;
   text-align: center;
-  box-shadow: 0 2px 8px rgba(139, 69, 19, 0.2);
+  box-shadow: 0 4px 12px rgba(139, 69, 19, 0.2);
   border: 2px solid var(--earth-brown);
+  transition: all 0.3s ease;
+  animation: cascade-item;
+}
+
+.stat-card:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 8px 20px rgba(139, 69, 19, 0.3),
+              0 0 15px rgba(218, 165, 32, 0.15);
 }
 
 .stat-value {
@@ -44,6 +60,8 @@
   color: var(--gold);
   margin-bottom: 0.5rem;
   font-family: 'Cinzel', serif;
+  text-shadow: var(--text-shadow-dm);
+  letter-spacing: 1px;
 }
 
 .stat-label {
@@ -51,6 +69,7 @@
   color: var(--earth-brown);
   font-weight: 600;
   font-family: 'Lora', serif;
+  letter-spacing: 0.5px;
 }
 
 .dashboard-section {
@@ -76,9 +95,12 @@
   border-radius: 8px;
   margin-bottom: 2rem;
   border: 2px solid var(--dark-red);
-  box-shadow: 0 0 10px rgba(220, 38, 38, 0.5);
+  box-shadow: 0 0 10px rgba(220, 38, 38, 0.5),
+              0 0 20px rgba(220, 38, 38, 0.2);
   font-family: 'Lora', serif;
   font-weight: 600;
+  animation: dangerGlow 2s ease-in-out infinite;
+  letter-spacing: 0.5px;
 }
 
 .user-stats {
@@ -116,12 +138,15 @@
   padding: 1rem;
   border: 2px solid var(--earth-brown);
   border-radius: 6px;
-  background: var(--parchment);
-  transition: box-shadow 0.3s ease;
+  background: linear-gradient(135deg, var(--parchment) 0%, var(--parchment-light) 100%);
+  transition: all 0.3s ease;
+  animation: cascade-item;
 }
 
 .quest-item:hover {
-  box-shadow: 0 2px 8px rgba(139, 69, 19, 0.3);
+  box-shadow: 0 4px 12px rgba(139, 69, 19, 0.3),
+              0 0 10px rgba(218, 165, 32, 0.1);
+  transform: translateY(-2px);
 }
 
 .quest-header {

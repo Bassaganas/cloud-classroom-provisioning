@@ -7,20 +7,21 @@ class MapPage(BasePage):
     
     def __init__(self, page: Page, base_url: str):
         super().__init__(page, base_url)
-        self.page_title = page.locator('h1:has-text("The Map of Middle-earth")')
+        self.page_title = page.locator('text=Map of Middle-earth').first
         self.map_container = page.locator('.middle-earth-map-container')
-        self.quest_list = page.locator('.quests-section')
-        self.quest_cards = page.locator('.quest-card')
+        self.filter_sidebar = page.locator('.filter-sidebar')
         
     def navigate(self):
         """Navigate to the map page."""
-        self.page.goto(f"{self.base_url}/map")
+        self.page.goto(f"{self.base_url}/dashboard")
+        self.page.locator('a[href="/map"]').first.click()
+        self.page.wait_for_url('**/map')
         self.page.wait_for_load_state('networkidle')
         return self
     
     def is_loaded(self) -> bool:
         """Check if map page is loaded."""
-        return self.page_title.is_visible(timeout=5000)
+        return self.map_container.is_visible(timeout=5000)
     
     def wait_for_map(self, timeout: int = 10000):
         """Wait for the map to be fully loaded."""
@@ -70,8 +71,8 @@ class MapPage(BasePage):
         button.click()
     
     def get_quest_count_in_list(self) -> int:
-        """Get the number of quests displayed in the quest list."""
-        return self.quest_cards.count()
+        """Get the number of quest markers currently shown on the map."""
+        return self.get_quest_markers_count()
     
     def filter_by_location(self, location_name: str):
         """Filter quests by clicking on a location marker."""

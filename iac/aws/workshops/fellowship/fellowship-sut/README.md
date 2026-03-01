@@ -23,6 +23,8 @@ The Fellowship's Quest List is a full-stack web application built with:
 - **Locations**: Track journey through Middle-earth locations
 - **The Council Chamber**: Dashboard with LOTR-themed statistics and journey progress
 - **The Scrolls of Middle-earth**: Quest list with parchment styling and epic visual design
+- **Companion Chat (Azure AI)**: Realistic in-character conversation with Frodo, Sam, or Gandalf
+- **Action Nudges**: NPCs guide users toward concrete next steps in quests
 - **REST API**: Well-architected API with Swagger documentation
 
 ## Quick Start
@@ -153,6 +155,13 @@ Interactive API documentation is available at:
 
 - `GET /api/health` - Health check endpoint
 
+#### NPC Chat (Azure AI)
+
+- `POST /api/chat/start` - Start chat and receive random opener
+- `POST /api/chat/message` - Send user turn and receive NPC response
+- `GET /api/chat/session` - Get current session transcript
+- `POST /api/chat/reset` - Reset chat session for selected character
+
 ### Example API Calls
 
 **Login**:
@@ -196,6 +205,143 @@ curl -X PUT http://localhost/api/quests/1/complete \
 curl http://localhost/api/quests?dark_magic=true
 ```
 
+**Start NPC Chat**:
+```bash
+curl -X POST http://localhost/api/chat/start \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{"character":"gandalf"}'
+```
+
+**Send NPC Message**:
+```bash
+curl -X POST http://localhost/api/chat/message \
+  -H "Content-Type: application/json" \
+  -b cookies.txt \
+  -d '{"character":"gandalf","message":"What should I do next?"}'
+```
+
+## Azure OpenAI Configuration (NPC Chat)
+
+The application uses **Azure OpenAI** to power realistic NPC companions (Frodo, Sam, Gandalf). The Azure credentials are **backend-only** and never exposed to the frontend.
+
+### Prerequisites
+
+1. **Azure Subscription**: You need an active Azure subscription
+2. **Azure OpenAI Service**: Deploy an Azure OpenAI resource
+3. **Model Deployment**: Deploy a `gpt-4` (or `gpt-4-mini`) model within your resource
+
+### Getting Azure Credentials
+
+1. **Create Azure OpenAI Resource**:
+   - Go to [Azure Portal](https://portal.azure.com)
+   - Create new resource: "Azure OpenAI"
+   - Select region (e.g., East US, West US)
+   - Choose Standard pricing tier
+
+2. **Deploy Model**:
+   - In your resource, go to "Model deployments"
+   - Click "Create new deployment"
+   - Choose `gpt-4` or `gpt-4-mini` as model
+   - Name your deployment (e.g., `gpt-4-mini`)
+   - Accept defaults; proceed to create
+
+3. **Retrieve Credentials**:
+   - Go to "Keys and Endpoint" in your resource
+   - Copy **Endpoint URL** (e.g., `https://classroom-open-ai.openai.azure.com/`)
+   - Copy **API Key 1** (keep secret!)
+   - Note your **Deployment Name** (from model deployments)
+
+### Local Development Setup
+
+1. **Export credentials to shell**:
+   ```bash
+   export AZURE_OPENAI_ENDPOINT=https://classroom-open-ai.openai.azure.com/
+   export AZURE_OPENAI_API_KEY=your-actual-api-key-here
+   export AZURE_OPENAI_DEPLOYMENT=gpt-4-mini
+   export AZURE_OPENAI_API_VERSION=2024-02-15-preview
+   ```
+
+2. **Start application**:
+   ```bash
+   docker-compose up -d
+   ```
+
+3. **Verify Azure integration**:
+   ```bash
+   # Login first
+   curl -X POST http://localhost/api/auth/login \
+     -H "Content-Type: application/json" \
+     -c cookies.txt \
+     -d '{"username":"frodo_baggins","password":"fellowship123"}'
+
+   # Start NPC chat (should return in-character opener if Azure is working)
+   curl -X POST http://localhost/api/chat/start \
+     -H "Content-Type: application/json" \
+     -b cookies.txt \
+     -d '{"character":"gandalf"}'
+
+   # Expected response includes "opener" field with NPC greeting
+   ```
+
+### Behavior Without Azure Credentials
+
+If `AZURE_OPENAI_API_KEY` or `AZURE_OPENAI_ENDPOINT` are empty:
+
+- Chat endpoints return **deterministic fallback responses**
+- NPC still engages in-character and suggests actions
+- Chat UI remains fully functional
+- No errors; graceful degradation
+
+Example fallback:
+```
+Gandalf: "Clarity first: choose the highest-impact action and execute it now. 
+Will you take this next step now: Resolve a dark magic quest?"
+```
+
+### Production Deployment
+
+For production environments (AWS EC2, Azure VM, Kubernetes):
+
+1. **Use AWS Secrets Manager or Azure Key Vault**:
+   ```bash
+   # Example: AWS
+   aws secretsmanager create-secret \
+     --name fellowship-azure-openai \
+     --secret-string '{
+       "endpoint":"https://classroom-open-ai.openai.azure.com/",
+       "api_key":"your-prod-key",
+       "deployment":"gpt-4",
+       "api_version":"2024-02-15-preview"
+     }'
+   ```
+
+2. **Inject at container runtime**:
+   ```bash
+   # In docker-compose or ECS task definition
+   docker-compose up -d \
+     -e AZURE_OPENAI_ENDPOINT="$(aws secretsmanager get-secret-value --secret-id fellowship-azure-openai --query SecretString --output text | jq -r '.endpoint')" \
+     -e AZURE_OPENAI_API_KEY="$(aws secretsmanager get-secret-value --secret-id fellowship-azure-openai --query SecretString --output text | jq -r '.api_key')"
+   ```
+
+3. **Never commit secrets to git**:
+   - ✅ DO: Use environment variables or secret managers
+   - ❌ DON'T: Hardcode keys in `.env`, `docker-compose.yml`, or code
+
+### Tuning Azure Configuration
+
+**Token & Temperature Settings** (in `sut/backend/config.py`):
+
+```python
+AZURE_OPENAI_MAX_TOKENS = 220       # Max response length (tune up for verbosity)
+AZURE_OPENAI_TEMPERATURE = 0.85     # Creativity (0=deterministic, 1=random)
+AZURE_OPENAI_API_VERSION = "2024-02-15-preview"  # API version
+```
+
+- **Max Tokens**: 220 is tuned for concise NPC replies; increase to 300-500 for longer monologues
+- **Temperature**: 0.85 gives personality without nonsense; reduce to 0.5 for safer, more predictable replies
+- **API Version**: Check [Azure docs](https://learn.microsoft.com/en-us/azure/ai-services/openai/reference) for latest versions
+
 ## Testing
 
 ### Running Tests
@@ -234,6 +380,13 @@ curl http://localhost/api/quests?dark_magic=true
    pytest -m smoke
    pytest -m api
    pytest -m ui
+   pytest -m realstack
+   ```
+
+7. **Run real-stack BDD CORS + Login test (Docker Compose, no mocks)**:
+   ```bash
+   # Uses real frontend, backend and caddy from docker-compose.yml
+   pytest tests/test_cors_login_bdd.py -m realstack -v
    ```
 
 6. **Run Behave (Gherkin) tests**:
@@ -241,6 +394,20 @@ curl http://localhost/api/quests?dark_magic=true
    cd tests
    behave
    ```
+
+### Release Quality Gate (Required)
+
+Use these commands before marking implementation as complete:
+
+```bash
+# From fellowship-sut/ (docker compose must already be up)
+pytest tests/test_cors_login_bdd.py tests/test_map_page.py tests/test_npc_chat.py tests/test_npc_chat_api.py -q
+
+# From fellowship-sut/sut/frontend/
+npm run test -- test/services/api.chat.test.ts test/store/characterStore.test.ts --run
+```
+
+Completion policy: if any command above fails, the feature is not done.
    
    Or run a specific feature:
    ```bash
@@ -257,14 +424,16 @@ curl http://localhost/api/quests?dark_magic=true
 - `tests/test_login.py` - Login functionality tests
 - `tests/test_dashboard.py` - Dashboard UI tests
 - `tests/test_api.py` - API endpoint tests
-- `playwright/page_objects/` - Page Object Model classes
+- `tests/test_cors_login_bdd.py` - Gherkin/BDD CORS+login real-stack verification
+- `tests/page_objects/` - Page Object Model classes for pytest/BDD tests
+- `playwright/page_objects/` - Legacy page object classes used by Behave map tests
 
 ### Page Object Model
 
 The tests use the Page Object Model pattern:
 
 ```python
-from playwright.page_objects.login_page import LoginPage
+from tests.page_objects.login_page import LoginPage
 
 login_page = LoginPage(page, base_url)
 login_page.login('frodo_baggins', 'fellowship123')
@@ -510,6 +679,17 @@ Dark Magic quests represent infrastructure bugs and testing challenges. They:
 ## Contributing
 
 This is a tutorial SUT application. For issues or improvements, please refer to the main Fellowship tutorial documentation.
+
+## Azure AI Setup (Optional, backend-only)
+
+Set these environment variables for backend service:
+
+- `AZURE_OPENAI_ENDPOINT`
+- `AZURE_OPENAI_API_KEY`
+- `AZURE_OPENAI_DEPLOYMENT`
+- `AZURE_OPENAI_API_VERSION` (default: `2024-02-15-preview`)
+
+If these are missing, the NPC chat still works using deterministic in-character fallback responses.
 
 ## License
 

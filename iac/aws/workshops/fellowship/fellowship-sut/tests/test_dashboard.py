@@ -1,8 +1,8 @@
 """Tests for dashboard functionality."""
 import pytest
 from playwright.sync_api import Page
-from playwright.page_objects.login_page import LoginPage
-from playwright.page_objects.dashboard_page import DashboardPage
+from tests.page_objects.login_page import LoginPage
+from tests.page_objects.dashboard_page import DashboardPage
 
 @pytest.fixture
 def authenticated_page(page: Page, base_url: str, test_credentials: dict):

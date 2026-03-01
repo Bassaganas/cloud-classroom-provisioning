@@ -4,23 +4,27 @@
   left: 0;
   right: 0;
   bottom: 0;
-  background: rgba(0, 0, 0, 0.5);
+  background: rgba(0, 0, 0, 0.6);
   display: flex;
   justify-content: center;
   align-items: center;
   z-index: 1000;
   padding: 2rem;
+  animation: fadeIn 0.3s ease-out;
+  backdrop-filter: blur(2px);
 }
 
 .quest-form-modal {
-  background: var(--parchment);
+  background: linear-gradient(135deg, var(--parchment-light) 0%, var(--parchment) 100%);
   border-radius: 12px;
   max-width: 600px;
   width: 100%;
   max-height: 90vh;
   overflow-y: auto;
-  box-shadow: 0 10px 40px rgba(139, 69, 19, 0.3);
+  box-shadow: 0 10px 40px rgba(139, 69, 19, 0.4),
+              0 0 30px rgba(218, 165, 32, 0.15);
   border: 3px solid var(--earth-brown);
+  animation: scaleIn 0.4s ease-out;
 }
 
 .quest-form-header {
@@ -29,6 +33,7 @@
   align-items: center;
   padding: 1.5rem;
   border-bottom: 2px solid var(--earth-brown);
+  background: linear-gradient(90deg, rgba(218, 165, 32, 0.1) 0%, transparent 100%);
 }
 
 .quest-form-header h2 {
@@ -36,13 +41,14 @@
   color: var(--deep-blue);
   font-family: 'Cinzel', serif;
   font-weight: 700;
+  letter-spacing: 1px;
 }
 
 .close-button {
   background: none;
   border: none;
   font-size: 2rem;
-  color: #999;
+  color: var(--earth-brown);
   cursor: pointer;
   line-height: 1;
   padding: 0;
@@ -51,10 +57,14 @@
   display: flex;
   align-items: center;
   justify-content: center;
+  transition: all 0.3s ease;
+  border-radius: 4px;
 }
 
 .close-button:hover {
-  color: #333;
+  color: var(--dark-red);
+  background-color: rgba(218, 165, 32, 0.2);
+  transform: rotate(90deg);
 }
 
 .quest-form {
@@ -64,6 +74,14 @@
 .form-textarea {
   resize: vertical;
   min-height: 100px;
+  transition: all 0.3s ease;
+}
+
+.form-textarea:focus {
+  border-color: var(--gold);
+  box-shadow: inset 0 2px 4px rgba(139, 69, 19, 0.1),
+              0 0 0 3px rgba(218, 165, 32, 0.2),
+              0 0 10px rgba(218, 165, 32, 0.15);
 }
 
 .quest-form-actions {

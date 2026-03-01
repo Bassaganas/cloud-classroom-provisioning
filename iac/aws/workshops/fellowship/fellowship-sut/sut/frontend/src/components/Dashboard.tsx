@@ -1,6 +1,13 @@
-import React from 'react';
+import React, { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { Quest, Member } from '../types';
-import './Dashboard.css';
+import { Card } from './ui/Card';
+import { Alert } from './ui/Alert';
+import { Badge } from './ui/Badge';
+import { Button } from './ui/Button';
+import { CharacterPanel } from './characters/CharacterPanel';
+import { getMissionObjective } from '../utils/missionObjective';
+import { motion } from 'framer-motion';
 
 interface DashboardProps {
   quests: Quest[];
@@ -9,6 +16,9 @@ interface DashboardProps {
 }
 
 const Dashboard: React.FC<DashboardProps> = ({ quests, members, user }) => {
+  const navigate = useNavigate();
+  const [selectedStatus, setSelectedStatus] = useState<string | null>(null);
+
   // Helper function to check if status matches (handles both old and new values)
   const matchesStatus = (quest: Quest, statuses: string[]): boolean => {
     return statuses.includes(quest.status);
@@ -28,7 +38,6 @@ const Dashboard: React.FC<DashboardProps> = ({ quests, members, user }) => {
     if (status === 'the_shadow_falls' || status === 'blocked') {
       return 'The Shadow Falls';
     }
-    // Fallback for any other status values
     return String(status).replace(/_/g, ' ');
   };
 
@@ -44,81 +53,283 @@ const Dashboard: React.FC<DashboardProps> = ({ quests, members, user }) => {
   const activeMembers = members.filter(m => m.status === 'active').length;
   const userQuests = quests.filter(q => q.assignee_name === user.role || q.assigned_to);
   const userCompleted = userQuests.filter(q => matchesStatus(q, ['it_is_done', 'completed'])).length;
+  const completionRate = quests.length > 0 ? Math.round((stats.completed / quests.length) * 100) : 0;
+
+  // Filter displayed quests based on selected status
+  const displayedQuests = selectedStatus
+    ? quests.filter(q => q.status === selectedStatus)
+    : quests.slice(0, 8);
+
+  const missionObjective = useMemo(() => getMissionObjective(quests), [quests]);
+
+  const containerVariants = {
+    hidden: { opacity: 0 },
+    visible: {
+      opacity: 1,
+      transition: {
+        staggerChildren: 0.1,
+        delayChildren: 0.2,
+      },
+    },
+  };
+
+  const itemVariants = {
+    hidden: { opacity: 0, y: 20 },
+    visible: {
+      opacity: 1,
+      y: 0,
+      transition: { duration: 0.5, ease: 'easeOut' },
+    },
+  };
 
   return (
-    <div className="dashboard">
-      <div className="dashboard-header">
-        <h1>The Council Chamber</h1>
-        <p className="dashboard-subtitle">Welcome, {user.role}! Track the Fellowship's journey through Middle-earth</p>
-      </div>
-
-      {stats.darkMagic > 0 && (
-        <div className="dark-magic-warning">
-          <strong>⚠️ Dark Magic Detected!</strong> {stats.darkMagic} quest{stats.darkMagic !== 1 ? 's' : ''} {stats.darkMagic !== 1 ? 'have' : 'has'} been corrupted by Sauron's influence.
-        </div>
-      )}
-
-      <div className="stats-grid">
-        <div className="stat-card">
-          <div className="stat-value">{stats.total}</div>
-          <div className="stat-label">Total Quests</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-value">{stats.notYetBegun}</div>
-          <div className="stat-label">Not Yet Begun</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-value">{stats.inProgress}</div>
-          <div className="stat-label">The Road Goes Ever On</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-value">{stats.completed}</div>
-          <div className="stat-label">It Is Done</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-value">{stats.shadowFalls}</div>
-          <div className="stat-label">The Shadow Falls</div>
-        </div>
-        <div className="stat-card">
-          <div className="stat-value">{activeMembers}</div>
-          <div className="stat-label">Active Fellowship Members</div>
-        </div>
-      </div>
-
-      {userQuests.length > 0 && (
-        <div className="dashboard-section">
-          <h2>Your Quests</h2>
-          <div className="user-stats">
-            <div className="user-stat-item">
-              <span className="user-stat-label">Assigned to you:</span>
-              <span className="user-stat-value">{userQuests.length}</span>
-            </div>
-            <div className="user-stat-item">
-              <span className="user-stat-label">Completed:</span>
-              <span className="user-stat-value">{userCompleted}</span>
-            </div>
+    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="lg:col-span-2 space-y-8">
+      {/* Header Section */}
+      <motion.div
+        variants={itemVariants}
+        initial="hidden"
+        animate="visible"
+        className="space-y-2"
+      >
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="font-epic text-4xl text-forest-dark mb-2">The Council Chamber</h1>
+            <p className="font-readable text-text-muted text-lg">
+              Welcome, {user.role}! Track the Fellowship's journey through Middle-earth
+            </p>
           </div>
+          <div className="text-right text-5xl">🏰</div>
         </div>
+      </motion.div>
+
+      {/* Dark Magic Warning */}
+      {stats.darkMagic > 0 && (
+        <motion.div variants={itemVariants} initial="hidden" animate="visible">
+          <Alert
+            variant="warning"
+            title="⚠️ Dark Magic Detected!"
+          >
+            {stats.darkMagic} quest{stats.darkMagic !== 1 ? 's have' : ' has'} been corrupted by Sauron's influence.
+          </Alert>
+        </motion.div>
       )}
 
-      <div className="dashboard-section">
-        <h2>Recent Quests</h2>
-        <div className="quest-list">
-          {quests.slice(0, 5).map((quest) => (
-            <div key={quest.id} className="quest-item">
-              <div className="quest-header">
-                <h3>{quest.title}</h3>
-                <span className={`quest-status quest-status-${quest.status}`}>
-                  {getStatusText(quest.status)}
-                </span>
-              </div>
-              <p className="quest-description">{quest.description}</p>
-              {quest.location_name && (
-                <p className="quest-location">📍 {quest.location_name}</p>
-              )}
+      {/* Mission Briefing */}
+      <motion.div variants={itemVariants} initial="hidden" animate="visible">
+        <Card variant="dark" className="space-y-4" testId="mission-briefing">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <h2 className="font-epic text-2xl text-gold">Mission Briefing</h2>
+              <p className="font-readable text-parchment-light mt-2">{missionObjective.title}</p>
+              <p className="text-sm text-parchment-light/80 mt-2">{missionObjective.description}</p>
             </div>
-          ))}
+            <span className="text-3xl" aria-hidden="true">
+              {missionObjective.mode === 'map' ? '🗺️' : '📜'}
+            </span>
+          </div>
+          <div>
+            <Button
+              variant="epic"
+              className="text-sm"
+              data-testid="mission-briefing-cta"
+              onClick={() => navigate(missionObjective.route)}
+            >
+              {missionObjective.ctaLabel}
+            </Button>
+          </div>
+        </Card>
+      </motion.div>
+
+      {/* Stats Grid */}
+      <motion.div
+        variants={containerVariants}
+        initial="hidden"
+        animate="visible"
+        className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"
+      >
+        {/* Total Quests */}
+        <motion.div variants={itemVariants}>
+          <Card variant="parchment" className="cursor-pointer hover:shadow-lg transition-shadow">
+            <div className="text-center py-4">
+              <div className="text-4xl font-epic text-forest-dark mb-2">{stats.total}</div>
+              <div className="text-sm font-readable text-text-muted">Total Quest Objectives</div>
+              <div className="mt-3 flex justify-center">
+                <Badge variant="standard">All Quests</Badge>
+              </div>
+            </div>
+          </Card>
+        </motion.div>
+
+        {/* In Progress */}
+        <motion.div variants={itemVariants}>
+          <Card
+            variant="parchment"
+            className="cursor-pointer hover:shadow-lg transition-shadow"
+            onClick={() => setSelectedStatus('the_road_goes_ever_on')}
+          >
+            <div className="text-center py-4">
+              <div className="text-4xl font-epic text-forest mb-2">{stats.inProgress}</div>
+              <div className="text-sm font-readable text-text-muted">The Road Goes Ever On...</div>
+              <div className="mt-3 flex justify-center">
+                <Badge variant="inprogress">In Progress</Badge>
+              </div>
+            </div>
+          </Card>
+        </motion.div>
+
+        {/* Completed */}
+        <motion.div variants={itemVariants}>
+          <Card
+            variant="parchment"
+            className="cursor-pointer hover:shadow-lg transition-shadow"
+            onClick={() => setSelectedStatus('it_is_done')}
+          >
+            <div className="text-center py-4">
+              <div className="text-4xl font-epic text-success mb-2">{stats.completed}</div>
+              <div className="text-sm font-readable text-text-muted">It Is Done</div>
+              <div className="mt-3 flex justify-center">
+                <Badge variant="ready">Completed</Badge>
+              </div>
+            </div>
+          </Card>
+        </motion.div>
+
+        {/* Not Yet Begun */}
+        <motion.div variants={itemVariants}>
+          <Card variant="parchment" className="cursor-pointer hover:shadow-lg transition-shadow">
+            <div className="text-center py-4">
+              <div className="text-4xl font-epic text-gray-600 mb-2">{stats.notYetBegun}</div>
+              <div className="text-sm font-readable text-text-muted">Not Yet Begun</div>
+              <div className="mt-3 flex justify-center">
+                <Badge variant="pending">Planned</Badge>
+              </div>
+            </div>
+          </Card>
+        </motion.div>
+
+        {/* Blocked */}
+        <motion.div variants={itemVariants}>
+          <Card variant="parchment" className="cursor-pointer hover:shadow-lg transition-shadow">
+            <div className="text-center py-4">
+              <div className="text-4xl font-epic text-danger mb-2">{stats.shadowFalls}</div>
+              <div className="text-sm font-readable text-text-muted">The Shadow Falls</div>
+              <div className="mt-3 flex justify-center">
+                <Badge variant="blocked">Blocked</Badge>
+              </div>
+            </div>
+          </Card>
+        </motion.div>
+
+        {/* Fellowship Members */}
+        <motion.div variants={itemVariants}>
+          <Card variant="parchment">
+            <div className="text-center py-4">
+              <div className="text-4xl mb-2">👥</div>
+              <div className="text-2xl font-epic text-forest mb-2">{activeMembers}</div>
+              <div className="text-sm font-readable text-text-muted">Active Fellowship Members</div>
+            </div>
+          </Card>
+        </motion.div>
+      </motion.div>
+
+      {/* User Personal Stats */}
+      {userQuests.length > 0 && (
+        <motion.div variants={itemVariants} initial="hidden" animate="visible">
+          <Card variant="dark">
+            <div className="space-y-2">
+              <h2 className="font-epic text-2xl text-gold mb-4">Your Personal Journey</h2>
+              <div className="grid grid-cols-3 gap-4">
+                <div className="text-center">
+                  <div className="text-2xl font-epic text-parchment mb-1">{userQuests.length}</div>
+                  <div className="text-sm text-parchment-light">Assigned to You</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-2xl font-epic text-success mb-1">{userCompleted}</div>
+                  <div className="text-sm text-parchment-light">Completed</div>
+                </div>
+                <div className="text-center">
+                  <div className="text-2xl font-epic text-gold mb-1">{completionRate}%</div>
+                  <div className="text-sm text-parchment-light">Completion Rate</div>
+                </div>
+              </div>
+            </div>
+          </Card>
+        </motion.div>
+      )}
+
+      {/* Recent/Filtered Quests */}
+      <motion.div variants={itemVariants} initial="hidden" animate="visible">
+        <div className="space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="font-epic text-2xl text-forest-dark">
+              {selectedStatus ? 'Filtered Quests' : 'Recent Quest Objectives'}
+            </h2>
+            {selectedStatus && (
+              <button
+                onClick={() => setSelectedStatus(null)}
+                className="px-4 py-2 text-sm rounded bg-forest text-parchment hover:bg-forest-dark transition-colors"
+              >
+                Clear Filter
+              </button>
+            )}
+          </div>
+
+          <motion.div
+            variants={containerVariants}
+            initial="hidden"
+            animate="visible"
+            className="space-y-3 max-h-96 overflow-y-auto"
+          >
+            {displayedQuests.length > 0 ? (
+              displayedQuests.map((quest, index) => (
+                <motion.div key={quest.id} variants={itemVariants}>
+                  <Card variant="parchment" className="hover:shadow-md transition-shadow">
+                    <div className="space-y-2">
+                      <div className="flex items-start justify-between gap-4">
+                        <div>
+                          <h3 className="font-epic text-lg text-forest-dark">{quest.title}</h3>
+                          <p className="text-sm text-text-muted mt-1">{quest.description}</p>
+                        </div>
+                        <Badge variant={quest.is_dark_magic ? 'critical' : 'standard'}>
+                          {getStatusText(quest.status)}
+                        </Badge>
+                      </div>
+                      <div className="flex gap-4 text-xs text-text-muted">
+                        {quest.location_name && (
+                          <span>📍 {quest.location_name}</span>
+                        )}
+                        {quest.priority && (
+                          <span>⚡ Priority: {quest.priority}</span>
+                        )}
+                      </div>
+                    </div>
+                  </Card>
+                </motion.div>
+              ))
+            ) : (
+              <div className="text-center py-8 text-text-muted">
+                <p className="text-lg">No quests found with current criteria</p>
+              </div>
+            )}
+          </motion.div>
         </div>
+      </motion.div>
+
+      {/* Clear Selection Footer */}
+      {selectedStatus && (
+        <motion.div
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="text-center text-sm text-text-muted"
+        >
+          Showing {displayedQuests.length} of {quests.length} quests
+        </motion.div>
+      )}
+      </div>
+
+      <div className="lg:col-span-1 lg:sticky lg:top-6 h-fit">
+        <CharacterPanel />
       </div>
     </div>
   );

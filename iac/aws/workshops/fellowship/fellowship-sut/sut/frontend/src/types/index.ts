@@ -54,5 +54,33 @@ export interface LoginResponse {
   user: User;
 }
 
+export type NpcCharacter = 'frodo' | 'sam' | 'gandalf';
+
+export interface NpcSuggestedAction {
+  goal_type: string;
+  title: string;
+  reason: string;
+  target?: {
+    quest_id?: number;
+    route: string;
+    query?: Record<string, string | number | boolean>;
+  };
+}
+
+export interface NpcChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface NpcChatResponse {
+  conversation_id: string;
+  character: NpcCharacter;
+  message?: string;
+  opener?: string;
+  suggested_action: NpcSuggestedAction;
+  messages: NpcChatMessage[];
+  timestamp?: string;
+}
+
 // Re-export MiddleEarthMap types
 export * from './middleEarthMap';

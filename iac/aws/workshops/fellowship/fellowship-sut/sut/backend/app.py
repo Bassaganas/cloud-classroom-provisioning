@@ -1,5 +1,5 @@
 """Main Flask application for the Fellowship Quest Tracker."""
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 from flask_restx import Api
 from config import config
@@ -10,6 +10,7 @@ from routes.auth import auth_bp, auth_api
 from routes.quests import quests_bp, quests_api
 from routes.members import members_bp, members_api
 from routes.locations import locations_bp, locations_api
+from routes.npc_chat import npc_chat_bp, npc_chat_api
 import os
 
 def create_app(config_name: str = None) -> Flask:
@@ -27,12 +28,23 @@ def create_app(config_name: str = None) -> Flask:
     
     # Initialize CORS with specific origins (required when using credentials)
     # Allow both localhost:3000 (dev) and localhost (production via nginx)
-    # Also allow any origin for EC2 instances (wildcard for development)
-    CORS(app, 
-         supports_credentials=True, 
-         origins=["http://localhost:3000", "http://localhost", "http://127.0.0.1:3000", "http://127.0.0.1", "*"],
-         allow_headers=["Content-Type", "Authorization"],
-         methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"])
+    # Flask-CORS handles preflight OPTIONS requests automatically
+    CORS(
+        app,
+        supports_credentials=True,
+        resources={
+            r"/api/*": {
+                "origins": [
+                    "http://localhost:3000",
+                    "http://localhost",
+                    "http://127.0.0.1:3000",
+                    "http://127.0.0.1",
+                ]
+            }
+        },
+        allow_headers=["Content-Type", "Authorization"],
+        methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    )
     
     # Initialize database (this also initializes db)
     init_db(app)
@@ -56,6 +68,7 @@ def create_app(config_name: str = None) -> Flask:
     app.register_blueprint(quests_bp)
     app.register_blueprint(members_bp)
     app.register_blueprint(locations_bp)
+    app.register_blueprint(npc_chat_bp)
     
     # Note: We don't add the Api objects as namespaces because they're already bound to blueprints
     # Adding them as namespaces would cause route conflicts. The routes work from blueprints alone.

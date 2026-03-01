@@ -4,16 +4,36 @@
   align-items: center;
   min-height: 100vh;
   padding: 2rem;
+  animation: fadeIn 0.6s ease-out;
+  position: relative;
+  overflow: hidden;
+}
+
+.login-container::before {
+  content: '';
+  position: absolute;
+  top: -50%;
+  right: -50%;
+  width: 200%;
+  height: 200%;
+  background: radial-gradient(circle, var(--gold-glow) 0%, transparent 70%);
+  opacity: 0.05;
+  animation: parallaxFloat 6s ease-in-out infinite;
+  pointer-events: none;
 }
 
 .login-card {
-  background: var(--parchment);
+  background: linear-gradient(135deg, var(--parchment-light) 0%, var(--parchment) 100%);
   border-radius: 12px;
   padding: 3rem;
-  box-shadow: 0 10px 40px rgba(139, 69, 19, 0.3);
+  box-shadow: 0 10px 40px rgba(139, 69, 19, 0.4),
+              0 0 30px rgba(218, 165, 32, 0.15);
   border: 3px solid var(--earth-brown);
   max-width: 450px;
   width: 100%;
+  animation: scaleIn 0.6s ease-out;
+  position: relative;
+  z-index: 1;
 }
 
 .login-title {
@@ -23,6 +43,9 @@
   color: var(--deep-blue);
   text-align: center;
   margin-bottom: 0.5rem;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  text-shadow: var(--text-shadow-dm);
 }
 
 .login-subtitle {
@@ -30,10 +53,13 @@
   color: var(--earth-brown);
   margin-bottom: 2rem;
   font-family: 'Lora', serif;
+  font-style: italic;
+  letter-spacing: 0.3px;
 }
 
 .login-form {
   margin-bottom: 1.5rem;
+  animation: slideInUp 0.6s ease-out 0.2s both;
 }
 
 .login-button {
@@ -41,17 +67,27 @@
   margin-top: 1rem;
   padding: 12px;
   font-size: 1.1rem;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.login-button:hover {
+  box-shadow: 0 8px 24px rgba(218, 165, 32, 0.5),
+              0 0 20px rgba(218, 165, 32, 0.3);
 }
 
 .login-hint {
   margin-top: 2rem;
   padding-top: 1.5rem;
-  border-top: 1px solid #eee;
+  border-top: 2px solid var(--earth-brown-fade);
   text-align: center;
   font-size: 0.9rem;
-  color: #666;
+  color: var(--earth-brown);
+  font-family: 'Lora', serif;
+  animation: slideInUp 0.6s ease-out 0.3s both;
 }
 
 .login-hint p {
   margin: 0.5rem 0;
+  line-height: 1.6;
 }

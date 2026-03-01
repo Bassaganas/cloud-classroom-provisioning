@@ -24,19 +24,21 @@
   top: 0;
   bottom: 0;
   width: 320px;
-  background: var(--color-parchment-light, #F4E4BC);
-  border-right: 2px solid var(--color-earth-brown-medium, #A0522D);
-  box-shadow: 2px 0 12px rgba(0, 0, 0, 0.3);
+  background: linear-gradient(180deg, var(--parchment-light) 0%, var(--parchment) 100%);
+  border-right: 2px solid var(--earth-brown-light);
+  box-shadow: 2px 0 20px rgba(139, 69, 19, 0.4);
   z-index: 500;
   overflow-y: auto;
   transform: translateX(0);
-  transition: transform 0.3s ease;
+  transition: transform 0.4s ease;
   display: flex;
   flex-direction: column;
+  animation: slideInLeft 0.5s ease-out;
 }
 
 .filter-sidebar.closed {
   transform: translateX(-100%);
+  animation: slideInLeft 0.5s ease-out reverse;
 }
 
 .filter-sidebar-header {
@@ -50,6 +52,27 @@
   color: var(--color-earth-brown-dark, #8B4513);
   margin: 0;
   font-size: 1.3rem;
+}
+
+.filter-sidebar-header h3 {
+  font-family: 'Cinzel', serif;
+  color: var(--color-earth-brown-dark, #8B4513);
+  margin: 0;
+  font-size: 1.3rem;
+}
+
+.filter-close-btn {
+  background: transparent;
+  border: none;
+  color: var(--color-earth-brown-dark, #8B4513);
+  font-size: 1.2rem;
+  cursor: pointer;
+  line-height: 1;
+  padding: 0.25rem;
+}
+
+.filter-close-btn:hover {
+  color: var(--color-gold-dark, #FFD700);
 }
 
 .filter-content {
@@ -167,9 +190,9 @@
   left: 1.5rem;
   width: 50px;
   height: 50px;
-  background-color: var(--color-earth-brown-dark, #8B4513);
-  color: var(--color-parchment-light, #F4E4BC);
-  border: 2px solid var(--color-gold-dark, #FFD700);
+  background-color: var(--earth-brown);
+  color: var(--parchment-light);
+  border: 3px solid var(--gold);
   border-radius: 50%;
   font-size: 1.5rem;
   cursor: pointer;
@@ -178,16 +201,16 @@
   justify-content: center;
   transition: all 0.3s ease;
   z-index: 700;
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-}
-
-.filter-toggle-btn.filter-open {
-  left: 340px;
+  box-shadow: 0 6px 16px rgba(139, 69, 19, 0.4),
+              0 0 15px rgba(218, 165, 32, 0.2);
+  animation: slideInUp 0.6s ease-out;
 }
 
 .filter-toggle-btn:hover {
-  background-color: var(--color-earth-brown-medium, #A0522D);
-  transform: scale(1.1);
+  background-color: var(--earth-brown-light);
+  transform: scale(1.15);
+  box-shadow: 0 8px 24px rgba(139, 69, 19, 0.5),
+              0 0 20px rgba(218, 165, 32, 0.4);
 }
 
 .filter-toggle-btn:active {
@@ -329,44 +352,77 @@
   margin-bottom: 1rem;
 }
 
-.quest-status {
+.quest-badges-map {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 0.5rem;
-  font-size: 0.9rem;
   margin-bottom: 1rem;
-  color: #3d2817;
 }
 
-.quest-status-badge {
-  padding: 0.35rem 0.85rem;
-  border-radius: 20px;
-  font-size: 0.75rem;
-  font-weight: bold;
-  font-family: 'Cinzel', serif;
-  white-space: nowrap;
-  border: 1px solid currentColor;
-  background: transparent;
+.quest-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: var(--quest-chip-height);
+  padding: 0.35rem var(--quest-chip-padding-x);
+  border-radius: var(--quest-chip-radius);
+  line-height: 1;
+  font-size: 0.84rem;
+  font-weight: 600;
 }
 
-.quest-status-badge.not_yet_begun {
-  color: #666;
-  border-color: #666;
+.quest-chip-icon {
+  font-size: 0.95em;
+  line-height: 1;
 }
 
-.quest-status-badge.the_road_goes_ever_on {
-  color: #F59E0B;
-  border-color: #F59E0B;
+.quest-chip-label {
+  line-height: 1.2;
 }
 
-.quest-status-badge.it_is_done {
-  color: #10B981;
-  border-color: #10B981;
+.quest-type-badge {
+  background: linear-gradient(135deg, var(--forest-green-light) 0%, var(--forest-green) 100%);
+  color: var(--parchment-light);
+  box-shadow: 0 2px 6px rgba(45, 80, 22, 0.3);
 }
 
-.quest-status-badge.the_shadow_falls {
-  color: #DC2626;
-  border-color: #DC2626;
+.quest-status {
+  background: var(--status-not-yet-begun);
+  color: #ffffff;
+}
+
+.quest-status-not_yet_begun,
+.quest-status-pending {
+  background: var(--status-not-yet-begun);
+}
+
+.quest-status-the_road_goes_ever_on,
+.quest-status-in_progress {
+  background: var(--status-road-goes-on);
+}
+
+.quest-status-it_is_done,
+.quest-status-completed {
+  background: var(--status-it-is-done);
+}
+
+.quest-status-the_shadow_falls,
+.quest-status-blocked {
+  background: var(--status-shadow-falls);
+}
+
+.priority-badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--quest-chip-height);
+  padding: 0.35rem 0.75rem;
+  border-radius: var(--quest-chip-radius);
+  font-size: 0.8rem;
+  font-weight: 600;
+  background: rgba(139, 69, 19, 0.1);
+  border: 1px solid rgba(139, 69, 19, 0.4);
+  color: var(--earth-brown);
 }
 
 .quest-info-row {
@@ -416,43 +472,21 @@
   padding: 1.5rem;
   border-top: 2px solid #A0522D;
   flex-shrink: 0;
-  display: flex;
-  gap: 0.75rem;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--quest-action-gap);
   position: relative;
   z-index: 1;
   background: linear-gradient(90deg, transparent, rgba(139, 69, 19, 0.05));
 }
 
-.quest-details-actions button {
-  flex: 1;
-  padding: 0.9rem 1.2rem;
-  background-color: #8B4513;
-  color: #F4E4BC;
-  text-decoration: none;
-  border: 2px solid #A0522D;
-  border-radius: 6px;
-  cursor: pointer;
-  font-family: 'Cinzel', serif;
-  transition: all 0.3s ease;
-  font-size: 0.9rem;
-  font-weight: 600;
-  box-shadow: 0 4px 8px rgba(139, 69, 19, 0.2);
-}
-
-.quest-details-actions button:hover {
-  background-color: #A0522D;
-  box-shadow: 0 6px 12px rgba(139, 69, 19, 0.3);
-  transform: translateY(-2px);
-}
-
-.quest-details-actions button.btn-primary {
-  background: linear-gradient(135deg, #DAA520, #F0E68C);
-  color: #1a1f2e;
-  border-color: #8B4513;
-}
-
-.quest-details-actions button.btn-primary:hover {
-  box-shadow: 0 8px 16px rgba(218, 165, 32, 0.4);
+.map-action-btn {
+  width: 100%;
+  min-height: var(--quest-action-min-height);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
 }
 
 /* Responsive Design */
@@ -483,6 +517,10 @@
     width: calc(100% - 2rem);
     max-height: 50vh;
     max-width: none;
+  }
+
+  .quest-details-actions {
+    grid-template-columns: 1fr;
   }
   
   .filter-toggle-btn {

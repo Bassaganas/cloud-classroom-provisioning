@@ -1,21 +1,122 @@
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
+@import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700;900&family=Lora:wght@400;500;600;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+  }
+
+  body {
+    @apply font-readable text-text-primary bg-background-primary;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    min-height: 100vh;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-epic;
+  }
+
+  h1 {
+    @apply text-epic;
+  }
+
+  h2 {
+    @apply text-4xl;
+  }
+
+  h3 {
+    @apply text-3xl;
+  }
+
+  button {
+    @apply font-medium cursor-pointer transition-all duration-300;
+  }
+
+  input, textarea, select {
+    @apply transition-all duration-300;
+  }
+
+  code {
+    font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New', monospace;
+  }
 }
 
-body {
-  font-family: 'Lora', serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  background: linear-gradient(135deg, #F4E4BC 0%, #E8D5B7 100%);
-  background-attachment: fixed;
-  min-height: 100vh;
-  margin: 0;
-  color: #8B4513;
+@layer components {
+  /* Epic Button styles */
+  .btn-epic {
+    @apply px-6 py-3 bg-gold text-text-primary font-epic rounded-lg hover:bg-gold-light shadow-lg hover:shadow-gold transition-all duration-300 hover:scale-105 active:scale-95;
+  }
+
+  .btn-secondary {
+    @apply px-6 py-3 bg-forest text-parchment-light font-medium rounded-lg hover:bg-forest-light shadow-md hover:shadow-lg transition-all duration-300;
+  }
+
+  .btn-danger {
+    @apply px-6 py-3 bg-red-600 text-white font-medium rounded-lg hover:bg-red-700 shadow-md hover:shadow-lg transition-all duration-300;
+  }
+
+  .btn-small {
+    @apply px-3 py-1 text-sm font-medium rounded transition-all duration-300;
+  }
+
+  /* Card styles */
+  .card-parchment {
+    @apply bg-gradient-to-br from-parchment-light to-parchment rounded-lg p-6 shadow-md hover:shadow-lg transition-shadow duration-300 border border-gold-dark/20;
+  }
+
+  .card-dark {
+    @apply bg-background-secondary rounded-lg p-6 shadow-lg border border-gold-dark/30;
+  }
+
+  /* Badge styles */
+  .badge-status {
+    @apply inline-block px-3 py-1 rounded-full text-xs font-semibold;
+  }
+
+  .badge-ready {
+    @apply badge-status bg-ready/20 text-ready;
+  }
+
+  .badge-inprogress {
+    @apply badge-status bg-in-progress/20 text-in-progress;
+  }
+
+  .badge-blocked {
+    @apply badge-status bg-blocked/20 text-blocked;
+  }
+
+  .badge-pending {
+    @apply badge-status bg-pending/20 text-pending;
+  }
+
+  /* Form inputs */
+  .input-epic {
+    @apply w-full px-4 py-2 bg-background-tertiary border border-gold-dark/50 rounded-lg text-parchment-light focus:outline-none focus:border-gold focus:ring-2 focus:ring-gold/20 transition-all duration-300;
+  }
+
+  .input-epic::placeholder {
+    @apply text-text-secondary;
+  }
+
+  /* Animation utilities */
+  .animate-glow {
+    @apply animate-pulse;
+  }
+
+  .glow-gold {
+    text-shadow: 0 0 10px rgba(218, 165, 32, 0.5);
+    box-shadow: 0 0 20px rgba(218, 165, 32, 0.3);
+  }
+
+  .glow-dark-magic {
+    text-shadow: 0 0 15px rgba(199, 37, 78, 0.6);
+    box-shadow: 0 0 25px rgba(199, 37, 78, 0.3);
+  }
 }
 
-code {
-  font-family: source-code-pro, Menlo, Monaco, Consolas, 'Courier New',
-    monospace;
-}
