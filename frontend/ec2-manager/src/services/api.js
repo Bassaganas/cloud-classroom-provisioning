@@ -77,10 +77,11 @@ export const api = {
   }),
 
   // Instances
-  listInstances: (includeTerminated = false, includeHealth = false) => {
+  listInstances: (includeTerminated = false, includeHealth = false, includeActualCosts = false) => {
     const queryParams = new URLSearchParams()
     if (includeTerminated) queryParams.append('include_terminated', 'true')
     if (includeHealth) queryParams.append('include_health', 'true')
+    if (includeActualCosts) queryParams.append('include_actual_costs', 'true')
     const query = queryParams.toString()
     return apiRequest(`/list${query ? `?${query}` : ''}`)
   },
@@ -98,6 +99,11 @@ export const api = {
   deleteInstance: (instanceId) => apiRequest('/delete', {
     method: 'POST',
     body: JSON.stringify({ instance_id: instanceId }),
+  }),
+
+  deleteInstances: (instanceIds) => apiRequest('/delete', {
+    method: 'POST',
+    body: JSON.stringify({ instance_ids: instanceIds }),
   }),
 
   enableHttps: (instanceId) => apiRequest('/enable_https', {

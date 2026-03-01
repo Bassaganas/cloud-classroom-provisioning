@@ -86,6 +86,142 @@ def parse_bool(value):
             return False
     return None
 
+INSTANCE_RATES_ESTIMATE_USD = {
+    't3.small': {'on_demand': 0.0208, 'spot': 0.0062},
+    't3.medium': {'on_demand': 0.0416, 'spot': 0.0125},
+    't3.large': {'on_demand': 0.0832, 'spot': 0.0250}
+}
+DEFAULT_INSTANCE_RATES_ESTIMATE_USD = {'on_demand': 0.0416, 'spot': 0.0125}
+
+_ce_client = None
+
+def _to_float(value):
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        return float(value)
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped == '':
+            return None
+        try:
+            return float(stripped)
+        except ValueError:
+            return None
+    return None
+
+def _normalize_purchase_type(value, fallback='on-demand'):
+    normalized = str(value or '').strip().lower()
+    if 'spot' in normalized:
+        return 'spot'
+    if 'on-demand' in normalized or normalized == 'ondemand':
+        return 'on-demand'
+    return fallback
+
+def _get_cost_explorer_client():
+    global _ce_client
+    if _ce_client is None:
+        _ce_client = boto3.client('ce', region_name='us-east-1')
+    return _ce_client
+
+def _get_tutorial_session_defaults(tutorial_session_id, workshop_name=None):
+    if not tutorial_session_id:
+        return {}
+    try:
+        sessions_table = get_tutorial_sessions_table(workshop_name)
+        response = sessions_table.get_item(Key={'session_id': tutorial_session_id})
+        item = response.get('Item')
+        if not item:
+            return {}
+        productive_tutorial = parse_bool(item.get('productive_tutorial'))
+        if productive_tutorial is None:
+            productive_tutorial = item.get('purchase_type', 'on-demand') == 'on-demand'
+        purchase_type = item.get('purchase_type', 'on-demand' if productive_tutorial else 'spot')
+        return {
+            'purchase_type': _normalize_purchase_type(purchase_type, 'on-demand'),
+            'spot_max_price': _to_float(item.get('spot_max_price'))
+        }
+    except Exception as e:
+        logger.warning(f"Unable to load tutorial session defaults for {tutorial_session_id}: {str(e)}")
+        return {}
+
+def _estimate_instance_costs(instance_type, purchase_type, spot_max_price, launch_time):
+    rates = INSTANCE_RATES_ESTIMATE_USD.get(instance_type, DEFAULT_INSTANCE_RATES_ESTIMATE_USD)
+    spot_rate = rates['spot']
+    if spot_max_price is not None:
+        spot_rate = min(spot_rate, spot_max_price)
+    hourly_rate = spot_rate if purchase_type == 'spot' else rates['on_demand']
+
+    estimated_runtime_hours = 0.0
+    if isinstance(launch_time, datetime):
+        launch_dt = launch_time if launch_time.tzinfo else launch_time.replace(tzinfo=timezone.utc)
+        estimated_runtime_hours = max(0.0, (datetime.now(timezone.utc) - launch_dt).total_seconds() / 3600.0)
+
+    return {
+        'hourly_rate_estimate_usd': round(hourly_rate, 6),
+        'estimated_runtime_hours': round(estimated_runtime_hours, 4),
+        'estimated_cost_usd': round(hourly_rate * estimated_runtime_hours, 6),
+        'estimated_cost_24h_usd': round(hourly_rate * 24.0, 6)
+    }
+
+def _fetch_actual_costs_for_instances(instance_ids):
+    if not instance_ids:
+        return {
+            'costs_by_instance': {},
+            'actual_total_usd': 0.0,
+            'actual_data_source': 'cost-explorer'
+        }
+
+    try:
+        ce = _get_cost_explorer_client()
+        end_date = datetime.now(timezone.utc).date() + timedelta(days=1)
+        start_date = end_date - timedelta(days=14)
+
+        response = ce.get_cost_and_usage(
+            TimePeriod={
+                'Start': start_date.strftime('%Y-%m-%d'),
+                'End': end_date.strftime('%Y-%m-%d')
+            },
+            Granularity='DAILY',
+            Metrics=['UnblendedCost'],
+            Filter={
+                'Dimensions': {
+                    'Key': 'SERVICE',
+                    'Values': ['Amazon Elastic Compute Cloud - Compute']
+                }
+            },
+            GroupBy=[{'Type': 'DIMENSION', 'Key': 'RESOURCE_ID'}]
+        )
+
+        instance_id_set = set(instance_ids)
+        costs_by_instance = {}
+
+        for day in response.get('ResultsByTime', []):
+            for group in day.get('Groups', []):
+                keys = group.get('Keys', [])
+                resource_id = keys[0] if keys else None
+                if resource_id not in instance_id_set:
+                    continue
+                amount_str = group.get('Metrics', {}).get('UnblendedCost', {}).get('Amount')
+                amount = _to_float(amount_str) or 0.0
+                costs_by_instance[resource_id] = round(costs_by_instance.get(resource_id, 0.0) + amount, 6)
+
+        actual_total = round(sum(costs_by_instance.values()), 6)
+        return {
+            'costs_by_instance': costs_by_instance,
+            'actual_total_usd': actual_total,
+            'actual_data_source': 'cost-explorer'
+        }
+    except Exception as e:
+        logger.warning(f"Cost Explorer unavailable, skipping actual costs: {str(e)}")
+        return {
+            'costs_by_instance': {},
+            'actual_total_usd': None,
+            'actual_data_source': 'unavailable'
+        }
+
 # Get configuration from environment variables
 INSTANCE_TYPE = os.environ.get('EC2_INSTANCE_TYPE', 't3.medium')
 SUBNET_ID = os.environ.get('EC2_SUBNET_ID')
@@ -1336,13 +1472,14 @@ export WORKSHOP_NAME={workshop_name}
             'error': str(e)
         }
 
-def list_instances(include_terminated=False, tutorial_session_id=None, include_health=False):
+def list_instances(include_terminated=False, tutorial_session_id=None, include_health=False, include_actual_costs=False):
     """List all EC2 instances with their assignments and IPs
     
     Args:
         include_terminated: If True, include terminated instances in the results
         tutorial_session_id: If provided, filter instances by this tutorial session ID
         include_health: If True, fetch health status from workshop endpoint for each instance
+        include_actual_costs: If True, enrich instances with Cost Explorer actual costs when available
     """
     try:
         # Get all instances (both pool and admin)
@@ -1379,6 +1516,8 @@ def list_instances(include_terminated=False, tutorial_session_id=None, include_h
         except Exception as e:
             logger.warning(f"Error scanning DynamoDB: {str(e)}")
         
+        session_defaults_cache = {}
+
         for reservation in response['Reservations']:
             for instance in reservation['Instances']:
                 instance_id = instance['InstanceId']
@@ -1407,6 +1546,33 @@ def list_instances(include_terminated=False, tutorial_session_id=None, include_h
                 # Extract HTTPS info from tags
                 https_domain = tags.get('HttpsDomain')
                 https_url = tags.get('HttpsUrl')
+
+                workshop_value = tags.get('WorkshopID', tags.get('Template', WORKSHOP_NAME))
+                resolved_tutorial_session_id = tags.get('TutorialSessionID')
+
+                session_defaults = {}
+                if resolved_tutorial_session_id:
+                    cache_key = f"{workshop_value}:{resolved_tutorial_session_id}"
+                    if cache_key not in session_defaults_cache:
+                        session_defaults_cache[cache_key] = _get_tutorial_session_defaults(
+                            resolved_tutorial_session_id,
+                            workshop_name=workshop_value
+                        )
+                    session_defaults = session_defaults_cache.get(cache_key, {})
+
+                purchase_type = _normalize_purchase_type(
+                    tags.get('PurchaseType') or session_defaults.get('purchase_type'),
+                    'on-demand'
+                )
+                spot_max_price = _to_float(
+                    tags.get('SpotMaxPrice') if 'SpotMaxPrice' in tags else session_defaults.get('spot_max_price')
+                )
+                cost_estimate = _estimate_instance_costs(
+                    instance.get('InstanceType') or INSTANCE_TYPE,
+                    purchase_type,
+                    spot_max_price,
+                    instance.get('LaunchTime')
+                )
                 
                 instance_info = {
                     'instance_id': instance_id,
@@ -1417,15 +1583,21 @@ def list_instances(include_terminated=False, tutorial_session_id=None, include_h
                     'launch_time': instance.get('LaunchTime').isoformat() if instance.get('LaunchTime') else None,
                     'tags': tags,
                     'type': instance_type,
-                    'workshop': tags.get('WorkshopID', tags.get('Template', 'unknown')),
-                    'tutorial_session_id': tags.get('TutorialSessionID'),
+                    'workshop': workshop_value,
+                    'tutorial_session_id': resolved_tutorial_session_id,
                     'assigned_to': assignment.get('student_name'),
                     'assignment_status': assignment.get('status'),
                     'assigned_at': assignment.get('assigned_at'),
                     'cleanup_days': cleanup_days,  # Total cleanup days configured
                     'cleanup_days_remaining': cleanup_days_remaining,  # Days remaining before deletion
                     'https_domain': https_domain,  # HTTPS domain from tags
-                    'https_url': https_url  # Full HTTPS URL from tags
+                    'https_url': https_url,  # Full HTTPS URL from tags
+                    'purchase_type': purchase_type,
+                    'spot_max_price': spot_max_price,
+                    'hourly_rate_estimate_usd': cost_estimate['hourly_rate_estimate_usd'],
+                    'estimated_runtime_hours': cost_estimate['estimated_runtime_hours'],
+                    'estimated_cost_usd': cost_estimate['estimated_cost_usd'],
+                    'estimated_cost_24h_usd': cost_estimate['estimated_cost_24h_usd']
                 }
 
                 if include_health:
@@ -1440,6 +1612,18 @@ def list_instances(include_terminated=False, tutorial_session_id=None, include_h
                         instance_info['health_error'] = health_error
                 
                 instances.append(instance_info)
+
+        actual_cost_result = {
+            'costs_by_instance': {},
+            'actual_total_usd': None,
+            'actual_data_source': 'unavailable'
+        }
+
+        if include_actual_costs:
+            actual_cost_result = _fetch_actual_costs_for_instances([item['instance_id'] for item in instances])
+            costs_by_instance = actual_cost_result.get('costs_by_instance', {})
+            for item in instances:
+                item['actual_cost_usd'] = costs_by_instance.get(item['instance_id'])
         
         # Sort by launch time (newest first)
         instances.sort(key=lambda x: x['launch_time'] or '', reverse=True)
@@ -1464,6 +1648,8 @@ def list_instances(include_terminated=False, tutorial_session_id=None, include_h
             'success': True,
             'instances': instances,  # Return all instances (may include terminated if include_terminated=True)
             'count': len(instances),
+            'actual_total_usd': actual_cost_result.get('actual_total_usd'),
+            'actual_data_source': actual_cost_result.get('actual_data_source', 'unavailable'),
             'summary': {
                 'total': len(active_instances),  # Only active instances (excluding terminated)
                 'pool': {
@@ -2355,12 +2541,14 @@ def lambda_handler(event, context):
             include_terminated = query_params.get('include_terminated', 'false').lower() == 'true'
             # Check if include_health parameter is set (manual/on-demand only)
             include_health = query_params.get('include_health', 'false').lower() == 'true'
+            include_actual_costs = query_params.get('include_actual_costs', 'false').lower() == 'true'
             # Check if tutorial_session_id filter is provided
             tutorial_session_id = query_params.get('tutorial_session_id')
             result = list_instances(
                 include_terminated=include_terminated,
                 tutorial_session_id=tutorial_session_id,
-                include_health=include_health
+                include_health=include_health,
+                include_actual_costs=include_actual_costs
             )
             return {
                 'statusCode': 200 if result['success'] else 500,
@@ -2982,6 +3170,7 @@ def lambda_handler(event, context):
         elif api_path == '/tutorial_sessions' and http_method == 'GET':
             # List tutorial sessions for a workshop
             workshop_name = query_params.get('workshop')
+            include_actual_costs = str(query_params.get('include_actual_costs', 'false')).lower() == 'true'
             if not workshop_name:
                 return {
                     'statusCode': 400,
@@ -2998,13 +3187,53 @@ def lambda_handler(event, context):
                     KeyConditionExpression='workshop_name = :wn',
                     ExpressionAttributeValues={':wn': workshop_name}
                 )
+
+                instances_result = list_instances(
+                    include_actual_costs=include_actual_costs
+                )
+                all_instances = instances_result.get('instances', []) if instances_result.get('success') else []
+                # Filter instances by workshop
+                workshop_instances = [inst for inst in all_instances if inst.get('workshop') == workshop_name]
+                actual_data_source = instances_result.get('actual_data_source', 'unavailable')
+
+                per_session_aggregates = {}
+                for instance in workshop_instances:
+                    session_id = instance.get('tutorial_session_id')
+                    if not session_id:
+                        continue
+
+                    if session_id not in per_session_aggregates:
+                        per_session_aggregates[session_id] = {
+                            'actual_instance_count': 0,
+                            'estimated_hourly_total_usd': 0.0,
+                            'estimated_accrued_total_usd': 0.0,
+                            'estimated_24h_total_usd': 0.0,
+                            'actual_total_usd': 0.0,
+                            'has_actual_costs': False
+                        }
+
+                    aggregate = per_session_aggregates[session_id]
+                    aggregate['actual_instance_count'] += 1
+                    aggregate['estimated_hourly_total_usd'] += float(instance.get('hourly_rate_estimate_usd') or 0.0)
+                    aggregate['estimated_accrued_total_usd'] += float(instance.get('estimated_cost_usd') or 0.0)
+                    aggregate['estimated_24h_total_usd'] += float(instance.get('estimated_cost_24h_usd') or 0.0)
+
+                    actual_cost = instance.get('actual_cost_usd')
+                    if actual_cost is not None:
+                        aggregate['actual_total_usd'] += float(actual_cost)
+                        aggregate['has_actual_costs'] = True
                 
                 sessions = []
                 for item in response.get('Items', []):
-                    # Get instance counts for each session
                     session_id = item['session_id']
-                    instances_result = list_instances(tutorial_session_id=session_id)
-                    instance_count = len(instances_result.get('instances', [])) if instances_result.get('success') else 0
+                    aggregate = per_session_aggregates.get(session_id, {
+                        'actual_instance_count': 0,
+                        'estimated_hourly_total_usd': 0.0,
+                        'estimated_accrued_total_usd': 0.0,
+                        'estimated_24h_total_usd': 0.0,
+                        'actual_total_usd': 0.0,
+                        'has_actual_costs': False
+                    })
                     
                     # Convert Decimal values to int/float for JSON serialization
                     pool_count = item.get('pool_count', 0)
@@ -3030,7 +3259,12 @@ def lambda_handler(event, context):
                         'purchase_type': item.get('purchase_type', 'on-demand' if productive_tutorial else 'spot'),
                         'spot_max_price': spot_max_price,
                         'status': item.get('status', 'unknown'),
-                        'actual_instance_count': instance_count
+                        'actual_instance_count': aggregate['actual_instance_count'],
+                        'aggregated_estimated_cost_usd': round(aggregate['estimated_accrued_total_usd'], 6),
+                        'aggregated_hourly_cost_usd': round(aggregate['estimated_hourly_total_usd'], 6),
+                        'aggregated_estimated_24h_cost_usd': round(aggregate['estimated_24h_total_usd'], 6),
+                        'aggregated_actual_cost_usd': round(aggregate['actual_total_usd'], 6) if aggregate['has_actual_costs'] else None,
+                        'actual_data_source': actual_data_source
                     })
                 
                 # Sort by created_at descending (newest first)
@@ -3078,7 +3312,7 @@ def lambda_handler(event, context):
                 item = response['Item']
                 
                 # Get instances for this session
-                instances_result = list_instances(tutorial_session_id=session_id)
+                instances_result = list_instances(tutorial_session_id=session_id, include_actual_costs=True)
                 instances = instances_result.get('instances', []) if instances_result.get('success') else []
                 
                 # Calculate stats
@@ -3103,6 +3337,18 @@ def lambda_handler(event, context):
                     admin_cleanup_days = int(admin_cleanup_days) if admin_cleanup_days % 1 == 0 else float(admin_cleanup_days)
                 if isinstance(spot_max_price, Decimal):
                     spot_max_price = int(spot_max_price) if spot_max_price % 1 == 0 else float(spot_max_price)
+
+                estimated_hourly_total_usd = round(sum((i.get('hourly_rate_estimate_usd') or 0.0) for i in instances), 6)
+                estimated_accrued_total_usd = round(sum((i.get('estimated_cost_usd') or 0.0) for i in instances), 6)
+                estimated_24h_total_usd = round(sum((i.get('estimated_cost_24h_usd') or 0.0) for i in instances), 6)
+
+                instance_actual_values = [i.get('actual_cost_usd') for i in instances if i.get('actual_cost_usd') is not None]
+                if instance_actual_values:
+                    actual_total_usd = round(sum(instance_actual_values), 6)
+                else:
+                    actual_total_usd = instances_result.get('actual_total_usd')
+
+                actual_data_source = instances_result.get('actual_data_source', 'unavailable')
                 
                 return {
                     'statusCode': 200,
@@ -3127,6 +3373,13 @@ def lambda_handler(event, context):
                             'admin_instances': len(admin_instances),
                             'running': running_count,
                             'stopped': stopped_count
+                        },
+                        'costs': {
+                            'estimated_hourly_total_usd': estimated_hourly_total_usd,
+                            'estimated_accrued_total_usd': estimated_accrued_total_usd,
+                            'estimated_24h_total_usd': estimated_24h_total_usd,
+                            'actual_total_usd': actual_total_usd,
+                            'actual_data_source': actual_data_source
                         },
                         'instances': instances
                     })

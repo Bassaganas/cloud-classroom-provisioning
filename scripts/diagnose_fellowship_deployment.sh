@@ -94,6 +94,16 @@ elif ss -tuln 2>/dev/null | grep -q ":80 "; then
 else
     echo "  ✗ Port 80 is NOT listening"
 fi
+echo "  Checking if Caddy is listening on port 443..."
+if netstat -tuln 2>/dev/null | grep -q ":443 "; then
+    echo "  ✓ Port 443 is listening"
+    netstat -tuln 2>/dev/null | grep ":443" || echo "    (netstat output not available)"
+elif ss -tuln 2>/dev/null | grep -q ":443 "; then
+    echo "  ✓ Port 443 is listening"
+    ss -tuln 2>/dev/null | grep ":443" || echo "    (ss output not available)"
+else
+    echo "  ✗ Port 443 is NOT listening"
+fi
 echo ""
 
 # Test local connectivity
@@ -105,6 +115,15 @@ if curl -s --max-time 3 http://localhost/ >/dev/null 2>&1; then
     curl -s --max-time 3 http://localhost/ 2>/dev/null | head -5 || echo "    (Could not get response)"
 else
     echo "  ✗ HTTP localhost:80 is NOT responding"
+fi
+echo ""
+echo "  Testing HTTPS on localhost:443..."
+if curl -k -s --max-time 5 https://localhost/ >/dev/null 2>&1; then
+    echo "  ✓ HTTPS localhost:443 is responding"
+    echo "    Response preview:"
+    curl -k -s --max-time 5 https://localhost/ 2>/dev/null | head -5 || echo "    (Could not get response)"
+else
+    echo "  ✗ HTTPS localhost:443 is NOT responding"
 fi
 echo ""
 
@@ -140,12 +159,15 @@ echo ""
 
 # Check Caddy configuration
 echo "11. Caddy Configuration"
-if [ -f "/home/ec2-user/fellowship-sut/caddy/Caddyfile" ]; then
-    echo "  ✓ Caddyfile found"
+CADDY_CONFIG_PATH="/home/ec2-user/fellowship-sut/caddy/Caddyfile"
+echo "  Config path: $CADDY_CONFIG_PATH"
+
+if [ -f "$CADDY_CONFIG_PATH" ]; then
+    echo "  ✓ Caddy config found"
     echo "    Contents:"
-    cat /home/ec2-user/fellowship-sut/caddy/Caddyfile 2>/dev/null | head -20
+    cat "$CADDY_CONFIG_PATH" 2>/dev/null | head -20
 else
-    echo "  ✗ Caddyfile NOT found"
+    echo "  ✗ Selected Caddy config NOT found: $SELECTED_CADDY_FILE"
 fi
 echo ""
 
@@ -159,6 +181,38 @@ else
 fi
 echo ""
 
+echo "13. Domain DNS Verification"
+ENV_FILE="/home/ec2-user/fellowship-sut/.env"
+if [ -f "$ENV_FILE" ]; then
+    CADDY_DOMAIN_VALUE=$(grep '^CADDY_DOMAIN=' "$ENV_FILE" | head -1 | cut -d= -f2-)
+    if [ -n "$CADDY_DOMAIN_VALUE" ]; then
+        echo "  Found CADDY_DOMAIN in .env: $CADDY_DOMAIN_VALUE"
+
+        RESOLVED_IP=$(getent ahostsv4 "$CADDY_DOMAIN_VALUE" 2>/dev/null | awk '{print $1}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -1 || true)
+        if [ -z "$RESOLVED_IP" ]; then
+            RESOLVED_IP=$(nslookup "$CADDY_DOMAIN_VALUE" 2>/dev/null | awk '/^Address: / {print $2}' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | tail -1 || true)
+        fi
+
+        if [ -n "$RESOLVED_IP" ]; then
+            echo "  DNS resolves to: $RESOLVED_IP"
+            if [ "$PUBLIC_IP" = "$RESOLVED_IP" ]; then
+                echo "  ✓ DNS matches instance public IP"
+            else
+                echo "  ✗ DNS does not match instance public IP ($PUBLIC_IP)"
+                echo "    Next step: update DNS A record for $CADDY_DOMAIN_VALUE to $PUBLIC_IP and wait for propagation"
+            fi
+        else
+            echo "  ✗ Domain does not currently resolve"
+            echo "    Next step: create/fix DNS A record for $CADDY_DOMAIN_VALUE -> $PUBLIC_IP"
+        fi
+    else
+        echo "  CADDY_DOMAIN is empty in .env (local HTTP mode or incomplete deployment)"
+    fi
+else
+    echo "  .env file not found at $ENV_FILE"
+fi
+echo ""
+
 # Summary
 echo "=========================================="
 echo "Diagnostics Summary"
@@ -167,9 +221,11 @@ echo ""
 echo "Next steps if issues are found:"
 echo "1. If containers aren't running: Check setup logs at /var/log/user-data.log"
 echo "2. If port 80 isn't listening: Check Caddy logs above for binding errors"
-echo "3. If localhost isn't responding: Restart Caddy with: docker compose restart caddy"
-echo "4. If domain isn't accessible: Check security groups allow HTTP/HTTPS (80, 443)"
-echo "5. If domain still not working: Verify DNS points to public IP with: nslookup <domain>"
+echo "3. If HTTPS localhost fails: Check Caddy logs for ACME/certificate errors"
+echo "4. If localhost isn't responding: Restart Caddy with: docker compose restart caddy"
+echo "5. If domain isn't accessible: Check security groups allow HTTP/HTTPS (80, 443)"
+echo "6. If certificate issuance fails: Ensure DNS A record points to this instance public IP"
+echo "7. If certificate still not issued: wait 2-5 minutes and retry after DNS propagation"
 echo ""
 echo "Useful commands to run manually:"
 echo "  cd /home/ec2-user/fellowship-sut"
@@ -177,6 +233,7 @@ echo "  docker compose ps                          # Check container status"
 echo "  docker compose logs -f caddy                # Follow Caddy logs"
 echo "  docker compose logs -f backend              # Follow backend logs"
 echo "  curl -v http://localhost/                   # Test local connectivity"
+echo "  curl -vk https://localhost/                 # Test local HTTPS/certificate path"
 echo "  docker compose restart caddy                # Restart Caddy if domain changed"
 echo ""
 echo "=========================================="

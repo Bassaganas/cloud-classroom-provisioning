@@ -38,6 +38,10 @@ function WorkshopDashboard() {
   const navigate = useNavigate()
 
   const [instances, setInstances] = useState([])
+  const [costs, setCosts] = useState({
+    actual_total_usd: null,
+    actual_data_source: 'unavailable'
+  })
   const [loading, setLoading] = useState(true)
   const [settings, setSettings] = useState(null)
   const [settingsLoading, setSettingsLoading] = useState(true)
@@ -58,7 +62,7 @@ function WorkshopDashboard() {
 
   const refreshList = async () => {
     try {
-      const response = await api.listInstances(showTerminated)
+      const response = await api.listInstances(showTerminated, false, true)
       if (response.success) {
         let data = response.instances || []
         data = data.filter((instance) => instance.workshop === workshopName || !instance.workshop)
@@ -66,6 +70,10 @@ function WorkshopDashboard() {
           data = data.filter((instance) => instance.state !== 'terminated')
         }
         setInstances(data)
+        setCosts({
+          actual_total_usd: response.actual_total_usd ?? null,
+          actual_data_source: response.actual_data_source || 'unavailable'
+        })
       }
     } catch (error) {
       showToast(error.message, 'error')
@@ -117,6 +125,18 @@ function WorkshopDashboard() {
 
   const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds])
 
+  const toNumber = (value) => {
+    if (value === null || value === undefined) return null
+    const numeric = Number(value)
+    return Number.isFinite(numeric) ? numeric : null
+  }
+
+  const formatUsd = (value, decimals = 2) => {
+    const numeric = toNumber(value)
+    if (numeric === null) return '-'
+    return `$${numeric.toFixed(decimals)}`
+  }
+
   const instanceStats = useMemo(() => {
     const running = instances.filter((item) => item.state === 'running').length
     const stopped = instances.filter((item) => item.state === 'stopped').length
@@ -135,6 +155,35 @@ function WorkshopDashboard() {
       stoppedPct: Math.round((stopped / total) * 100)
     }
   }, [instances])
+
+  const costTotals = useMemo(() => {
+    let estimatedHourly = 0
+    let estimatedAccrued = 0
+    let estimated24h = 0
+    let actualTotal = 0
+    let hasActual = false
+
+    instances.forEach((instance) => {
+      estimatedHourly += toNumber(instance.hourly_rate_estimate_usd) || 0
+      estimatedAccrued += toNumber(instance.estimated_cost_usd) || 0
+      estimated24h += toNumber(instance.estimated_cost_24h_usd) || 0
+
+      const actual = toNumber(instance.actual_cost_usd)
+      if (actual !== null) {
+        actualTotal += actual
+        hasActual = true
+      }
+    })
+
+    return {
+      estimatedHourly,
+      estimatedAccrued,
+      estimated24h,
+      estimatedMonthly: estimated24h * 30,
+      actualTotal: hasActual ? actualTotal : toNumber(costs.actual_total_usd),
+      actualDataSource: costs.actual_data_source || 'unavailable'
+    }
+  }, [instances, costs])
 
   const toggleSelected = (instanceId) => {
     setSelectedIds((prev) => (
@@ -264,6 +313,51 @@ function WorkshopDashboard() {
           </Grid>
         </Grid>
 
+        <Grid container spacing={2.5} sx={{ mb: 2.5 }}>
+          <Grid item xs={12} md={6} lg={4}>
+            <Card>
+              <CardContent>
+                <Typography variant="overline" color="text.secondary">Hourly Burn (Est.)</Typography>
+                <Typography variant="h5" fontWeight={700}>{formatUsd(costTotals.estimatedHourly)}</Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+          <Grid item xs={12} md={6} lg={4}>
+            <Card>
+              <CardContent>
+                <Typography variant="overline" color="text.secondary">Accrued (Est.)</Typography>
+                <Typography variant="h5" fontWeight={700}>{formatUsd(costTotals.estimatedAccrued)}</Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+          <Grid item xs={12} md={6} lg={4}>
+            <Card>
+              <CardContent>
+                <Typography variant="overline" color="text.secondary">Next 24h (Est.)</Typography>
+                <Typography variant="h5" fontWeight={700}>{formatUsd(costTotals.estimated24h)}</Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+          <Grid item xs={12} md={6} lg={4}>
+            <Card>
+              <CardContent>
+                <Typography variant="overline" color="text.secondary">Monthly (Est.)</Typography>
+                <Typography variant="h5" fontWeight={700}>{formatUsd(costTotals.estimatedMonthly)}</Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+          <Grid item xs={12} md={6} lg={4}>
+            <Card>
+              <CardContent>
+                <Typography variant="overline" color="text.secondary">
+                  Actual (Billing){costTotals.actualDataSource === 'cost-explorer' ? '' : ' - Unavailable'}
+                </Typography>
+                <Typography variant="h5" fontWeight={700}>{formatUsd(costTotals.actualTotal)}</Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+        </Grid>
+
         <Card sx={{ mb: 2.5 }}>
           <CardContent>
             <Stack direction={{ xs: 'column', lg: 'row' }} spacing={2} alignItems={{ xs: 'stretch', lg: 'center' }}>
@@ -377,19 +471,21 @@ function WorkshopDashboard() {
                   <TableCell>IP Address</TableCell>
                   <TableCell>Assigned</TableCell>
                   <TableCell>Session</TableCell>
+                  <TableCell>Hourly (Est.)</TableCell>
+                  <TableCell>Cost (Est./Actual)</TableCell>
                   <TableCell align="right">Actions</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
                 {loading ? (
                   <TableRow>
-                    <TableCell colSpan={8} align="center" sx={{ py: 5 }}>
+                    <TableCell colSpan={10} align="center" sx={{ py: 5 }}>
                       <CircularProgress size={24} />
                     </TableCell>
                   </TableRow>
                 ) : filteredInstances.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} align="center" sx={{ py: 5 }}>
+                    <TableCell colSpan={10} align="center" sx={{ py: 5 }}>
                       No instances found
                     </TableCell>
                   </TableRow>
@@ -442,6 +538,15 @@ function WorkshopDashboard() {
                           ) : (
                             '-'
                           )}
+                        </TableCell>
+                        <TableCell>{formatUsd(instance.hourly_rate_estimate_usd)}</TableCell>
+                        <TableCell>
+                          <Typography variant="caption" display="block">
+                            Est: {formatUsd(instance.estimated_cost_usd)}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            Actual: {formatUsd(instance.actual_cost_usd)}
+                          </Typography>
                         </TableCell>
                         <TableCell align="right">
                           <Stack direction="row" spacing={1} justifyContent="flex-end">

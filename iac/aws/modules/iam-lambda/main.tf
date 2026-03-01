@@ -190,6 +190,13 @@ resource "aws_iam_role_policy" "lambda_iam_policy" {
           "ssm:GetCommandInvocation"
         ]
         Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "ce:GetCostAndUsage"
+        ]
+        Resource = "*"
       }
     ]
   })

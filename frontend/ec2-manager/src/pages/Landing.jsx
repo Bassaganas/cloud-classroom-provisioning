@@ -87,6 +87,7 @@ function Landing() {
     try {
       const response = await api.getTutorialSessions(workshopName)
       if (response.success && response.sessions) {
+        console.log(`[Landing] Loaded ${response.sessions.length} sessions for ${workshopName}:`, response.sessions)
         setTutorialSessions(prev => ({
           ...prev,
           [workshopName]: response.sessions
@@ -148,6 +149,27 @@ function Landing() {
     [tutorialSessions]
   )
 
+  const totalSessionCosts = useMemo(() => {
+    const allSessions = Object.values(tutorialSessions).flat()
+    console.log('[Landing] All sessions for cost calculation:', allSessions)
+    const total = allSessions.reduce((acc, session) => {
+      const sessionCost = session.aggregated_estimated_cost_usd || 0
+      console.log(`[Landing] Session ${session.session_id}: cost=${sessionCost}, running_total=${acc + sessionCost}`)
+      return acc + sessionCost
+    }, 0)
+    console.log('[Landing] Total session costs:', total)
+    return total
+  }, [tutorialSessions])
+
+  const formatUsd = (value, decimals = 2) => {
+    if (value === null || value === undefined) return '-'
+    const formatted = `$${Number(value).toFixed(decimals)}`
+    if (value > 0) {
+      console.log(`[Landing] formatUsd(${value}) -> ${formatted}`)
+    }
+    return formatted
+  }
+
   if (loading) {
     return (
       <Box sx={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
@@ -186,6 +208,12 @@ function Landing() {
             <CardContent>
               <Typography variant="overline" color="text.secondary">Tracked Session Instances</Typography>
               <Typography variant="h4" fontWeight={700}>{totalSessionInstances}</Typography>
+            </CardContent>
+          </Card>
+          <Card sx={{ flex: 1 }}>
+            <CardContent>
+              <Typography variant="overline" color="text.secondary">Session Costs (Est.)</Typography>
+              <Typography variant="h4" fontWeight={700}>{formatUsd(totalSessionCosts, 2)}</Typography>
             </CardContent>
           </Card>
         </Stack>
@@ -258,7 +286,7 @@ function Landing() {
                               return (
                             <ListItemText
                               primary={
-                                <Stack direction="row" alignItems="center" spacing={1}>
+                                <Stack direction="row" alignItems="center" spacing={1} sx={{ flexWrap: 'wrap' }}>
                                   <Typography variant="body2" fontWeight={600}>{session.session_id}</Typography>
                                   <Chip
                                     size="small"
@@ -268,6 +296,7 @@ function Landing() {
                                     label={isProductiveTutorial ? 'Productive' : 'Test'}
                                   />
                                   <Chip size="small" label={`${session.actual_instance_count || 0} inst`} />
+                                  <Chip size="small" label={formatUsd(session.aggregated_estimated_cost_usd || 0)} variant="outlined" />
                                 </Stack>
                               }
                               secondary={new Date(session.created_at).toLocaleDateString()}

@@ -160,6 +160,8 @@ def process_instance(instance_id, ec2_client, ssm_client, table):
         
         logger.info(f"Instance {instance_id} launched at {launch_time}, and now is {now}, so it has a remaining time of {now - launch_time}")
         # Check if instance has exceeded hard terminate timeout
+        is_spot = instance.get('InstanceLifecycle') == 'spot'
+        logger.info(f"Instance {instance_id} lifecycle: {'spot' if is_spot else 'on-demand'}")
         if now - launch_time > timedelta(minutes=HARD_TERMINATE_TIMEOUT_MINUTES):
             logger.info(f"Instance {instance_id} has exceeded hard terminate timeout of {HARD_TERMINATE_TIMEOUT_MINUTES} minutes")
             try:
@@ -218,6 +220,30 @@ def process_instance(instance_id, ec2_client, ssm_client, table):
                 logger.info(f"Instance {instance_id} has been running for {running_time:.2f} minutes, which is less than STOP_TIMEOUT_MINUTES ({STOP_TIMEOUT_MINUTES}). Skipping stop.")
                 return {'instance_id': instance_id, 'status': 'skipped', 'reason': f'running less than stop timeout ({running_time:.2f} < {STOP_TIMEOUT_MINUTES})'}
             logger.info(f"Stopping unassigned running instance {instance_id} (running for {running_time:.2f} minutes, exceeds STOP_TIMEOUT_MINUTES={STOP_TIMEOUT_MINUTES})")
+            # For spot instances, terminate immediately instead of stopping
+            # Spot instances should be terminated when they exceed stop timeout, not stopped
+            if is_spot:
+                logger.info(f"Terminating spot instance {instance_id} (exceeds STOP_TIMEOUT_MINUTES={STOP_TIMEOUT_MINUTES})")
+                try:
+                    # Clean up Route53 record before termination
+                    cleanup_route53_record(instance_id, tags)
+                    
+                    ec2_client.terminate_instances(InstanceIds=[instance_id])
+                    logger.info(f"Initiated termination for spot instance {instance_id}")
+                    
+                    # Delete DynamoDB record if it exists
+                    try:
+                        table.delete_item(Key={'instance_id': instance_id})
+                        logger.info(f"Deleted DynamoDB record for instance {instance_id}")
+                    except Exception as e:
+                        logger.warning(f"Failed to delete DynamoDB record for instance {instance_id}: {str(e)}")
+                    
+                    return {'instance_id': instance_id, 'status': 'terminated', 'reason': 'spot instance exceeded stop timeout'}
+                except Exception as e:
+                    logger.error(f"Failed to terminate spot instance {instance_id}: {str(e)}")
+                    return {'instance_id': instance_id, 'status': 'error', 'error': str(e)}
+            
+            # For on-demand instances, stop them or cleanup before stopping
             try:
                 # Run cleanup commands before stopping
                 try:
@@ -341,9 +367,17 @@ def process_instance(instance_id, ec2_client, ssm_client, table):
                         if 'last_stopped_at' in response['Item']:
                             last_stopped_at = datetime.fromisoformat(response['Item']['last_stopped_at']).replace(tzinfo=timezone.utc)
                             now = datetime.now(timezone.utc)
-                            
-                            if now - last_stopped_at > timedelta(minutes=TERMINATE_TIMEOUT_MINUTES):
-                                logger.info(f"Terminating stopped instance {instance_id} (stopped for more than {TERMINATE_TIMEOUT_MINUTES} minutes)")
+                            # For spot instances, use a shorter threshold to avoid lingering costs.
+                            # For on-demand instances, use configured terminate timeout.
+                            terminate_threshold = timedelta(
+                                minutes=(max(5, STOP_TIMEOUT_MINUTES) if is_spot else TERMINATE_TIMEOUT_MINUTES)
+                            )
+
+                            if now - last_stopped_at > terminate_threshold:
+                                logger.info(
+                                    f"Terminating stopped instance {instance_id} "
+                                    f"(stopped for more than {terminate_threshold.total_seconds() / 60:.0f} minutes)"
+                                )
                                 try:
                                     # Clean up Route53 record before termination
                                     cleanup_route53_record(instance_id, tags)
@@ -527,19 +561,19 @@ def lambda_handler(event, context):
         # Process pool instances
         if pool_instance_ids:
             logger.info(f"Found {len(pool_instance_ids)} pool instances to process")
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            future_to_instance = {
-                executor.submit(process_instance, instance_id, ec2_client, ssm_client, table): instance_id
-                for instance_id in pool_instance_ids
-            }
-            for future in concurrent.futures.as_completed(future_to_instance):
-                instance_id = future_to_instance[future]
-                try:
-                    result = future.result()
-                    results.append(result)
-                except Exception as e:
-                    logger.error(f"Error processing pool instance {instance_id}: {str(e)}")
-                    results.append({'instance_id': instance_id, 'status': 'error', 'error': str(e)})
+            with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+                future_to_instance = {
+                    executor.submit(process_instance, instance_id, ec2_client, ssm_client, table): instance_id
+                    for instance_id in pool_instance_ids
+                }
+                for future in concurrent.futures.as_completed(future_to_instance):
+                    instance_id = future_to_instance[future]
+                    try:
+                        result = future.result()
+                        results.append(result)
+                    except Exception as e:
+                        logger.error(f"Error processing pool instance {instance_id}: {str(e)}")
+                        results.append({'instance_id': instance_id, 'status': 'error', 'error': str(e)})
         
         # Process admin instances
         if admin_instance_ids:
@@ -548,15 +582,15 @@ def lambda_handler(event, context):
                 future_to_instance = {
                     executor.submit(process_admin_instance, instance_id, ec2_client, table): instance_id
                     for instance_id in admin_instance_ids
-            }
-            for future in concurrent.futures.as_completed(future_to_instance):
-                instance_id = future_to_instance[future]
-                try:
-                    result = future.result()
-                    results.append(result)
-                except Exception as e:
-                    logger.error(f"Error processing admin instance {instance_id}: {str(e)}")
-                    results.append({'instance_id': instance_id, 'status': 'error', 'error': str(e)})
+                }
+                for future in concurrent.futures.as_completed(future_to_instance):
+                    instance_id = future_to_instance[future]
+                    try:
+                        result = future.result()
+                        results.append(result)
+                    except Exception as e:
+                        logger.error(f"Error processing admin instance {instance_id}: {str(e)}")
+                        results.append({'instance_id': instance_id, 'status': 'error', 'error': str(e)})
                     
         successful = sum(1 for r in results if r['status'] in ['stopped', 'terminated', 'hard_terminated', 'deleted'])
         failed = len(results) - successful

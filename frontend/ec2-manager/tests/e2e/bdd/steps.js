@@ -5,8 +5,21 @@ import { SessionFormDialogPage } from '../pom/session-form-dialog.page.js'
 import { DashboardPage } from '../pom/dashboard.page.js'
 import { CreateInstanceDialogPage } from '../pom/create-instance-dialog.page.js'
 import { TutorialOverviewPage } from '../pom/tutorial-overview.page.js'
+import { WorkshopOverviewPage } from '../pom/workshop-overview.page.js'
 
 const PASSWORD = 'test123'
+
+function toNumber(value) {
+  if (value === null || value === undefined) return null
+  const numeric = Number(value)
+  return Number.isFinite(numeric) ? numeric : null
+}
+
+function formatUsd(value, decimals = 2) {
+  const numeric = toNumber(value)
+  if (numeric === null) return '-'
+  return `$${numeric.toFixed(decimals)}`
+}
 
 export async function givenIAmLoggedIn(page) {
   const loginPage = new LoginPage(page)
@@ -140,4 +153,146 @@ export async function thenAllTutorialLinksUseHttp(page) {
 
   expect(hrefs.length).toBeGreaterThan(0)
   expect(hrefs.every((href) => href.startsWith('http://'))).toBeTruthy()
+}
+
+export async function whenIRequestInstancesApiWithActualCosts(workshop, costSourceMode = null) {
+  const query = new URLSearchParams({
+    password: PASSWORD,
+    workshop,
+    include_actual_costs: 'true',
+  })
+  
+  if (costSourceMode) {
+    query.append('cost_source_mode', costSourceMode)
+  }
+
+  const response = await fetch(`http://127.0.0.1:3001/api/list?${query.toString()}`)
+  const payload = await response.json()
+  return { status: response.status, payload }
+}
+
+export async function whenIRequestTutorialSessionsApiCostsForAllWorkshops() {
+  const templatesResponse = await fetch(`http://127.0.0.1:3001/api/templates?password=${PASSWORD}`)
+  const templatesPayload = await templatesResponse.json()
+  const workshopNames = Object.keys(templatesPayload.templates || {})
+
+  const sessionsByWorkshop = {}
+  let totalEstimated = 0
+
+  for (const workshop of workshopNames) {
+    const response = await fetch(
+      `http://127.0.0.1:3001/api/tutorial_sessions?password=${PASSWORD}&workshop=${encodeURIComponent(workshop)}`
+    )
+    const payload = await response.json()
+    const sessions = payload.sessions || []
+    sessionsByWorkshop[workshop] = sessions
+
+    sessions.forEach((session) => {
+      totalEstimated += Number(session.aggregated_estimated_cost_usd || 0)
+    })
+  }
+
+  return {
+    sessionsByWorkshop,
+    totalEstimated: Number(totalEstimated.toFixed(2))
+  }
+}
+
+export async function thenISeeActualCostFieldsInListResponse(result) {
+  expect(result.status).toBe(200)
+  expect(result.payload.success).toBeTruthy()
+  expect(result.payload).toHaveProperty('actual_total_usd')
+  expect(result.payload).toHaveProperty('actual_data_source')
+  expect(Array.isArray(result.payload.instances)).toBeTruthy()
+}
+
+export async function thenISeeEstimatedAndActualFieldsPerInstance(result) {
+  const items = result.payload.instances || []
+  if (items.length === 0) return
+
+  items.forEach((instance) => {
+    expect(instance).toHaveProperty('hourly_rate_estimate_usd')
+    expect(instance).toHaveProperty('estimated_runtime_hours')
+    expect(instance).toHaveProperty('estimated_cost_usd')
+    expect(instance).toHaveProperty('estimated_cost_24h_usd')
+    expect(instance).toHaveProperty('actual_cost_usd')
+  })
+}
+
+export async function whenIGotoWorkshopPage(page, workshop) {
+  const workshopOverviewPage = new WorkshopOverviewPage(page)
+  await workshopOverviewPage.gotoWorkshopPath(workshop)
+  await workshopOverviewPage.expectDashboardVisible()
+}
+
+export async function thenISeeWorkshopCostCards(page) {
+  const workshopOverviewPage = new WorkshopOverviewPage(page)
+  await workshopOverviewPage.expectCostCardsVisible()
+}
+
+export async function thenISeeMonthlyExpectedCost(page) {
+  const workshopOverviewPage = new WorkshopOverviewPage(page)
+  await workshopOverviewPage.expectMonthlyEstimateHasCurrencyValue()
+}
+
+export async function thenISeeWorkshopCostColumns(page) {
+  const workshopOverviewPage = new WorkshopOverviewPage(page)
+  await workshopOverviewPage.expectCostColumnsVisible()
+}
+
+export async function thenWorkshopCostCardsMatchApiTotals(page, listApiResult, workshop) {
+  expect(listApiResult.status).toBe(200)
+  const instances = (listApiResult.payload.instances || []).filter(
+    (instance) => (instance.workshop === workshop || !instance.workshop) && instance.state !== 'terminated'
+  )
+
+  const estimatedHourly = instances.reduce((sum, item) => sum + (Number(item.hourly_rate_estimate_usd) || 0), 0)
+  const estimatedAccrued = instances.reduce((sum, item) => sum + (Number(item.estimated_cost_usd) || 0), 0)
+  const estimated24h = instances.reduce((sum, item) => sum + (Number(item.estimated_cost_24h_usd) || 0), 0)
+  const estimatedMonthly = estimated24h * 30
+
+  const actualValues = instances
+    .map((item) => toNumber(item.actual_cost_usd))
+    .filter((item) => item !== null)
+  const actualTotal = actualValues.length > 0
+    ? actualValues.reduce((sum, value) => sum + value, 0)
+    : toNumber(listApiResult.payload.actual_total_usd)
+
+  const workshopOverviewPage = new WorkshopOverviewPage(page)
+  await workshopOverviewPage.expectCostCardValue('Hourly Burn (Est.)', formatUsd(estimatedHourly))
+  await workshopOverviewPage.expectCostCardValue('Accrued (Est.)', formatUsd(estimatedAccrued))
+  await workshopOverviewPage.expectCostCardValue('Next 24h (Est.)', formatUsd(estimated24h))
+  await workshopOverviewPage.expectCostCardValue('Monthly (Est.)', formatUsd(estimatedMonthly))
+  await workshopOverviewPage.expectCostCardValue(/Actual \(Billing\)/, formatUsd(actualTotal))
+}
+
+export async function thenLandingSessionCostsMatchApi(page, sessionsApiResult) {
+  const landingPage = new LandingPage(page)
+
+  await landingPage.expectSessionCostsSummaryText(formatUsd(sessionsApiResult.totalEstimated))
+
+  const allSessions = Object.values(sessionsApiResult.sessionsByWorkshop).flat()
+  for (const session of allSessions) {
+    const expected = formatUsd(Number(session.aggregated_estimated_cost_usd || 0))
+    await landingPage.expectSessionCostChipText(session.session_id, expected)
+  }
+}
+
+export async function thenISeeActualDataSourceIsUnavailable(result) {
+  expect(result.status).toBe(200)
+  expect(result.payload.success).toBeTruthy()
+  expect(result.payload.actual_data_source).toBe('unavailable')
+}
+
+export async function thenISeeEstimatedCostsStillPresent(result) {
+  expect(result.payload).toHaveProperty('instances')
+  const items = result.payload.instances || []
+  if (items.length === 0) return
+
+  items.forEach((instance) => {
+    expect(instance).toHaveProperty('hourly_rate_estimate_usd')
+    expect(instance).toHaveProperty('estimated_runtime_hours')
+    expect(instance).toHaveProperty('estimated_cost_usd')
+    expect(instance).toHaveProperty('estimated_cost_24h_usd')
+  })
 }

@@ -19,14 +19,28 @@ import {
   whenIGotoTutorialPage,
   whenIOpenCreateInstanceDialog,
   whenIOpenSessionDashboard,
+  whenIGotoWorkshopPage,
   whenIOpenWorkshopSelectorDialogFromLandingFab,
   whenISelectFirstWorkshopFromSelectorUsingKeyboard,
+  thenISeeWorkshopCostCards,
+  thenISeeMonthlyExpectedCost,
+  thenISeeWorkshopCostColumns,
+  whenIRequestInstancesApiWithActualCosts,
+  thenISeeActualCostFieldsInListResponse,
+  thenISeeEstimatedAndActualFieldsPerInstance,
+  thenISeeActualDataSourceIsUnavailable,
+  thenISeeEstimatedCostsStillPresent,
+  thenWorkshopCostCardsMatchApiTotals,
+  whenIRequestTutorialSessionsApiCostsForAllWorkshops,
+  thenLandingSessionCostsMatchApi,
 } from '../bdd/steps.js'
 
 const { Given, When, Then, Before } = createBdd()
 
 let currentSessionId = null
 let expectedTutorialRows = null
+let latestListApiResult = null
+let latestSessionsCostApiResult = null
 
 function generatedSession(prefix) {
   return `${prefix}-${Date.now()}`
@@ -39,6 +53,8 @@ function isProductive(mode) {
 Before(async () => {
   currentSessionId = null
   expectedTutorialRows = null
+  latestListApiResult = null
+  latestSessionsCostApiResult = null
 })
 
 Given('I am logged in to EC2 Tutorials Manager', async ({ page }) => {
@@ -160,6 +176,59 @@ Then('I should see the instances table', async ({ page }) => {
 
 Then('all machine links should use HTTP public IP format', async ({ page }) => {
   await thenAllTutorialLinksUseHttp(page)
+})
+
+When('I open workshop dashboard for {string}', async ({ page }, workshop) => {
+  latestListApiResult = await whenIRequestInstancesApiWithActualCosts(workshop)
+  await whenIGotoWorkshopPage(page, workshop)
+})
+
+Then('I should see workshop cost summary cards', async ({ page }) => {
+  await thenISeeWorkshopCostCards(page)
+})
+
+Then('I should see a monthly expected cost value', async ({ page }) => {
+  await thenISeeMonthlyExpectedCost(page)
+})
+
+Then('the general instances table should include cost columns', async ({ page }) => {
+  await thenISeeWorkshopCostColumns(page)
+})
+
+Then('workshop cost cards should match API totals for {string}', async ({ page }, workshop) => {
+  await thenWorkshopCostCardsMatchApiTotals(page, latestListApiResult, workshop)
+})
+
+When('I request tutorial sessions API costs for all workshops', async () => {
+  latestSessionsCostApiResult = await whenIRequestTutorialSessionsApiCostsForAllWorkshops()
+})
+
+Then('the landing session costs should match tutorial sessions API totals', async ({ page }) => {
+  await thenLandingSessionCostsMatchApi(page, latestSessionsCostApiResult)
+})
+
+When('I request workshop instances API with include_actual_costs enabled for {string}', async ({}, workshop) => {
+  latestListApiResult = await whenIRequestInstancesApiWithActualCosts(workshop)
+})
+
+Then('the list API response should include actual cost summary fields', async () => {
+  await thenISeeActualCostFieldsInListResponse(latestListApiResult)
+})
+
+Then('the list API response instances should include estimated and actual cost fields', async () => {
+  await thenISeeEstimatedAndActualFieldsPerInstance(latestListApiResult)
+})
+
+When('I request workshop instances API with include_actual_costs enabled for {string} with unavailable cost source', async ({}, workshop) => {
+  latestListApiResult = await whenIRequestInstancesApiWithActualCosts(workshop, 'unavailable')
+})
+
+Then('the list API response should indicate actual_data_source is {string}', async ({}, sourceValue) => {
+  await thenISeeActualDataSourceIsUnavailable(latestListApiResult)
+})
+
+Then('estimated cost fields should still be present in the response', async () => {
+  await thenISeeEstimatedCostsStillPresent(latestListApiResult)
 })
 
 Then('I should see the test tutorial Spot enforcement message', async ({ page }) => {

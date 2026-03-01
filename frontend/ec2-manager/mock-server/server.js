@@ -61,7 +61,7 @@ app.get('/api/templates', checkAuth, async (req, res) => {
 
 app.get('/api/list', checkAuth, async (req, res) => {
   await delay()
-  const { include_terminated, tutorial_session_id, workshop } = req.query
+  const { include_terminated, tutorial_session_id, workshop, include_actual_costs, cost_source_mode } = req.query
   
   let instances = [...state.instances]
   
@@ -79,10 +79,39 @@ app.get('/api/list', checkAuth, async (req, res) => {
   if (include_terminated !== 'true') {
     instances = instances.filter(i => i.state !== 'terminated')
   }
+
+  const includeActualCosts = include_actual_costs === 'true'
+  const costSourceMode = cost_source_mode || 'available'
+
+  const enrichedInstances = instances.map((instance) => {
+    const purchaseType = instance.purchase_type || 'on-demand'
+    const hourlyRate = purchaseType === 'spot' ? 0.0125 : 0.0416
+    const createdAt = new Date(instance.created_at || Date.now())
+    const runtimeHours = Math.max(0, (Date.now() - createdAt.getTime()) / 3600000)
+    const estimatedCost = Number((hourlyRate * runtimeHours).toFixed(6))
+    const estimated24h = Number((hourlyRate * 24).toFixed(6))
+    const actualCost = includeActualCosts && costSourceMode !== 'unavailable' ? Number((estimatedCost * 0.93).toFixed(6)) : null
+
+    return {
+      ...instance,
+      hourly_rate_estimate_usd: Number(hourlyRate.toFixed(6)),
+      estimated_runtime_hours: Number(runtimeHours.toFixed(4)),
+      estimated_cost_usd: estimatedCost,
+      estimated_cost_24h_usd: estimated24h,
+      actual_cost_usd: actualCost,
+    }
+  })
+
+  const dataSource = includeActualCosts ? (costSourceMode === 'unavailable' ? 'unavailable' : 'mock-cost-explorer') : 'unavailable'
+  const actualTotal = includeActualCosts && costSourceMode !== 'unavailable'
+    ? Number(enrichedInstances.reduce((sum, item) => sum + (item.actual_cost_usd || 0), 0).toFixed(6))
+    : null
   
   res.json({
     success: true,
-    instances: instances
+    instances: enrichedInstances,
+    actual_total_usd: actualTotal,
+    actual_data_source: dataSource
   })
 })
 
@@ -419,9 +448,39 @@ app.get('/api/tutorial_sessions', checkAuth, async (req, res) => {
   
   const sessions = state.tutorialSessions[workshop] || []
   
+  // Add aggregated costs to each session
+  const sessionsWithCosts = sessions.map((session) => {
+    // Get all instances for this session
+    const sessionInstances = state.instances.filter(
+      (inst) => inst.tutorial_session_id === session.session_id && inst.state !== 'terminated'
+    )
+    
+    // Calculate aggregated costs
+    let totalEstimatedCost = 0
+    let totalActualCost = 0
+    
+    sessionInstances.forEach((instance) => {
+      const purchaseType = instance.purchase_type || 'on-demand'
+      const hourlyRate = purchaseType === 'spot' ? 0.0125 : 0.0416
+      const createdAt = new Date(instance.created_at || Date.now())
+      const runtimeHours = Math.max(0, (Date.now() - createdAt.getTime()) / 3600000)
+      const estimatedCost = Number((hourlyRate * runtimeHours).toFixed(6))
+      const actualCost = Number((estimatedCost * 0.93).toFixed(6))
+      
+      totalEstimatedCost += estimatedCost
+      totalActualCost += actualCost
+    })
+    
+    return {
+      ...session,
+      aggregated_estimated_cost_usd: Number(totalEstimatedCost.toFixed(6)),
+      aggregated_actual_cost_usd: Number(totalActualCost.toFixed(6))
+    }
+  })
+  
   res.json({
     success: true,
-    sessions: sessions
+    sessions: sessionsWithCosts
   })
 })
 

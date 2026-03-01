@@ -44,6 +44,60 @@ import AppToast from '../components/AppToast'
 import Header from '../components/Header'
 import { api } from '../services/api'
 
+const APPROX_RATES_USD = {
+  't3.small': { onDemand: 0.0208, spot: 0.0062 },
+  't3.medium': { onDemand: 0.0416, spot: 0.0125 },
+  't3.large': { onDemand: 0.0832, spot: 0.0250 }
+}
+
+const FALLBACK_RATES_USD = { onDemand: 0.0416, spot: 0.0125 }
+
+function parseNumber(value) {
+  if (value === null || value === undefined || value === '') return null
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+function normalizePurchaseType(rawValue, fallback = 'on-demand') {
+  const normalized = String(rawValue || '').trim().toLowerCase()
+  if (normalized.includes('spot')) return 'spot'
+  if (normalized.includes('on-demand') || normalized === 'ondemand') return 'on-demand'
+  return fallback
+}
+
+function getCostMeta(instance, session) {
+  const instanceType = instance.instance_type || 't3.medium'
+  const rates = APPROX_RATES_USD[instanceType] || FALLBACK_RATES_USD
+  const purchaseType = normalizePurchaseType(
+    instance.purchase_type || instance.tags?.PurchaseType || session?.purchase_type,
+    'on-demand'
+  )
+  const spotCap = parseNumber(instance.spot_max_price ?? instance.tags?.SpotMaxPrice ?? session?.spot_max_price)
+  const spotRate = spotCap !== null ? Math.min(rates.spot, spotCap) : rates.spot
+  const hourlyEstimate = purchaseType === 'spot' ? spotRate : rates.onDemand
+
+  const launchMs = instance.launch_time ? new Date(instance.launch_time).getTime() : null
+  const elapsedHours = launchMs ? Math.max(0, (Date.now() - launchMs) / (1000 * 60 * 60)) : 0
+  const estimatedCost = hourlyEstimate * elapsedHours
+  const estimated24h = hourlyEstimate * 24
+  const actualCost = parseNumber(instance.actual_cost_usd)
+
+  return {
+    purchaseType,
+    spotCap,
+    hourlyEstimate,
+    elapsedHours,
+    estimatedCost,
+    estimated24h,
+    actualCost
+  }
+}
+
+function formatUsd(value, digits = 4) {
+  if (value === null || value === undefined || Number.isNaN(value)) return '-'
+  return `$${Number(value).toFixed(digits)}`
+}
+
 function TutorialDashboard() {
   const { workshop, sessionId } = useParams()
   const navigate = useNavigate()
@@ -51,6 +105,7 @@ function TutorialDashboard() {
   const [session, setSession] = useState(null)
   const [instances, setInstances] = useState([])
   const [stats, setStats] = useState(null)
+  const [costs, setCosts] = useState(null)
   const [loading, setLoading] = useState(true)
   const [toast, setToast] = useState({ open: false, message: '', severity: 'success' })
 
@@ -67,6 +122,8 @@ function TutorialDashboard() {
   const [activeFilter, setActiveFilter] = useState('all')
   const [search, setSearch] = useState('')
   const [sortConfig, setSortConfig] = useState({ key: 'launch_time', direction: 'desc' })
+  const [selectedIds, setSelectedIds] = useState([])
+  const [batchDeleting, setBatchDeleting] = useState(false)
 
   const [createFormData, setCreateFormData] = useState({
     type: 'pool',
@@ -116,6 +173,7 @@ function TutorialDashboard() {
         setSession(response.session)
         setInstances(response.instances || [])
         setStats(response.stats || null)
+        setCosts(response.costs || null)
       } else {
         showToast(response.error || 'Failed to load session', 'error')
       }
@@ -251,6 +309,7 @@ function TutorialDashboard() {
     try {
       const response = await api.deleteInstance(instanceId)
       if (response.success) {
+        setSelectedIds((prev) => prev.filter((id) => id !== instanceId))
         showToast(`Instance ${instanceId} deleted`, 'success')
         await loadSession()
       } else {
@@ -315,6 +374,54 @@ function TutorialDashboard() {
     })
   }, [activeFilter, instances, search])
 
+  useEffect(() => {
+    const validIds = new Set(instances.map((instance) => instance.instance_id))
+    setSelectedIds((prev) => prev.filter((id) => validIds.has(id)))
+  }, [instances])
+
+  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds])
+
+  const toggleSelected = (instanceId) => {
+    setSelectedIds((prev) => (
+      prev.includes(instanceId)
+        ? prev.filter((id) => id !== instanceId)
+        : [...prev, instanceId]
+    ))
+  }
+
+  const toggleSelectAllFiltered = () => {
+    const allFilteredIds = filteredInstances.map((item) => item.instance_id)
+    const allSelected = allFilteredIds.length > 0 && allFilteredIds.every((id) => selectedSet.has(id))
+
+    if (allSelected) {
+      setSelectedIds((prev) => prev.filter((id) => !allFilteredIds.includes(id)))
+    } else {
+      setSelectedIds((prev) => [...new Set([...prev, ...allFilteredIds])])
+    }
+  }
+
+  const handleBatchDelete = async () => {
+    if (selectedIds.length === 0) return
+    const confirmed = window.confirm(`Delete ${selectedIds.length} selected instances?`)
+    if (!confirmed) return
+
+    try {
+      setBatchDeleting(true)
+      const response = await api.deleteInstances(selectedIds)
+      if (response.success) {
+        showToast(`Deleted ${response.count ?? selectedIds.length} instance(s)`, 'success')
+        setSelectedIds([])
+        await loadSession()
+      } else {
+        showToast(response.error || 'Failed to delete selected instances', 'error')
+      }
+    } catch (error) {
+      showToast(error.message, 'error')
+    } finally {
+      setBatchDeleting(false)
+    }
+  }
+
   const sortedInstances = useMemo(() => {
     return [...filteredInstances].sort((a, b) => {
       if (!sortConfig.key) return 0
@@ -339,6 +446,41 @@ function TutorialDashboard() {
       return aVal < bVal ? 1 : aVal > bVal ? -1 : 0
     })
   }, [filteredInstances, sortConfig])
+
+  const costByInstanceId = useMemo(() => {
+    const pairs = instances.map((instance) => [instance.instance_id, getCostMeta(instance, session)])
+    return new Map(pairs)
+  }, [instances, session])
+
+  const computedCostTotals = useMemo(() => {
+    let estimatedHourly = 0
+    let estimatedAccrued = 0
+    let estimated24h = 0
+    let actualTotal = 0
+    let hasActual = false
+
+    instances.forEach((instance) => {
+      const meta = costByInstanceId.get(instance.instance_id)
+      if (!meta) return
+      estimatedHourly += meta.hourlyEstimate
+      estimatedAccrued += meta.estimatedCost
+      estimated24h += meta.estimated24h
+      if (meta.actualCost !== null) {
+        actualTotal += meta.actualCost
+        hasActual = true
+      }
+    })
+
+    const fallbackActualTotal = parseNumber(costs?.actual_total_usd)
+
+    return {
+      estimatedHourly,
+      estimatedAccrued,
+      estimated24h,
+      actualTotal: hasActual ? actualTotal : fallbackActualTotal,
+      actualDataSource: costs?.actual_data_source || 'unavailable'
+    }
+  }, [instances, costByInstanceId, costs])
 
   const toggleSort = (key) => {
     setSortConfig((prev) => ({
@@ -413,6 +555,16 @@ function TutorialDashboard() {
         </Grid>
 
         <Grid container spacing={2.5} sx={{ mb: 2.5 }}>
+          <CostCard label="Hourly Burn (Est.)" value={formatUsd(computedCostTotals.estimatedHourly)} />
+          <CostCard label="Accrued (Est.)" value={formatUsd(computedCostTotals.estimatedAccrued, 2)} />
+          <CostCard
+            label={`Actual (Billing)${computedCostTotals.actualDataSource === 'cost-explorer' ? '' : ' - Unavailable'}`}
+            value={computedCostTotals.actualTotal !== null ? formatUsd(computedCostTotals.actualTotal, 2) : '-'}
+          />
+          <CostCard label="Next 24h (Est.)" value={formatUsd(computedCostTotals.estimated24h, 2)} />
+        </Grid>
+
+        <Grid container spacing={2.5} sx={{ mb: 2.5 }}>
           <Grid item xs={12} md={7}>
             <Card>
               <CardContent>
@@ -467,6 +619,16 @@ function TutorialDashboard() {
                 <Button size="small" startIcon={<RefreshRoundedIcon />} onClick={loadSession} variant="outlined" disabled={loading || creatingInstances}>
                   Refresh
                 </Button>
+                <Button
+                  size="small"
+                  color="error"
+                  variant="contained"
+                  startIcon={<DeleteOutlineRoundedIcon />}
+                  onClick={handleBatchDelete}
+                  disabled={selectedIds.length === 0 || batchDeleting}
+                >
+                  {batchDeleting ? 'Deleting...' : `Delete Selected (${selectedIds.length})`}
+                </Button>
                 <Button size="small" onClick={handleCheckHealth} variant="outlined" disabled={checkingHealth || creatingInstances || sortedInstances.length === 0}>
                   {checkingHealth ? 'Checking...' : 'Check Health'}
                 </Button>
@@ -478,12 +640,21 @@ function TutorialDashboard() {
             <Table size="small">
               <TableHead>
                 <TableRow>
+                  <TableCell padding="checkbox">
+                    <Checkbox
+                      indeterminate={selectedIds.length > 0 && selectedIds.length < filteredInstances.length}
+                      checked={filteredInstances.length > 0 && filteredInstances.every((item) => selectedSet.has(item.instance_id))}
+                      onChange={toggleSelectAllFiltered}
+                    />
+                  </TableCell>
                   <HeaderSort label="Instance ID" sortKey="instance_id" sortConfig={sortConfig} onSort={toggleSort} />
                   <HeaderSort label="Type" sortKey="type" sortConfig={sortConfig} onSort={toggleSort} />
                   <HeaderSort label="Created" sortKey="launch_time" sortConfig={sortConfig} onSort={toggleSort} />
                   <HeaderSort label="State" sortKey="state" sortConfig={sortConfig} onSort={toggleSort} />
                   <HeaderSort label="Endpoint" sortKey="endpoint" sortConfig={sortConfig} onSort={toggleSort} />
                   <HeaderSort label="Assigned" sortKey="assigned_to" sortConfig={sortConfig} onSort={toggleSort} />
+                  <TableCell>Hourly (Est.)</TableCell>
+                  <TableCell>Cost (Est./Actual)</TableCell>
                   {showHealthColumn && <HeaderSort label="Health" sortKey="health_status" sortConfig={sortConfig} onSort={toggleSort} />}
                   <TableCell align="right">Actions</TableCell>
                 </TableRow>
@@ -491,18 +662,19 @@ function TutorialDashboard() {
               <TableBody>
                 {loading ? (
                   <TableRow>
-                    <TableCell colSpan={showHealthColumn ? 8 : 7} align="center" sx={{ py: 6 }}>
+                    <TableCell colSpan={showHealthColumn ? 11 : 10} align="center" sx={{ py: 6 }}>
                       <CircularProgress size={24} />
                     </TableCell>
                   </TableRow>
                 ) : sortedInstances.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={showHealthColumn ? 8 : 7} align="center" sx={{ py: 6 }}>
+                    <TableCell colSpan={showHealthColumn ? 11 : 10} align="center" sx={{ py: 6 }}>
                       No instances found
                     </TableCell>
                   </TableRow>
                 ) : (
                   sortedInstances.map((instance) => {
+                    const costMeta = costByInstanceId.get(instance.instance_id) || getCostMeta(instance, session)
                     const type = instance.type || instance.instance_type || 'pool'
                     const launchTime = instance.launch_time ? new Date(instance.launch_time).toLocaleString() : '-'
                     const resolvedHttpsDomain = instance.https_domain || instance.tags?.HttpsDomain
@@ -511,6 +683,12 @@ function TutorialDashboard() {
                     const endpointLabel = resolvedHttpsDomain || instance.public_ip || 'Pending...'
                     return (
                       <TableRow key={instance.instance_id} hover>
+                        <TableCell padding="checkbox">
+                          <Checkbox
+                            checked={selectedSet.has(instance.instance_id)}
+                            onChange={() => toggleSelected(instance.instance_id)}
+                          />
+                        </TableCell>
                         <TableCell>{instance.instance_id}</TableCell>
                         <TableCell><Chip size="small" label={type} color={type === 'admin' ? 'secondary' : 'default'} /></TableCell>
                         <TableCell><Typography variant="caption">{launchTime}</Typography></TableCell>
@@ -529,6 +707,11 @@ function TutorialDashboard() {
                           ) : 'Pending...'}
                         </TableCell>
                         <TableCell>{instance.assigned_to || '-'}</TableCell>
+                        <TableCell>{formatUsd(costMeta.hourlyEstimate)}</TableCell>
+                        <TableCell>
+                          <Typography variant="caption" display="block">Est: {formatUsd(costMeta.estimatedCost, 2)}</Typography>
+                          <Typography variant="caption" color="text.secondary">Actual: {costMeta.actualCost !== null ? formatUsd(costMeta.actualCost, 2) : '-'}</Typography>
+                        </TableCell>
                         {showHealthColumn && <TableCell>{getHealthChip(instance)}</TableCell>}
                         <TableCell align="right">
                           <Stack direction="row" spacing={1} justifyContent="flex-end">
@@ -722,6 +905,19 @@ function StatCard({ label, value, onClick, active, color = 'text.primary' }) {
         <CardContent>
           <Typography variant="overline" color="text.secondary">{label}</Typography>
           <Typography variant="h5" fontWeight={700} sx={{ color }}>{value}</Typography>
+        </CardContent>
+      </Card>
+    </Grid>
+  )
+}
+
+function CostCard({ label, value }) {
+  return (
+    <Grid item xs={12} sm={6} md={3}>
+      <Card>
+        <CardContent>
+          <Typography variant="overline" color="text.secondary">{label}</Typography>
+          <Typography variant="h6" fontWeight={700}>{value}</Typography>
         </CardContent>
       </Card>
     </Grid>
