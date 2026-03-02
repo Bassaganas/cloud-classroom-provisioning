@@ -15,5 +15,10 @@ COPY . .
 # Expose port
 EXPOSE 3000
 
+# Disable react-refresh for Docker environment
+ENV SKIP_PREFLIGHT_CHECK=true
+ENV DISABLE_ESLINT_PLUGIN=true
+ENV FAST_REFRESH=false
+
 # Start development server
 CMD ["npm", "start"]

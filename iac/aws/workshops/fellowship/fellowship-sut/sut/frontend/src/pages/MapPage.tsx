@@ -171,7 +171,6 @@ const MapPage: React.FC<MapPageProps> = ({ user, onLogout }) => {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center">
         <div className="text-center">
-          <div className="text-4xl mb-4">🗺️</div>
           <p className="text-text-primary font-readable">Charting the Map of Middle-earth...</p>
         </div>
       </div>
@@ -184,7 +183,6 @@ const MapPage: React.FC<MapPageProps> = ({ user, onLogout }) => {
       <nav className="bg-gradient-to-r from-forest to-forest-dark shadow-lg border-b-2 border-gold">
         <div className="max-w-7xl mx-auto w-full px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <span className="text-2xl">🗺️</span>
             <Link to="/dashboard" className="font-epic text-2xl text-gold hover:text-gold-light transition-colors">
               Map of Middle-earth
             </Link>

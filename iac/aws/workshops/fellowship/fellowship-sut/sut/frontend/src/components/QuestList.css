@@ -22,8 +22,8 @@
   background: linear-gradient(135deg, var(--parchment) 0%, var(--parchment-light) 100%);
   border-radius: 8px;
   padding: 1.25rem;
-  box-shadow: 0 4px 12px rgba(139, 69, 19, 0.2);
-  border: 2px solid var(--earth-brown);
+  box-shadow: 0 4px 16px rgba(45, 80, 22, 0.15);
+  border: 2px solid var(--gold-dark);
   transition: all 0.3s ease;
   position: relative;
   animation: cascade-item;
@@ -34,22 +34,27 @@
 
 .quest-card:hover {
   transform: translateY(-4px);
-  box-shadow: 0 8px 20px rgba(139, 69, 19, 0.3),
+  box-shadow: 0 12px 32px rgba(45, 80, 22, 0.25),
               0 0 15px rgba(218, 165, 32, 0.15);
+  border-color: var(--gold);
 }
 
 .quest-card-dark-magic {
   background: linear-gradient(135deg, #2a1a1a 0%, #3d2525 100%);
   border-color: var(--dark-red);
-  box-shadow: 0 0 15px rgba(220, 38, 38, 0.5);
+  box-shadow: 0 0 20px rgba(199, 37, 78, 0.4), 
+              0 0 40px rgba(199, 37, 78, 0.2),
+              inset 0 0 10px rgba(199, 37, 78, 0.1);
   color: var(--parchment);
   animation: dangerGlow 2s ease-in-out infinite;
 }
 
 .quest-card-dark-magic:hover {
-  box-shadow: 0 0 25px rgba(220, 38, 38, 0.8),
-              0 8px 20px rgba(0, 0, 0, 0.3);
+  box-shadow: 0 0 30px rgba(199, 37, 78, 0.6),
+              0 0 60px rgba(199, 37, 78, 0.3),
+              0 12px 32px rgba(0, 0, 0, 0.4);
   transform: translateY(-4px);
+  border-color: #FF6B6B;
 }
 
 .quest-card-header {

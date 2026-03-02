@@ -189,7 +189,6 @@ const QuestsPage: React.FC<QuestsPageProps> = ({ user, onLogout }) => {
       <nav className="bg-gradient-to-r from-forest to-forest-dark shadow-lg border-b-2 border-gold">
         <div className="max-w-7xl mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <span className="text-2xl">📜</span>
             <Link to="/dashboard" className="font-epic text-2xl text-gold hover:text-gold-light transition-colors">
               The Scrolls of Middle-earth
             </Link>
@@ -229,7 +228,6 @@ const QuestsPage: React.FC<QuestsPageProps> = ({ user, onLogout }) => {
         {/* Page Header */}
         <div className="flex items-center justify-between mb-8">
           <div>
-            <h1 className="font-epic text-4xl text-forest-dark mb-2">The Scrolls of Middle-earth</h1>
             <p className="font-readable text-text-muted text-lg">
               All {quests.length} quest objectives across the realm
             </p>

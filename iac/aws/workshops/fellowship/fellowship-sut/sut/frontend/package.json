@@ -35,6 +35,9 @@
     "scripts": {
         "start": "react-scripts start",
         "build": "react-scripts build",
+        "clean": "rm -rf build node_modules/.cache",
+        "build:fresh": "npm run clean && react-scripts build",
+        "start:fresh": "npm run clean && react-scripts start",
         "test": "vitest",
         "test:watch": "vitest --watch",
         "test:coverage": "vitest --coverage",

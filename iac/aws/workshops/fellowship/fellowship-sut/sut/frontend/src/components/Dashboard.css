@@ -38,20 +38,21 @@
 }
 
 .stat-card {
-  background: linear-gradient(135deg, var(--parchment) 0%, var(--parchment-light) 100%);
+  background: linear-gradient(135deg, var(--parchment-light) 0%, var(--parchment) 100%);
   border-radius: 8px;
   padding: 1.5rem;
   text-align: center;
-  box-shadow: 0 4px 12px rgba(139, 69, 19, 0.2);
-  border: 2px solid var(--earth-brown);
+  box-shadow: 0 4px 16px rgba(45, 80, 22, 0.15);
+  border: 2px solid var(--gold-dark);
   transition: all 0.3s ease;
   animation: cascade-item;
 }
 
 .stat-card:hover {
   transform: translateY(-4px);
-  box-shadow: 0 8px 20px rgba(139, 69, 19, 0.3),
+  box-shadow: 0 12px 32px rgba(45, 80, 22, 0.25), 
               0 0 15px rgba(218, 165, 32, 0.15);
+  border-color: var(--gold);
 }
 
 .stat-value {

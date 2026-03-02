@@ -29,7 +29,7 @@ export const Card: React.FC<CardProps> = ({
   };
 
   const hoverClass = hover
-    ? 'hover:shadow-lg transition-shadow duration-300 cursor-pointer'
+    ? `hover:shadow-lg transition-shadow duration-300 ${onClick ? 'cursor-pointer' : ''}`
     : 'transition-all duration-300';
 
   return (

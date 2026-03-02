@@ -65,7 +65,7 @@
 
 body {
   font-family: 'Lora', serif;
-  background: linear-gradient(135deg, var(--parchment-light) 0%, var(--parchment) 100%);
+  background: linear-gradient(135deg, #FBF3E6 0%, #F0E5D8 50%, #F5EDE2 100%);
   background-attachment: fixed;
   min-height: 100vh;
   margin: 0;
@@ -73,13 +73,28 @@ body {
   font-weight: 400;
   line-height: 1.6;
   letter-spacing: 0.3px;
+  position: relative;
+}
+
+/* Atmospheric mist effect */
+body::before {
+  content: '';
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: radial-gradient(ellipse at 20% 50%, rgba(212, 164, 55, 0.03) 0%, transparent 50%),
+              radial-gradient(ellipse at 80% 80%, rgba(45, 80, 22, 0.02) 0%, transparent 50%);
+  pointer-events: none;
+  z-index: 0;
 }
 
 h1, h2, h3, h4, h5, h6 {
   font-family: 'Cinzel', serif;
   font-weight: 700;
   color: var(--deep-blue);
-  text-shadow: var(--text-shadow-dm);
+  text-shadow: 0 2px 4px rgba(218, 165, 32, 0.2);
   letter-spacing: 1px;
   margin-top: 0;
 }
@@ -89,18 +104,22 @@ h1 {
   font-weight: 700;
   letter-spacing: 2px;
   text-transform: uppercase;
+  color: var(--forest-dark);
+  text-shadow: 1px 1px 3px rgba(138, 43, 43, 0.15), 0 0 20px rgba(212, 164, 55, 0.1);
 }
 
 h2 {
   font-size: 1.875rem;
   font-weight: 700;
   letter-spacing: 1.5px;
+  color: var(--forest-dark);
 }
 
 h3 {
   font-size: 1.5rem;
   font-weight: 600;
   letter-spacing: 1px;
+  color: var(--deep-blue);
 }
 
 h4 {

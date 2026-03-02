@@ -94,12 +94,11 @@ const Dashboard: React.FC<DashboardProps> = ({ quests, members, user }) => {
       >
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="font-epic text-4xl text-forest-dark mb-2">The Council Chamber</h1>
+            
             <p className="font-readable text-text-muted text-lg">
               Welcome, {user.role}! Track the Fellowship's journey through Middle-earth
             </p>
           </div>
-          <div className="text-right text-5xl">🏰</div>
         </div>
       </motion.div>
 
@@ -108,7 +107,7 @@ const Dashboard: React.FC<DashboardProps> = ({ quests, members, user }) => {
         <motion.div variants={itemVariants} initial="hidden" animate="visible">
           <Alert
             variant="warning"
-            title="⚠️ Dark Magic Detected!"
+            title="Dark Magic Detected!"
           >
             {stats.darkMagic} quest{stats.darkMagic !== 1 ? 's have' : ' has'} been corrupted by Sauron's influence.
           </Alert>
@@ -149,86 +148,85 @@ const Dashboard: React.FC<DashboardProps> = ({ quests, members, user }) => {
         className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"
       >
         {/* Total Quests */}
-        <motion.div variants={itemVariants}>
-          <Card variant="parchment" className="cursor-pointer hover:shadow-lg transition-shadow">
-            <div className="text-center py-4">
-              <div className="text-4xl font-epic text-forest-dark mb-2">{stats.total}</div>
-              <div className="text-sm font-readable text-text-muted">Total Quest Objectives</div>
-              <div className="mt-3 flex justify-center">
-                <Badge variant="standard">All Quests</Badge>
-              </div>
-            </div>
+        <motion.div variants={itemVariants} className="h-full">
+          <Card variant="parchment" className="cursor-pointer hover:shadow-lg transition-shadow h-full flex flex-col justify-center items-center min-h-[180px]">
+        <div className="text-center py-4">
+          <div className="text-4xl font-epic text-forest-dark mb-2">{stats.total}</div>
+          <div className="text-sm font-readable text-text-muted">Total Quest Objectives</div>
+          <div className="mt-3 flex justify-center">
+            <Badge variant="standard">All Quests</Badge>
+          </div>
+        </div>
           </Card>
         </motion.div>
 
         {/* In Progress */}
-        <motion.div variants={itemVariants}>
+        <motion.div variants={itemVariants} className="h-full">
           <Card
-            variant="parchment"
-            className="cursor-pointer hover:shadow-lg transition-shadow"
-            onClick={() => setSelectedStatus('the_road_goes_ever_on')}
+        variant="parchment"
+        className="cursor-pointer hover:shadow-lg transition-shadow h-full flex flex-col justify-center items-center min-h-[180px]"
+        onClick={() => setSelectedStatus('the_road_goes_ever_on')}
           >
-            <div className="text-center py-4">
-              <div className="text-4xl font-epic text-forest mb-2">{stats.inProgress}</div>
-              <div className="text-sm font-readable text-text-muted">The Road Goes Ever On...</div>
-              <div className="mt-3 flex justify-center">
-                <Badge variant="inprogress">In Progress</Badge>
-              </div>
-            </div>
+        <div className="text-center py-4">
+          <div className="text-4xl font-epic text-forest mb-2">{stats.inProgress}</div>
+          <div className="text-sm font-readable text-text-muted">The Road Goes Ever On...</div>
+          <div className="mt-3 flex justify-center">
+            <Badge variant="inprogress">In Progress</Badge>
+          </div>
+        </div>
           </Card>
         </motion.div>
 
         {/* Completed */}
-        <motion.div variants={itemVariants}>
+        <motion.div variants={itemVariants} className="h-full">
           <Card
-            variant="parchment"
-            className="cursor-pointer hover:shadow-lg transition-shadow"
-            onClick={() => setSelectedStatus('it_is_done')}
+        variant="parchment"
+        className="cursor-pointer hover:shadow-lg transition-shadow h-full flex flex-col justify-center items-center min-h-[180px]"
+        onClick={() => setSelectedStatus('it_is_done')}
           >
-            <div className="text-center py-4">
-              <div className="text-4xl font-epic text-success mb-2">{stats.completed}</div>
-              <div className="text-sm font-readable text-text-muted">It Is Done</div>
-              <div className="mt-3 flex justify-center">
-                <Badge variant="ready">Completed</Badge>
-              </div>
-            </div>
+        <div className="text-center py-4">
+          <div className="text-4xl font-epic text-success mb-2">{stats.completed}</div>
+          <div className="text-sm font-readable text-text-muted">It Is Done</div>
+          <div className="mt-3 flex justify-center">
+            <Badge variant="ready">Completed</Badge>
+          </div>
+        </div>
           </Card>
         </motion.div>
 
         {/* Not Yet Begun */}
-        <motion.div variants={itemVariants}>
-          <Card variant="parchment" className="cursor-pointer hover:shadow-lg transition-shadow">
-            <div className="text-center py-4">
-              <div className="text-4xl font-epic text-gray-600 mb-2">{stats.notYetBegun}</div>
-              <div className="text-sm font-readable text-text-muted">Not Yet Begun</div>
-              <div className="mt-3 flex justify-center">
-                <Badge variant="pending">Planned</Badge>
-              </div>
-            </div>
+        <motion.div variants={itemVariants} className="h-full">
+          <Card variant="parchment" className="cursor-pointer hover:shadow-lg transition-shadow h-full flex flex-col justify-center items-center min-h-[180px]">
+        <div className="text-center py-4">
+          <div className="text-4xl font-epic text-gray-600 mb-2">{stats.notYetBegun}</div>
+          <div className="text-sm font-readable text-text-muted">Not Yet Begun</div>
+          <div className="mt-3 flex justify-center">
+            <Badge variant="pending">Planned</Badge>
+          </div>
+        </div>
           </Card>
         </motion.div>
 
         {/* Blocked */}
-        <motion.div variants={itemVariants}>
-          <Card variant="parchment" className="cursor-pointer hover:shadow-lg transition-shadow">
-            <div className="text-center py-4">
-              <div className="text-4xl font-epic text-danger mb-2">{stats.shadowFalls}</div>
-              <div className="text-sm font-readable text-text-muted">The Shadow Falls</div>
-              <div className="mt-3 flex justify-center">
-                <Badge variant="blocked">Blocked</Badge>
-              </div>
-            </div>
+        <motion.div variants={itemVariants} className="h-full">
+          <Card variant="parchment" className="cursor-pointer hover:shadow-lg transition-shadow h-full flex flex-col justify-center items-center min-h-[180px]">
+        <div className="text-center py-4">
+          <div className="text-4xl font-epic text-danger mb-2">{stats.shadowFalls}</div>
+          <div className="text-sm font-readable text-text-muted">The Shadow Falls</div>
+          <div className="mt-3 flex justify-center">
+            <Badge variant="blocked">Blocked</Badge>
+          </div>
+        </div>
           </Card>
         </motion.div>
 
         {/* Fellowship Members */}
-        <motion.div variants={itemVariants}>
-          <Card variant="parchment">
-            <div className="text-center py-4">
-              <div className="text-4xl mb-2">👥</div>
-              <div className="text-2xl font-epic text-forest mb-2">{activeMembers}</div>
-              <div className="text-sm font-readable text-text-muted">Active Fellowship Members</div>
-            </div>
+        <motion.div variants={itemVariants} className="h-full">
+          <Card variant="parchment" className="cursor-pointer hover:shadow-lg transition-shadow h-full flex flex-col justify-center items-center min-h-[180px]">
+        <div className="text-center py-4">
+          <div className="text-4xl font-epic text-forest mb-2">{activeMembers}</div>
+          <div className="text-sm font-readable text-text-muted">Active Fellowship Members</div>
+        </div>
           </Card>
         </motion.div>
       </motion.div>

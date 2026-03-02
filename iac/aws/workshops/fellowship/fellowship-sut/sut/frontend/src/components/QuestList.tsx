@@ -112,15 +112,15 @@ const QuestList: React.FC<QuestListProps> = ({ quests, onEdit, onDelete, onCompl
       variants={containerVariants}
       initial="hidden"
       animate="visible"
-      className="grid grid-cols-1 lg:grid-cols-2 gap-4"
+      className="grid grid-cols-1 lg:grid-cols-2 gap-4 auto-rows-fr"
     >
       {quests.map((quest) => (
-        <motion.div key={quest.id} variants={itemVariants}>
+        <motion.div key={quest.id} variants={itemVariants} className="h-full">
           <Card
             variant={quest.is_dark_magic ? 'dark' : 'parchment'}
-            className="hover:shadow-lg transition-shadow"
+            className="hover:shadow-lg transition-shadow h-full flex flex-col"
           >
-            <div className="space-y-3 sm:space-y-4 min-w-0">
+            <div className="space-y-3 sm:space-y-4 min-w-0 flex-1 flex flex-col">
               {/* Header with Title and Priority */}
               <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 sm:gap-4 min-w-0">
                 <div className="flex-1 min-w-0">
@@ -165,7 +165,7 @@ const QuestList: React.FC<QuestListProps> = ({ quests, onEdit, onDelete, onCompl
               )}
 
               {/* Meta Information */}
-              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs sm:text-sm text-text-secondary">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs sm:text-sm text-text-secondary flex-1">
                 {quest.location_name && quest.location_id && (
                   <button
                     className="text-left hover:text-gold transition-colors cursor-pointer break-words"
@@ -182,7 +182,7 @@ const QuestList: React.FC<QuestListProps> = ({ quests, onEdit, onDelete, onCompl
 
               {/* Action Buttons */}
               {(onEdit || onDelete || onComplete) && (
-                <div className="flex flex-col sm:flex-row gap-2 pt-4 border-t border-text-secondary/20">
+                <div className="flex flex-col sm:flex-row gap-2 pt-4 border-t border-text-secondary/20 mt-auto">
                   {onComplete && quest.status !== 'it_is_done' && quest.status !== 'completed' && (
                     <Button
                       variant="epic"
