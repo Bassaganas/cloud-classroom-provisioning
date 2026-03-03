@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import MiddleEarthMap from '../components/MiddleEarthMap';
-import { CharacterPanel } from '../components/characters/CharacterPanel';
+import { MapCharacterPanel } from '../components/characters/MapCharacterPanel';
 import GoldCounter from '../components/GoldCounter';
 import { apiService } from '../services/api';
 import { Quest, Location, NpcCharacter, User } from '../types';
@@ -422,15 +422,7 @@ const MapPage: React.FC<MapPageProps> = ({ user, onLogout }) => {
 
           {showCharacterPanel && (
             <div className="map-character-panel">
-              <div className="flex justify-end mb-2">
-                <button
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => setShowCharacterPanel(false)}
-                >
-                  Close Trader
-                </button>
-              </div>
-              <CharacterPanel />
+              <MapCharacterPanel onClose={() => setShowCharacterPanel(false)} />
             </div>
           )}
 

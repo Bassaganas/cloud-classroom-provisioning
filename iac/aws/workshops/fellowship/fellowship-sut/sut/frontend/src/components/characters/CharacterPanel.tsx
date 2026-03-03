@@ -9,14 +9,14 @@ import { useCharacter } from '../../store/characterStore';
 import { Avatar } from '../ui/Avatar';
 import { Button } from '../ui/Button';
 import { apiService } from '../../services/api';
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-import { NpcCharacter, NpcSuggestedQuest, ShopItem } from '../../types';
+import { NpcCharacter, NpcSuggestedQuest } from '../../types';
 
 const characterInfo: Record<NpcCharacter, { name: string; emoji: string }> = {
   frodo: { name: 'Frodo', emoji: '🧝' },
   sam: { name: 'Sam', emoji: '👨‍🌾' },
   gandalf: { name: 'Gandalf', emoji: '🧙‍♂️' },
 };
+
 
 export const CharacterPanel: React.FC = () => {
   const navigate = useNavigate();
@@ -33,35 +33,25 @@ export const CharacterPanel: React.FC = () => {
     setChatLoading,
   } = useCharacter();
   const [draft, setDraft] = useState('');
-  const [offerDraft, setOfferDraft] = useState('');
-  const [shopItems, setShopItems] = useState<ShopItem[]>([]);
-  const [gold, setGold] = useState<number>(0);
-  const [negotiationStatus, setNegotiationStatus] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
-
   const currentCharacter = useMemo(() => characterInfo[activeCharacter], [activeCharacter]);
 
   useEffect(() => {
     let mounted = true;
-
     const bootstrapConversation = async () => {
       try {
         setError(null);
         setChatLoading(true);
         const session = await apiService.getNpcChatSession(activeCharacter);
-
         if (!mounted) return;
-
         if (session.messages.length > 0) {
           setChatMessages(session.messages);
           setSuggestedAction(session.suggested_action);
           setSuggestedQuest(session.suggested_quest || null);
           return;
         }
-
         const started = await apiService.startNpcChat(activeCharacter);
         if (!mounted) return;
-
         setChatMessages(started.messages);
         setSuggestedAction(started.suggested_action);
         setSuggestedQuest(started.suggested_quest || null);
@@ -74,55 +64,20 @@ export const CharacterPanel: React.FC = () => {
         }
       }
     };
-
     bootstrapConversation();
-
-    const loadTradeData = async () => {
-      try {
-        const [items, balance] = await Promise.all([
-          apiService.getShopItems(activeCharacter),
-          apiService.getGoldBalance(),
-        ]);
-        if (!mounted) return;
-        setShopItems(items);
-        setGold(balance);
-      } catch {
-        if (!mounted) return;
-        setShopItems([]);
-      }
-    };
-
-    loadTradeData();
-
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, [activeCharacter, setChatLoading, setChatMessages, setSuggestedAction, setSuggestedQuest]);
 
   const sendChat = async (messageInput: string) => {
     const message = messageInput.trim();
     if (!message) return;
-
     try {
       setError(null);
       setChatLoading(true);
-
       const response = await apiService.sendNpcMessage(activeCharacter, message);
       setChatMessages(response.messages);
       setSuggestedAction(response.suggested_action);
       setSuggestedQuest(response.suggested_quest || null);
-      if (response.balance?.gold !== undefined) {
-        setGold(response.balance.gold);
-      }
-      if (response.negotiation?.status) {
-        setNegotiationStatus(response.negotiation.status);
-      }
-      if (response.shop_items) {
-        setShopItems(response.shop_items);
-      } else {
-        const refreshedItems = await apiService.getShopItems(activeCharacter);
-        setShopItems(refreshedItems);
-      }
     } catch (sendError) {
       setError('The character did not answer. Try sending again.');
     } finally {
@@ -155,13 +110,11 @@ export const CharacterPanel: React.FC = () => {
 
   const handleAcceptQuest = async () => {
     if (!suggestedQuest) return;
-
     try {
       setError(null);
       setChatLoading(true);
       const result = await apiService.createQuestFromNpc(activeCharacter, suggestedQuest);
       setSuggestedQuest(null);
-      // Briefly show success, then navigate to quest
       setTimeout(() => {
         navigate(`/quests?focusQuestId=${result.quest.id}`);
       }, 1000);
@@ -174,26 +127,13 @@ export const CharacterPanel: React.FC = () => {
 
   const quickCharacters: NpcCharacter[] = ['frodo', 'sam', 'gandalf'];
 
-  const handleStartBargain = async (item: ShopItem) => {
-    await sendChat(`I want to bargain for ${item.name} #${item.id}`);
-  };
-
-  const handleSendOffer = async () => {
-    const cleanOffer = offerDraft.trim();
-    if (!cleanOffer) return;
-    setOfferDraft('');
-    await sendChat(`Offer ${cleanOffer}`);
-  };
-
   const buildActionUrl = () => {
     const route = suggestedAction?.target?.route || '/quests';
     const query = suggestedAction?.target?.query || {};
     const params = new URLSearchParams();
-
     Object.entries(query).forEach(([key, value]) => {
       params.set(key, String(value));
     });
-
     const queryString = params.toString();
     return queryString ? `${route}?${queryString}` : route;
   };
@@ -283,44 +223,7 @@ export const CharacterPanel: React.FC = () => {
         </div>
       )}
 
-      <div className="rounded-lg border border-gold-dark/30 bg-white/60 p-3 space-y-2">
-        <p className="text-xs uppercase tracking-wide text-text-secondary">Trader Ledger</p>
-        <p className="text-sm text-text-primary">Gold: {gold}</p>
-        {shopItems.length === 0 ? (
-          <p className="text-xs text-text-secondary">No available items for this character.</p>
-        ) : (
-          <div className="space-y-2 max-h-36 overflow-y-auto">
-            {shopItems.map((item) => (
-              <div key={item.id} className="rounded border border-gold-dark/20 bg-parchment-light/50 p-2">
-                <p className="text-sm font-semibold text-forest-dark">{item.name}</p>
-                <p className="text-xs text-text-secondary">Ask: {item.asking_price} Gold</p>
-                <Button
-                  variant="small"
-                  className="mt-2"
-                  onClick={() => handleStartBargain(item)}
-                  disabled={isChatLoading}
-                >
-                  Bargain
-                </Button>
-              </div>
-            ))}
-          </div>
-        )}
-        <div className="flex gap-2 items-center">
-          <input
-            value={offerDraft}
-            onChange={(event) => setOfferDraft(event.target.value)}
-            placeholder="Offer amount"
-            className="w-full rounded border border-gold-dark/30 bg-white/80 px-2 py-1 text-sm"
-          />
-          <Button variant="secondary" onClick={handleSendOffer} disabled={isChatLoading}>
-            Send Offer
-          </Button>
-        </div>
-        {negotiationStatus && (
-          <p className="text-xs text-text-secondary">Negotiation: {negotiationStatus}</p>
-        )}
-      </div>
+
 
       {suggestedQuest && (
         <motion.div
