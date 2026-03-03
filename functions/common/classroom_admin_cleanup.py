@@ -3,6 +3,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from botocore.exceptions import ClientError
+import time
 import os
 
 logger = logging.getLogger()
@@ -14,6 +15,78 @@ ec2_client = boto3.client('ec2', region_name=region)
 environment = os.environ.get('ENVIRONMENT', 'dev')
 HTTPS_BASE_DOMAIN = os.environ.get('INSTANCE_MANAGER_BASE_DOMAIN', '')
 HTTPS_HOSTED_ZONE_ID = os.environ.get('INSTANCE_MANAGER_HOSTED_ZONE_ID', '')
+
+
+def _normalize_record_name(record_name: str) -> str:
+    if not record_name:
+        return ''
+    return record_name if record_name.endswith('.') else f"{record_name}."
+
+
+def cleanup_route53_record(instance_id: str, tags: dict, strict: bool = True, max_retries: int = 3) -> dict:
+    if not HTTPS_HOSTED_ZONE_ID:
+        return {'success': True, 'deleted': False, 'skipped': True, 'reason': 'hosted-zone-not-configured', 'attempts': 0}
+
+    domain_to_delete = tags.get('HttpsDomain')
+    if not domain_to_delete:
+        return {'success': True, 'deleted': False, 'skipped': True, 'reason': 'no-domain', 'attempts': 0}
+
+    route53 = boto3.client('route53', region_name=region)
+    normalized_domain = _normalize_record_name(domain_to_delete)
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = route53.list_resource_record_sets(
+                HostedZoneId=HTTPS_HOSTED_ZONE_ID,
+                StartRecordName=domain_to_delete,
+                StartRecordType='A',
+                MaxItems=10
+            )
+
+            record_to_delete = None
+            for record in response.get('ResourceRecordSets', []):
+                if record.get('Type') == 'A' and _normalize_record_name(record.get('Name')) == normalized_domain:
+                    record_to_delete = record
+                    break
+
+            if not record_to_delete:
+                logger.info(f"Route53 record {domain_to_delete} not found (already deleted)")
+                return {'success': True, 'deleted': False, 'skipped': True, 'reason': 'already-deleted', 'attempts': attempt}
+
+            route53.change_resource_record_sets(
+                HostedZoneId=HTTPS_HOSTED_ZONE_ID,
+                ChangeBatch={
+                    'Changes': [{
+                        'Action': 'DELETE',
+                        'ResourceRecordSet': record_to_delete
+                    }]
+                }
+            )
+            logger.info(f"Deleted Route53 record: {domain_to_delete} for admin instance {instance_id}")
+            return {'success': True, 'deleted': True, 'skipped': False, 'reason': 'deleted', 'attempts': attempt}
+        except ClientError as e:
+            code = e.response['Error'].get('Code', 'Unknown')
+            if code == 'InvalidChangeBatch':
+                logger.info(f"Route53 record {domain_to_delete} already absent")
+                return {'success': True, 'deleted': False, 'skipped': True, 'reason': 'already-deleted', 'attempts': attempt}
+            if code == 'NoSuchHostedZone':
+                logger.error(f"Hosted zone {HTTPS_HOSTED_ZONE_ID} not found")
+                return {'success': not strict, 'deleted': False, 'skipped': False, 'reason': 'hosted-zone-missing', 'attempts': attempt, 'error': str(e)}
+
+            logger.warning(f"Route53 delete attempt {attempt}/{max_retries} failed for {domain_to_delete}: {str(e)}")
+            if attempt < max_retries:
+                time.sleep(attempt)
+            else:
+                return {'success': not strict, 'deleted': False, 'skipped': False, 'reason': 'delete-failed', 'attempts': attempt, 'error': str(e)}
+        except Exception as e:
+            logger.warning(f"Route53 delete unexpected error attempt {attempt}/{max_retries} for {domain_to_delete}: {str(e)}")
+            if attempt < max_retries:
+                time.sleep(attempt)
+            else:
+                return {'success': not strict, 'deleted': False, 'skipped': False, 'reason': 'delete-failed', 'attempts': attempt, 'error': str(e)}
+
+    return {'success': not strict, 'deleted': False, 'skipped': False, 'reason': 'delete-failed', 'attempts': max_retries}
+
 
 def lambda_handler(event, context):
     """
@@ -99,51 +172,17 @@ def lambda_handler(event, context):
                 except Exception as e:
                     logger.warning(f"Error getting instance tags for {instance_id}: {str(e)}")
                 
-                # Clean up Route53 record if domain exists
-                domain_to_delete = instance_tags.get('HttpsDomain')
-                if domain_to_delete and HTTPS_HOSTED_ZONE_ID:
-                    try:
-                        route53 = boto3.client('route53', region_name=region)
-                        # Get the current record to ensure exact match for DELETE
-                        try:
-                            response = route53.list_resource_record_sets(
-                                HostedZoneId=HTTPS_HOSTED_ZONE_ID,
-                                StartRecordName=domain_to_delete,
-                                StartRecordType='A',
-                                MaxItems=1
-                            )
-                            
-                            # Find the exact record to delete
-                            record_to_delete = None
-                            for record in response.get('ResourceRecordSets', []):
-                                if record['Name'] == domain_to_delete and record['Type'] == 'A':
-                                    record_to_delete = record
-                                    break
-                            
-                            if record_to_delete:
-                                # Delete the Route53 A record with exact match
-                                route53.change_resource_record_sets(
-                                    HostedZoneId=HTTPS_HOSTED_ZONE_ID,
-                                    ChangeBatch={
-                                        'Changes': [{
-                                            'Action': 'DELETE',
-                                            'ResourceRecordSet': record_to_delete
-                                        }]
-                                    }
-                                )
-                                logger.info(f"Deleted Route53 record: {domain_to_delete} for admin instance {instance_id}")
-                            else:
-                                logger.debug(f"Route53 record {domain_to_delete} not found (may already be deleted)")
-                        except ClientError as e:
-                            if e.response['Error']['Code'] == 'NoSuchHostedZone':
-                                logger.warning(f"Hosted zone {HTTPS_HOSTED_ZONE_ID} not found")
-                            elif e.response['Error']['Code'] == 'InvalidChangeBatch':
-                                logger.debug(f"Route53 record {domain_to_delete} may not exist or already deleted: {str(e)}")
-                            else:
-                                logger.warning(f"Failed to delete Route53 record {domain_to_delete} for {instance_id}: {str(e)}")
-                    except Exception as e:
-                        logger.warning(f"Error deleting Route53 record for {instance_id}: {str(e)}")
-                
+                # Clean up Route53 record before termination
+                dns_cleanup = cleanup_route53_record(instance_id, instance_tags, strict=True)
+                if not dns_cleanup.get('success'):
+                    error_msg = (
+                        f"{instance_id}: Route53 cleanup failed "
+                        f"(reason={dns_cleanup.get('reason')}, attempts={dns_cleanup.get('attempts')})"
+                    )
+                    errors.append(error_msg)
+                    logger.error(error_msg)
+                    continue
+
                 # Terminate the instance (EC2 can terminate running instances directly)
                 ec2_client.terminate_instances(InstanceIds=[instance_id])
                 deleted.append(instance_info)

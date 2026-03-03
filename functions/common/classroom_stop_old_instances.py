@@ -53,62 +53,80 @@ def get_timeout_parameters():
             'hard_terminate_timeout': 240
         }
 
-def cleanup_route53_record(instance_id: str, tags: Dict) -> None:
-    """Clean up Route53 A record for an instance if it exists
-    
-    Args:
-        instance_id: EC2 instance ID
-        tags: Instance tags dictionary
+def _normalize_record_name(record_name: str) -> str:
+    if not record_name:
+        return ''
+    return record_name if record_name.endswith('.') else f"{record_name}."
+
+
+def cleanup_route53_record(instance_id: str, tags: Dict, strict: bool = True, max_retries: int = 3) -> Dict:
+    """Clean up Route53 A record for an instance.
+
+    Returns:
+        dict: {success, deleted, skipped, reason, attempts}
     """
     if not HTTPS_HOSTED_ZONE_ID:
-        return  # Route53 not configured, skip cleanup
-    
+        return {'success': True, 'deleted': False, 'skipped': True, 'reason': 'hosted-zone-not-configured', 'attempts': 0}
+
     domain_to_delete = tags.get('HttpsDomain')
     if not domain_to_delete:
-        return  # No domain configured for this instance
-    
-    try:
-        route53 = boto3.client('route53', region_name=region)
-        # Get the current record to ensure exact match for DELETE
+        return {'success': True, 'deleted': False, 'skipped': True, 'reason': 'no-domain', 'attempts': 0}
+
+    route53 = boto3.client('route53', region_name=region)
+    normalized_domain = _normalize_record_name(domain_to_delete)
+
+    for attempt in range(1, max_retries + 1):
         try:
             response = route53.list_resource_record_sets(
                 HostedZoneId=HTTPS_HOSTED_ZONE_ID,
                 StartRecordName=domain_to_delete,
                 StartRecordType='A',
-                MaxItems=1
+                MaxItems=10
             )
-            
-            # Find the exact record to delete
+
             record_to_delete = None
             for record in response.get('ResourceRecordSets', []):
-                if record['Name'] == domain_to_delete and record['Type'] == 'A':
+                if record.get('Type') == 'A' and _normalize_record_name(record.get('Name')) == normalized_domain:
                     record_to_delete = record
                     break
-            
-            if record_to_delete:
-                # Delete the Route53 A record with exact match
-                route53.change_resource_record_sets(
-                    HostedZoneId=HTTPS_HOSTED_ZONE_ID,
-                    ChangeBatch={
-                        'Changes': [{
-                            'Action': 'DELETE',
-                            'ResourceRecordSet': record_to_delete
-                        }]
-                    }
-                )
-                logger.info(f"Deleted Route53 record: {domain_to_delete} for instance {instance_id}")
-            else:
-                logger.debug(f"Route53 record {domain_to_delete} not found (may already be deleted)")
+
+            if not record_to_delete:
+                logger.info(f"Route53 record {domain_to_delete} not found (already deleted)")
+                return {'success': True, 'deleted': False, 'skipped': True, 'reason': 'already-deleted', 'attempts': attempt}
+
+            route53.change_resource_record_sets(
+                HostedZoneId=HTTPS_HOSTED_ZONE_ID,
+                ChangeBatch={
+                    'Changes': [{
+                        'Action': 'DELETE',
+                        'ResourceRecordSet': record_to_delete
+                    }]
+                }
+            )
+            logger.info(f"Deleted Route53 record: {domain_to_delete} for instance {instance_id}")
+            return {'success': True, 'deleted': True, 'skipped': False, 'reason': 'deleted', 'attempts': attempt}
         except ClientError as e:
-            if e.response['Error']['Code'] == 'NoSuchHostedZone':
-                logger.warning(f"Hosted zone {HTTPS_HOSTED_ZONE_ID} not found")
-            elif e.response['Error']['Code'] == 'InvalidChangeBatch':
-                # Record might not exist or already deleted - this is OK
-                logger.debug(f"Route53 record {domain_to_delete} may not exist or already deleted: {str(e)}")
+            code = e.response['Error'].get('Code', 'Unknown')
+            if code == 'InvalidChangeBatch':
+                logger.info(f"Route53 record {domain_to_delete} already absent")
+                return {'success': True, 'deleted': False, 'skipped': True, 'reason': 'already-deleted', 'attempts': attempt}
+            if code == 'NoSuchHostedZone':
+                logger.error(f"Hosted zone {HTTPS_HOSTED_ZONE_ID} not found")
+                return {'success': not strict, 'deleted': False, 'skipped': False, 'reason': 'hosted-zone-missing', 'attempts': attempt, 'error': str(e)}
+
+            logger.warning(f"Route53 delete attempt {attempt}/{max_retries} failed for {domain_to_delete}: {str(e)}")
+            if attempt < max_retries:
+                time.sleep(attempt)
             else:
-                logger.warning(f"Failed to delete Route53 record {domain_to_delete} for {instance_id}: {str(e)}")
-    except Exception as e:
-        logger.warning(f"Error deleting Route53 record for {instance_id}: {str(e)}")
+                return {'success': not strict, 'deleted': False, 'skipped': False, 'reason': 'delete-failed', 'attempts': attempt, 'error': str(e)}
+        except Exception as e:
+            logger.warning(f"Route53 delete unexpected error attempt {attempt}/{max_retries} for {domain_to_delete}: {str(e)}")
+            if attempt < max_retries:
+                time.sleep(attempt)
+            else:
+                return {'success': not strict, 'deleted': False, 'skipped': False, 'reason': 'delete-failed', 'attempts': attempt, 'error': str(e)}
+
+    return {'success': not strict, 'deleted': False, 'skipped': False, 'reason': 'delete-failed', 'attempts': max_retries}
 
 def wait_for_command(ssm_client, command_id: str, instance_id: str, timeout: int = 60) -> Dict:
     """Wait for an SSM command to complete with timeout"""
@@ -174,8 +192,11 @@ def process_instance(instance_id, ec2_client, ssm_client, table):
                     # Notify the student (you could add notification logic here)
                 
                 # Clean up Route53 record before termination
-                cleanup_route53_record(instance_id, tags)
-                
+                dns_cleanup = cleanup_route53_record(instance_id, tags, strict=True)
+                if not dns_cleanup.get('success'):
+                    logger.error(f"Skipping hard termination for {instance_id}; Route53 cleanup failed: {dns_cleanup}")
+                    return {'instance_id': instance_id, 'status': 'error', 'error': f"Route53 cleanup failed: {dns_cleanup.get('reason')}"}
+
                 # Terminate the instance regardless of state
                 ec2_client.terminate_instances(InstanceIds=[instance_id])
                 logger.info(f"Hard terminating instance {instance_id}")
@@ -226,8 +247,11 @@ def process_instance(instance_id, ec2_client, ssm_client, table):
                 logger.info(f"Terminating spot instance {instance_id} (exceeds STOP_TIMEOUT_MINUTES={STOP_TIMEOUT_MINUTES})")
                 try:
                     # Clean up Route53 record before termination
-                    cleanup_route53_record(instance_id, tags)
-                    
+                    dns_cleanup = cleanup_route53_record(instance_id, tags, strict=True)
+                    if not dns_cleanup.get('success'):
+                        logger.error(f"Skipping spot termination for {instance_id}; Route53 cleanup failed: {dns_cleanup}")
+                        return {'instance_id': instance_id, 'status': 'error', 'error': f"Route53 cleanup failed: {dns_cleanup.get('reason')}"}
+
                     ec2_client.terminate_instances(InstanceIds=[instance_id])
                     logger.info(f"Initiated termination for spot instance {instance_id}")
                     
@@ -380,8 +404,11 @@ def process_instance(instance_id, ec2_client, ssm_client, table):
                                 )
                                 try:
                                     # Clean up Route53 record before termination
-                                    cleanup_route53_record(instance_id, tags)
-                                    
+                                    dns_cleanup = cleanup_route53_record(instance_id, tags, strict=True)
+                                    if not dns_cleanup.get('success'):
+                                        logger.error(f"Skipping termination for {instance_id}; Route53 cleanup failed: {dns_cleanup}")
+                                        return {'instance_id': instance_id, 'status': 'error', 'error': f"Route53 cleanup failed: {dns_cleanup.get('reason')}"}
+
                                     ec2_client.terminate_instances(InstanceIds=[instance_id])
                                     logger.info(f"Terminating instance {instance_id}")
                                     waiter = ec2_client.get_waiter('instance_terminated')
@@ -467,8 +494,11 @@ def process_admin_instance(instance_id, ec2_client, table):
             logger.info(f"Admin instance {instance_id} has expired (age={age_days} >= cleanup_days={cleanup_days}). Deleting...")
             try:
                 # Clean up Route53 record before termination
-                cleanup_route53_record(instance_id, tags)
-                
+                dns_cleanup = cleanup_route53_record(instance_id, tags, strict=True)
+                if not dns_cleanup.get('success'):
+                    logger.error(f"Skipping admin deletion for {instance_id}; Route53 cleanup failed: {dns_cleanup}")
+                    return {'instance_id': instance_id, 'status': 'error', 'error': f"Route53 cleanup failed: {dns_cleanup.get('reason')}"}
+
                 # Terminate the instance
                 ec2_client.terminate_instances(InstanceIds=[instance_id])
                 logger.info(f"Terminated expired admin instance {instance_id}")

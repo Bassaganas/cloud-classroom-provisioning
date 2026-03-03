@@ -14,7 +14,7 @@ Usage:
 
 import os
 import sys
-from moto import mock_ec2, mock_dynamodb, mock_secretsmanager, mock_ssm
+from moto import mock_aws
 
 # Global references to keep decorators active
 _mocked_services = {}
@@ -27,16 +27,12 @@ def init_test_mode():
     
     print("[TEST MODE] Initializing AWS service mocks via moto...")
     
-    # Start all moto mocks
-    _mocked_services['ec2'] = mock_ec2()
-    _mocked_services['dynamodb'] = mock_dynamodb()
-    _mocked_services['secretsmanager'] = mock_secretsmanager()
-    _mocked_services['ssm'] = mock_ssm()
+    # Start unified moto mock for all AWS services
+    _mocked_services['aws'] = mock_aws()
     
-    # Start each mock
-    for service_name, mock_service in _mocked_services.items():
-        mock_service.start()
-        print(f"[TEST MODE] ✓ Started {service_name} mock")
+    # Start the mock
+    _mocked_services['aws'].start()
+    print(f"[TEST MODE] ✓ Started AWS mock (all services)")
     
     # Set AWS credentials for moto (required even though they're fake)
     os.environ.setdefault('AWS_ACCESS_KEY_ID', 'testing')

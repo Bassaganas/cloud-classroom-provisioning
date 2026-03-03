@@ -78,6 +78,26 @@ resource "aws_iam_role_policy" "ec2_sut_access" {
   })
 }
 
+# IAM policy for Secrets Manager access to Azure OpenAI credentials
+resource "aws_iam_role_policy" "ec2_secrets_access" {
+  name = "ec2-secrets-access-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
+  role = aws_iam_role.ec2_ssm_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "secretsmanager:GetSecretValue"
+      ]
+      Resource = [
+        "arn:aws:secretsmanager:*:*:secret:classroom/shared/${var.environment}/*",
+        "arn:aws:secretsmanager:*:*:secret:classroom/${var.workshop_name}/${var.environment}/*"
+      ]
+    }]
+  })
+}
+
 # Create instance profile
 resource "aws_iam_instance_profile" "ec2_ssm_profile" {
   name = "iam-ec2-ssm-profile-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"

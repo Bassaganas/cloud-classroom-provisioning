@@ -9,6 +9,7 @@ import urllib.error
 from botocore.exceptions import ClientError
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal, InvalidOperation
+from typing import Any
 import base64
 
 # Initialize test mode BEFORE boto3 clients are created
@@ -677,6 +678,192 @@ def sanitize_domain_name(domain):
         sanitized = sanitized.replace('--', '-')
     return sanitized
 
+def _build_instance_name_prefix(workshop_name, tutorial_session_id, instance_type):
+    if tutorial_session_id:
+        return f"{workshop_name}-{tutorial_session_id}-{instance_type}-"
+    return f"{workshop_name}-{instance_type}-"
+
+def _extract_index_from_name(name, prefix):
+    if not name or not name.startswith(prefix):
+        return None
+    suffix = name[len(prefix):]
+    if suffix.isdigit():
+        return int(suffix)
+    return None
+
+def _get_next_instance_index(workshop_name, tutorial_session_id, instance_type):
+    """Return the next safe numeric index and currently used indices for instance naming."""
+    filters = [
+        {'Name': 'tag:Project', 'Values': ['classroom']},
+        {'Name': 'tag:WorkshopID', 'Values': [workshop_name]},
+        {'Name': 'tag:Type', 'Values': [instance_type]},
+        {'Name': 'instance-state-name', 'Values': ['pending', 'running', 'stopping', 'stopped', 'starting']}
+    ]
+    if tutorial_session_id:
+        filters.append({'Name': 'tag:TutorialSessionID', 'Values': [tutorial_session_id]})
+
+    used_indices = set()
+    name_prefix = _build_instance_name_prefix(workshop_name, tutorial_session_id, instance_type)
+
+    paginator = ec2.get_paginator('describe_instances')
+    for page in paginator.paginate(Filters=filters):
+        for reservation in page.get('Reservations', []):
+            for instance in reservation.get('Instances', []):
+                tags = {tag['Key']: tag['Value'] for tag in instance.get('Tags', [])}
+                existing_name = tags.get('Name', '')
+                index = _extract_index_from_name(existing_name, name_prefix)
+                if index is not None:
+                    used_indices.add(index)
+
+    next_index = (max(used_indices) + 1) if used_indices else 0
+    return next_index, used_indices
+
+COUNTER_ITEM_PREFIX = '__endpoint_counter__'
+IDEMPOTENCY_ITEM_PREFIX = '__create_request__'
+
+
+def _build_counter_item_key(workshop_name, tutorial_session_id, instance_type):
+    session_part = tutorial_session_id if tutorial_session_id else 'global'
+    return f"{COUNTER_ITEM_PREFIX}:{ENVIRONMENT}:{workshop_name}:{session_part}:{instance_type}"
+
+
+def _build_create_request_item_key(workshop_name, tutorial_session_id, instance_type, idempotency_key):
+    session_part = tutorial_session_id if tutorial_session_id else 'global'
+    return f"{IDEMPOTENCY_ITEM_PREFIX}:{ENVIRONMENT}:{workshop_name}:{session_part}:{instance_type}:{idempotency_key}"
+
+
+def _reserve_instance_indices(workshop_name, tutorial_session_id, instance_type, count):
+    """Atomically reserve a unique contiguous index range using DynamoDB."""
+    if count <= 0:
+        return []
+
+    next_index_from_ec2, _ = _get_next_instance_index(workshop_name, tutorial_session_id, instance_type)
+    counter_key = _build_counter_item_key(workshop_name, tutorial_session_id, instance_type)
+
+    try:
+        table.update_item(
+            Key={'instance_id': counter_key},
+            UpdateExpression='SET next_index = if_not_exists(next_index, :initial_next), updated_at = :now',
+            ExpressionAttributeValues={
+                ':initial_next': next_index_from_ec2,
+                ':now': datetime.now(timezone.utc).isoformat()
+            }
+        )
+
+        update_response = table.update_item(
+            Key={'instance_id': counter_key},
+            UpdateExpression='ADD next_index :count SET updated_at = :now',
+            ExpressionAttributeValues={
+                ':count': count,
+                ':now': datetime.now(timezone.utc).isoformat()
+            },
+            ReturnValues='UPDATED_NEW'
+        )
+        updated_next = int(update_response['Attributes']['next_index'])
+        start_index = updated_next - count
+        return list(range(start_index, updated_next))
+    except Exception as e:
+        logger.warning(
+            f"Atomic index reservation failed for workshop={workshop_name}, "
+            f"tutorial_session_id={tutorial_session_id}, type={instance_type}: {str(e)}. "
+            "Falling back to in-memory reservation from EC2 scan."
+        )
+        return list(range(next_index_from_ec2, next_index_from_ec2 + count))
+
+
+def _normalize_route53_record_name(record_name):
+    if not record_name:
+        return ''
+    return record_name if record_name.endswith('.') else f"{record_name}."
+
+
+def _delete_route53_a_record(domain_name, strict=False, max_retries=3):
+    """Delete a Route53 A record by exact name.
+
+    Returns dict: {success, deleted, skipped, reason, attempts}
+    """
+    if not domain_name:
+        return {'success': True, 'deleted': False, 'skipped': True, 'reason': 'no-domain', 'attempts': 0}
+    if not HTTPS_HOSTED_ZONE_ID:
+        return {'success': True, 'deleted': False, 'skipped': True, 'reason': 'hosted-zone-not-configured', 'attempts': 0}
+
+    normalized_domain = _normalize_route53_record_name(domain_name)
+    route53 = boto3.client('route53', region_name=REGION)
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            response = route53.list_resource_record_sets(
+                HostedZoneId=HTTPS_HOSTED_ZONE_ID,
+                StartRecordName=domain_name,
+                StartRecordType='A',
+                MaxItems=10
+            )
+
+            record_to_delete = None
+            for record in response.get('ResourceRecordSets', []):
+                if record.get('Type') == 'A' and _normalize_route53_record_name(record.get('Name')) == normalized_domain:
+                    record_to_delete = record
+                    break
+
+            if not record_to_delete:
+                logger.info(f"Route53 A record not found for {domain_name}; treating as already deleted")
+                return {'success': True, 'deleted': False, 'skipped': True, 'reason': 'already-deleted', 'attempts': attempt}
+
+            route53.change_resource_record_sets(
+                HostedZoneId=HTTPS_HOSTED_ZONE_ID,
+                ChangeBatch={
+                    'Changes': [{
+                        'Action': 'DELETE',
+                        'ResourceRecordSet': record_to_delete
+                    }]
+                }
+            )
+            logger.info(f"Deleted Route53 A record: {domain_name}")
+            return {'success': True, 'deleted': True, 'skipped': False, 'reason': 'deleted', 'attempts': attempt}
+        except ClientError as e:
+            error_code = e.response['Error'].get('Code', 'Unknown')
+            if error_code == 'InvalidChangeBatch':
+                logger.info(f"Route53 record {domain_name} already absent (InvalidChangeBatch)")
+                return {'success': True, 'deleted': False, 'skipped': True, 'reason': 'already-deleted', 'attempts': attempt}
+            if error_code == 'NoSuchHostedZone':
+                logger.error(f"Hosted zone {HTTPS_HOSTED_ZONE_ID} not found while deleting {domain_name}")
+                return {
+                    'success': not strict,
+                    'deleted': False,
+                    'skipped': False,
+                    'reason': 'hosted-zone-missing',
+                    'attempts': attempt,
+                    'error': str(e)
+                }
+            logger.warning(f"Route53 delete attempt {attempt}/{max_retries} failed for {domain_name}: {str(e)}")
+            if attempt < max_retries:
+                time.sleep(attempt)
+            else:
+                return {
+                    'success': not strict,
+                    'deleted': False,
+                    'skipped': False,
+                    'reason': 'delete-failed',
+                    'attempts': attempt,
+                    'error': str(e)
+                }
+        except Exception as e:
+            logger.warning(f"Unexpected Route53 delete error attempt {attempt}/{max_retries} for {domain_name}: {str(e)}")
+            if attempt < max_retries:
+                time.sleep(attempt)
+            else:
+                return {
+                    'success': not strict,
+                    'deleted': False,
+                    'skipped': False,
+                    'reason': 'delete-failed',
+                    'attempts': attempt,
+                    'error': str(e)
+                }
+
+    return {'success': not strict, 'deleted': False, 'skipped': False, 'reason': 'delete-failed', 'attempts': max_retries}
+
+
 def setup_caddy_domain(instance_id, workshop_name, machine_name=None, domain=None):
     """Setup Caddy domain with Route53 A record and instance tags
     
@@ -1034,7 +1221,7 @@ def get_latest_ami():
 def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_name=None,
                     stop_timeout=None, terminate_timeout=None, hard_terminate_timeout=None,
                     tutorial_session_id=None, purchase_type='on-demand', spot_duration_hours=2,
-                    spot_max_price=None):
+                    spot_max_price=None, idempotency_key=None):
     """Create EC2 instance(s) for a workshop template
     
     Args:
@@ -1063,6 +1250,50 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
                     spot_max_price = None
         
         workshop_name = workshop_name or WORKSHOP_NAME
+        idempotency_item_key = None
+        if idempotency_key:
+            idempotency_item_key = _build_create_request_item_key(
+                workshop_name=workshop_name,
+                tutorial_session_id=tutorial_session_id,
+                instance_type=instance_type,
+                idempotency_key=idempotency_key
+            )
+
+            existing_request = table.get_item(Key={'instance_id': idempotency_item_key})
+            existing_item = existing_request.get('Item')
+            if existing_item and existing_item.get('status') == 'success' and existing_item.get('result_json'):
+                logger.info(f"Idempotent replay detected for key={idempotency_key}, returning stored create result")
+                replay_result = json.loads(existing_item['result_json'])
+                replay_result['idempotent_replay'] = True
+                return replay_result
+            if existing_item and existing_item.get('status') == 'in_progress':
+                return {
+                    'success': False,
+                    'error': 'A create request with this idempotency key is already in progress',
+                    'status_code': 409
+                }
+            if existing_item and existing_item.get('status') == 'failed':
+                return {
+                    'success': False,
+                    'error': existing_item.get('error_message', 'Previous request with this idempotency key failed'),
+                    'idempotent_replay': True,
+                    'status_code': 500
+                }
+
+            table.put_item(
+                Item={
+                    'instance_id': idempotency_item_key,
+                    'status': 'in_progress',
+                    'created_at': datetime.now(timezone.utc).isoformat(),
+                    'request_type': 'create_instance',
+                    'idempotency_key': idempotency_key,
+                    'workshop_name': workshop_name,
+                    'instance_type': instance_type,
+                    'tutorial_session_id': tutorial_session_id or ''
+                },
+                ConditionExpression='attribute_not_exists(instance_id)'
+            )
+
         logger.info("=" * 80)
         logger.info(f"INSTANCE CREATION REQUEST")
         logger.info(f"  Workshop: {workshop_name}")
@@ -1072,6 +1303,7 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
         if purchase_type == 'spot':
             logger.info(f"  Spot Max Price: {spot_max_price if spot_max_price is not None else 'market default'}")
         logger.info(f"  Tutorial Session ID: {tutorial_session_id}")
+        logger.info(f"  Idempotency Key: {idempotency_key or 'N/A'}")
         logger.info(f"  Region: {REGION}")
         logger.info(f"  Environment: {ENVIRONMENT}")
         logger.info("=" * 80)
@@ -1167,31 +1399,18 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
         
         instances = []
         
-        # Get the next instance index for this tutorial session
-        # This ensures unique naming even if create_instance is called multiple times
-        instance_index_offset = 0
-        if tutorial_session_id:
-            try:
-                # Query for existing instances in this tutorial session
-                ec2_filter_response = ec2.describe_instances(
-                    Filters=[
-                        {'Name': 'tag:TutorialSessionID', 'Values': [tutorial_session_id]},
-                        {'Name': 'tag:Type', 'Values': [instance_type]},
-                        {'Name': 'instance-state-name', 'Values': ['pending', 'running', 'stopped']}
-                    ]
-                )
-                existing_count = 0
-                for reservation in ec2_filter_response.get('Reservations', []):
-                    existing_count += len(reservation.get('Instances', []))
-                instance_index_offset = existing_count
-                logger.info(f"Found {existing_count} existing {instance_type} instances in session {tutorial_session_id}")
-            except Exception as e:
-                logger.warning(f"Could not query existing instances for session {tutorial_session_id}: {str(e)}, starting index from 0")
-                instance_index_offset = 0
-        
-        for i in range(count):
-            # Calculate actual instance index to ensure unique naming
-            instance_index = instance_index_offset + i
+        reserved_indices = _reserve_instance_indices(
+            workshop_name=workshop_name,
+            tutorial_session_id=tutorial_session_id,
+            instance_type=instance_type,
+            count=count
+        )
+        logger.info(
+            f"Reserved instance indices for workshop={workshop_name}, "
+            f"tutorial_session_id={tutorial_session_id}, type={instance_type}: {reserved_indices}"
+        )
+
+        for i, instance_index in enumerate(reserved_indices):
             
             # Determine naming and tags based on type
             if instance_type == 'admin':
@@ -1458,15 +1677,43 @@ export WORKSHOP_NAME={workshop_name}
             else:
                 logger.info("HTTPS not configured - skipping Caddy domain setup")
         
-        return {
+        result = {
             'success': True,
             'instances': instances,
             'count': len(instances),
             'type': instance_type,
             'workshop': workshop_name
         }
+
+        if idempotency_item_key:
+            table.update_item(
+                Key={'instance_id': idempotency_item_key},
+                UpdateExpression='SET #status = :status, result_json = :result_json, completed_at = :completed_at',
+                ExpressionAttributeNames={'#status': 'status'},
+                ExpressionAttributeValues={
+                    ':status': 'success',
+                    ':result_json': json.dumps(convert_decimal(result)),
+                    ':completed_at': datetime.now(timezone.utc).isoformat()
+                }
+            )
+
+        return result
     except Exception as e:
         logger.error(f"Error creating instances: {str(e)}", exc_info=True)
+        if 'idempotency_item_key' in locals() and idempotency_item_key:
+            try:
+                table.update_item(
+                    Key={'instance_id': idempotency_item_key},
+                    UpdateExpression='SET #status = :status, error_message = :error_message, completed_at = :completed_at',
+                    ExpressionAttributeNames={'#status': 'status'},
+                    ExpressionAttributeValues={
+                        ':status': 'failed',
+                        ':error_message': str(e),
+                        ':completed_at': datetime.now(timezone.utc).isoformat()
+                    }
+                )
+            except Exception as update_error:
+                logger.warning(f"Failed to persist idempotency failure state: {str(update_error)}")
         return {
             'success': False,
             'error': str(e)
@@ -1812,51 +2059,18 @@ def delete_instances(instance_ids=None, delete_type='individual'):
                 except Exception as e:
                     logger.warning(f"Error getting instance tags for {instance_id}: {str(e)}")
                 
-                # Clean up Route53 record if domain exists
-                if domain_to_delete and HTTPS_HOSTED_ZONE_ID:
-                    try:
-                        route53 = boto3.client('route53')
-                        # Get the current record to ensure exact match for DELETE
-                        try:
-                            response = route53.list_resource_record_sets(
-                                HostedZoneId=HTTPS_HOSTED_ZONE_ID,
-                                StartRecordName=domain_to_delete,
-                                StartRecordType='A',
-                                MaxItems=1
-                            )
-                            
-                            # Find the exact record to delete
-                            record_to_delete = None
-                            for record in response.get('ResourceRecordSets', []):
-                                if record['Name'] == domain_to_delete and record['Type'] == 'A':
-                                    record_to_delete = record
-                                    break
-                            
-                            if record_to_delete:
-                                # Delete the Route53 A record with exact match
-                                route53.change_resource_record_sets(
-                                    HostedZoneId=HTTPS_HOSTED_ZONE_ID,
-                                    ChangeBatch={
-                                        'Changes': [{
-                                            'Action': 'DELETE',
-                                            'ResourceRecordSet': record_to_delete
-                                        }]
-                                    }
-                                )
-                                logger.info(f"Deleted Route53 record: {domain_to_delete} for instance {instance_id}")
-                            else:
-                                logger.debug(f"Route53 record {domain_to_delete} not found (may already be deleted)")
-                        except ClientError as e:
-                            if e.response['Error']['Code'] == 'NoSuchHostedZone':
-                                logger.warning(f"Hosted zone {HTTPS_HOSTED_ZONE_ID} not found")
-                            elif e.response['Error']['Code'] == 'InvalidChangeBatch':
-                                # Record might not exist or already deleted - this is OK
-                                logger.debug(f"Route53 record {domain_to_delete} may not exist or already deleted: {str(e)}")
-                            else:
-                                logger.warning(f"Failed to delete Route53 record {domain_to_delete} for {instance_id}: {str(e)}")
-                    except Exception as e:
-                        logger.warning(f"Error deleting Route53 record for {instance_id}: {str(e)}")
-                
+                # Clean up Route53 record before termination (strict mode)
+                dns_cleanup = _delete_route53_a_record(domain_to_delete, strict=True, max_retries=3)
+                if not dns_cleanup.get('success'):
+                    errors.append(
+                        f"{instance_id}: Route53 cleanup failed for {domain_to_delete} "
+                        f"(reason={dns_cleanup.get('reason')}, attempts={dns_cleanup.get('attempts')})"
+                    )
+                    logger.error(
+                        f"Skipping termination for {instance_id} because Route53 cleanup failed: {dns_cleanup}"
+                    )
+                    continue
+
                 # Clean up DynamoDB assignment (non-blocking)
                 try:
                     response = table.get_item(Key={'instance_id': instance_id})
@@ -2472,6 +2686,12 @@ def lambda_handler(event, context):
 
             # Get optional tutorial_session_id
             tutorial_session_id = body.get('tutorial_session_id') or query_params.get('tutorial_session_id')
+            idempotency_key = (
+                body.get('idempotency_key')
+                or query_params.get('idempotency_key')
+                or headers.get('Idempotency-Key')
+                or headers.get('idempotency-key')
+            )
 
             # Enforce tutorial-level purchase policy when creating inside a tutorial session
             if tutorial_session_id:
@@ -2525,13 +2745,17 @@ def lambda_handler(event, context):
                 hard_terminate_timeout=hard_terminate_timeout,
                 tutorial_session_id=tutorial_session_id,
                 purchase_type=purchase_type,
-                spot_max_price=spot_max_price
+                spot_max_price=spot_max_price,
+                idempotency_key=idempotency_key
             )
             # Add a message indicating the operation is async
             if result['success']:
-                result['message'] = f"✅ Initiated creation of {result['count']} {instance_type} instance(s). They will be stopped automatically once running. Refresh to see updates."
+                replay_suffix = ' (idempotent replay)' if result.get('idempotent_replay') else ''
+                result['message'] = f"✅ Initiated creation of {result['count']} {instance_type} instance(s){replay_suffix}. They will be stopped automatically once running. Refresh to see updates."
+
+            status_code = result.get('status_code', 200 if result['success'] else 500)
             return {
-                'statusCode': 200 if result['success'] else 500,
+                'statusCode': status_code,
                 'headers': get_cors_headers(),
                 'body': json.dumps(result)
             }
@@ -3425,14 +3649,21 @@ def lambda_handler(event, context):
                 instances = instances_result.get('instances', []) if instances_result.get('success') else []
                 
                 # Delete instances if requested
+                delete_result = None
                 if should_delete_instances and instances:
                     instance_ids = [i['instance_id'] for i in instances if i.get('state') != 'terminated']
                     if instance_ids:
-                        try:
-                            ec2.terminate_instances(InstanceIds=instance_ids)
-                            logger.info(f"Terminated {len(instance_ids)} instances for session {session_id}")
-                        except Exception as e:
-                            logger.error(f"Error terminating instances: {str(e)}")
+                        delete_result = delete_instances(instance_ids=instance_ids, delete_type='individual')
+                        if not delete_result.get('success'):
+                            return {
+                                'statusCode': 500,
+                                'headers': get_cors_headers(),
+                                'body': json.dumps({
+                                    'success': False,
+                                    'error': 'Failed to delete all session instances',
+                                    'delete_result': delete_result
+                                })
+                            }
                 
                 # Delete session record
                 sessions_table.delete_item(Key={'session_id': session_id})
@@ -3443,7 +3674,8 @@ def lambda_handler(event, context):
                     'body': json.dumps({
                         'success': True,
                         'message': f'Session {session_id} deleted',
-                        'instances_deleted': should_delete_instances
+                        'instances_deleted': should_delete_instances,
+                        'instance_delete_result': delete_result if should_delete_instances else None
                     })
                 }
             except Exception as e:

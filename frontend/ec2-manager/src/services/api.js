@@ -10,6 +10,13 @@ function getPassword() {
   return sessionStorage.getItem(PASSWORD_STORAGE_KEY) || ''
 }
 
+function generateIdempotencyKey() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return `req-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`
+}
+
 async function apiRequest(endpoint, options = {}) {
   // Get password from sessionStorage or from options
   const password = options.password || getPassword()
@@ -44,14 +51,17 @@ async function apiRequest(endpoint, options = {}) {
   
   // Re-stringify body if it was modified
   const finalBody = Object.keys(body).length > 0 ? JSON.stringify(body) : options.body
-  
+
+  const requestHeaders = {
+    'Content-Type': 'application/json',
+    ...options.headers,
+  }
+
+
   const response = await fetch(url, {
     ...options,
     body: finalBody,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
+    headers: requestHeaders,
   })
 
   if (!response.ok) {
@@ -86,10 +96,16 @@ export const api = {
     return apiRequest(`/list${query ? `?${query}` : ''}`)
   },
   
-  createInstances: (data) => apiRequest('/create', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  }),
+  createInstances: (data) => {
+    const requestPayload = {
+      ...data,
+      idempotency_key: data?.idempotency_key || generateIdempotencyKey(),
+    }
+    return apiRequest('/create', {
+      method: 'POST',
+      body: JSON.stringify(requestPayload),
+    })
+  },
 
   assignInstance: (instanceId, studentName) => apiRequest('/assign', {
     method: 'POST',
