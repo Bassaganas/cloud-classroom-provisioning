@@ -5,11 +5,12 @@ from playwright.sync_api import expect, Page
 
 
 def _login(page: Page, base_url: str):
-    page.goto(base_url)
+    page.goto(f"{base_url}/login")
     page.locator('#username').fill('frodo_baggins')
     page.locator('#password').fill('fellowship123')
     page.get_by_role('button', name='Enter Middle-earth').click()
-    expect(page.get_by_role('heading', name='The Council Chamber')).to_be_visible(timeout=15000)
+    page.wait_for_url('**/dashboard', timeout=15000)
+    expect(page.get_by_text('Companion Chat')).to_be_visible(timeout=15000)
 
 
 def test_npc_chat_opener_and_reply(page: Page, base_url: str):

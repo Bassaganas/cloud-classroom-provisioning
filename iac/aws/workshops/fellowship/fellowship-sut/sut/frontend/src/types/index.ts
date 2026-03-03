@@ -96,7 +96,7 @@ export interface NpcChatResponse {
     personality_profile?: string;
     current_ask?: number;
     round?: number;
-    status?: 'active' | 'accepted' | 'bored' | 'no_items';
+    status?: 'active' | 'accepted' | 'bored' | 'no_items' | 'stop-bargain';
   };
   balance?: {
     gold: number;

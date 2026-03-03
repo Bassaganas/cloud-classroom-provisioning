@@ -21,7 +21,8 @@ Add a map-based bargaining mini-game where users negotiate with LOTR characters 
   - `generous`
   - `sentimental`
 - Mood model is dynamic during chat:
-  - NPC can counter-offer for several rounds.
+  - NPC can counter-offer for several rounds, but will never counter-offer below the user's last offer.
+  - If the user says 'deal', the negotiation ends and the item is purchased at the current ask price (if the user has enough gold), regardless of whether the user's last offer met the accept threshold.
   - NPC can get bored and stop selling.
   - NPC can rarely accept a very low offer after long negotiation.
 
@@ -106,7 +107,7 @@ Suggested fields:
 1. Logging in as a seeded user shows `Gold: 500`.
 2. Character markers appear on map and are clickable.
 3. User can start bargaining in NPC chat from a character marker.
-4. User can commit purchase without seeing base price beforehand.
+4. User can commit purchase without seeing base price beforehand. If the user says 'deal', the item is purchased at the current ask price (if affordable), and the negotiation ends.
 5. After purchase, system reveals deal quality and updates gold.
 6. Inventory page shows purchased items and deal outcomes.
 7. Personal stats show best bargain percentage and update after purchases.

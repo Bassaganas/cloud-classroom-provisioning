@@ -20,6 +20,9 @@ from services.character_profiles import (
     AVAILABLE_CHARACTERS,
 )
 from services.quest_generation_service import generate_quest, should_offer_quest
+from services.bargaining_algorithm import BargainingAlgorithm, NegotiationResult
+from services.bargaining_config import BargainingConfig
+from services.negotiation_logger import NegotiationLogger
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -33,6 +36,8 @@ class NpcChatService:
 
     _conversation_store: Dict[str, List[ConversationTurn]] = {}
     _negotiation_store: Dict[str, Dict[str, Any]] = {}
+    _negotiation_session_ids: Dict[str, str] = {}  # Maps conversation key to logger session ID
+    _flattery_flags: Dict[str, bool] = {}  # Track if flattery bonus used in this negotiation
 
     _personality_defaults: Dict[str, Dict[str, float]] = {
         "stingy": {"patience": 2, "concession": 0.05, "boredom": 0.20, "accept_ratio": 1.0},
@@ -299,9 +304,148 @@ class NpcChatService:
             return None
 
     @classmethod
+    def _build_bargain_llm_prompt(
+        cls,
+        character: NpcCharacter,
+        negotiation_summary: Dict[str, Any],
+    ) -> str:
+        """
+        Build the LLM prompt for bargaining negotiation.
+        
+        The LLM receives the algorithm's result and should:
+        1. Rephrase and justify the result naturally
+        2. Stay in character
+        3. Acknowledge flattery if applicable
+        4. Reference item qualities and in-world context
+        5. Try to persuade user to accept the offer
+        """
+        char_profile = get_character_profile(character)
+        personality_traits = ", ".join(char_profile.get("personality", []))
+        
+        result = negotiation_summary.get("negotiation_result", "")
+        
+        prompt = (
+            f"You are {char_profile.get('full_name', character)}, a character in Middle-earth. "
+            f"Your personality traits: {personality_traits}. "
+            f"\n\nYou are negotiating over item: {negotiation_summary.get('item_name', 'an item')}. "
+        )
+        
+        if negotiation_summary.get("is_flattered"):
+            prompt += "\nThe user just flattered you—acknowledge this naturally and favorably. "
+        
+        if result == "counter-offer":
+            counter = negotiation_summary.get("counter_offer")
+            prompt += (
+                f"\nYou are making a counter-offer of {counter} gold. "
+                f"The user offered {negotiation_summary.get('user_offer')} gold (you originally asked {negotiation_summary.get('current_ask')}). "
+                f"Justify this counter-offer, reference the item's importance to you, "
+                f"and subtly persuade the user to accept. Stay brief (1-2 sentences). "
+                f"Stay in character. Do NOT mention the negotiation mechanics or rounds."
+            )
+        elif result == "offer-accepted":
+            prompt += (
+                f"\nThe user's offer of {negotiation_summary.get('user_offer')} gold is acceptable! "
+                f"Express satisfaction, perhaps acknowledge their negotiation skill, "
+                f"and finalize the deal in character. Stay brief (1 sentence)."
+            )
+        elif result == "offer-rejected":
+            prompt += (
+                f"\nThe user's offer of {negotiation_summary.get('user_offer')} gold is too low. "
+                f"You originally asked {negotiation_summary.get('current_ask')} gold. "
+                f"Express disappointment or frustration (in character) and encourage them to do better. "
+                f"Stay brief (1-2 sentences)."
+            )
+        elif result == "stop-bargain":
+            stop_reason = negotiation_summary.get("stop_reason", "")
+            if stop_reason == "boredom_threshold":
+                prompt += (
+                    f"\nYou are done haggling. You are bored and offended by this negotiation. "
+                    f"Exit the negotiation angrily but in character. Stay brief (1 sentence). "
+                    f"Do NOT offer further negotiation."
+                )
+            elif stop_reason == "max_rounds_exceeded":
+                prompt += (
+                    f"\nYou've spent enough time on this negotiation. "
+                    f"Tell the user you're done discussing price and walk away in character. "
+                    f"Stay brief (1 sentence)."
+                )
+        
+        return prompt
+
+    @classmethod
+    def _complete_bargaining_with_llm(
+        cls,
+        character: NpcCharacter,
+        negotiation_summary: Dict[str, Any],
+    ) -> Optional[str]:
+        """
+        Generate a natural language response for bargaining using LLM.
+        
+        Takes the algorithm's structured result and asks LLM to generate
+        an in-character response that justifies and rephrases it.
+        """
+        deployment = current_app.config.get("AZURE_OPENAI_DEPLOYMENT", "")
+        if not deployment:
+            return None
+
+        client = cls._new_client()
+        if client is None:
+            return None
+
+        prompt = cls._build_bargain_llm_prompt(character, negotiation_summary)
+        
+        messages: List[Dict[str, str]] = [
+            {
+                "role": "system",
+                "content": (
+                    f"You are {negotiation_summary.get('character')}, a LOTR character. "
+                    "Negotiate over items in-character, naturally and briefly. "
+                    "Never break character or mention system details."
+                )
+            },
+            {
+                "role": "user",
+                "content": prompt
+            }
+        ]
+        
+        try:
+            max_tokens = current_app.config.get("AZURE_OPENAI_MAX_TOKENS", 150)
+            temperature = current_app.config.get("AZURE_OPENAI_TEMPERATURE", 0.85)
+            
+            completion = client.chat.completions.create(
+                model=deployment,
+                messages=messages,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            )
+            
+            response = (completion.choices[0].message.content or "").strip()
+            if response:
+                logger.info(f"✓ Bargaining LLM generated response for {character}")
+                
+                # Log the LLM interaction
+                session_id = cls._negotiation_session_ids.get(
+                    f"{negotiation_summary.get('item_id')}:{character}"
+                )
+                if session_id:
+                    NegotiationLogger.log_llm_interaction(
+                        session_id=session_id,
+                        llm_input_summary=negotiation_summary,
+                        llm_output=response
+                    )
+            
+            return response or None
+        except Exception as e:
+            logger.error(f"✗ Bargaining LLM failed for {character}: {type(e).__name__}: {str(e)}")
+            return None
+
+    @classmethod
     def _build_negotiation_state(cls, selected_character: NpcCharacter, item: Dict[str, Any]) -> Dict[str, Any]:
         profile_name = item.get("personality_profile", "bargainer")
         personality = cls._personality_defaults.get(profile_name, cls._personality_defaults["bargainer"])
+        char_config = BargainingConfig.get_character_config(selected_character)
+        max_rounds = int(char_config.get("max_rounds", int(personality["patience"])))
         return {
             "item_id": item["id"],
             "item_name": item["name"],
@@ -310,6 +454,7 @@ class NpcChatService:
             "current_ask": int(item["asking_price"]),
             "round": 0,
             "patience": int(personality["patience"]),
+            "max_rounds": max_rounds,
             "concession": float(personality["concession"]),
             "boredom": float(personality["boredom"]),
             "accept_ratio": float(personality["accept_ratio"]),
@@ -318,6 +463,7 @@ class NpcChatService:
         }
 
     @classmethod
+    @classmethod
     def _resolve_bargain_message(
         cls,
         key: str,
@@ -325,13 +471,22 @@ class NpcChatService:
         selected_character: NpcCharacter,
         user_message: str,
     ) -> Optional[Dict[str, Any]]:
+        """
+        Resolve a bargaining message using the hybrid algorithm + LLM approach.
+        
+        1. Algorithm evaluates the offer
+        2. LLM generates natural language response
+        3. Logs the negotiation
+        """
         negotiation = cls._negotiation_store.get(key)
         message_lower = user_message.lower().strip()
 
+        # Start bargaining if not already started
         if not negotiation and not cls._is_bargain_start(user_message):
             return None
 
         if not negotiation:
+            # Initiate bargaining
             available_items = ShopService.list_available_items(character=selected_character)
             if not available_items:
                 return {
@@ -345,7 +500,18 @@ class NpcChatService:
                 chosen_item = available_items[0]
 
             negotiation = cls._build_negotiation_state(selected_character, chosen_item)
+            negotiation["original_price"] = int(chosen_item["asking_price"])
             cls._negotiation_store[key] = negotiation
+            
+            # Initialize negotiation logging
+            session_id = NegotiationLogger.log_negotiation_start(
+                character=selected_character,
+                item_id=chosen_item["id"],
+                item_name=chosen_item["name"],
+                original_price=int(chosen_item["asking_price"])
+            )
+            cls._negotiation_session_ids[key] = session_id
+            cls._flattery_flags[key] = False  # Initialize flattery flag
 
             return {
                 "message": (
@@ -357,9 +523,11 @@ class NpcChatService:
                 "balance": ShopService.get_balance(user_id),
             }
 
+        # Extract offer from message
         offer = cls._extract_offer(user_message)
         accepting_now = any(token in message_lower for token in ["deal", "accept", "buy now", "agreed"])
 
+        # Validate that we have an offer
         if offer is None and not accepting_now:
             return {
                 "message": (
@@ -376,11 +544,67 @@ class NpcChatService:
         if offer is None:
             return None
 
+        # Log the offer
+        session_id = cls._negotiation_session_ids.get(key)
+        if session_id:
+            NegotiationLogger.log_offer_made(
+                session_id=session_id,
+                round_num=negotiation["round"],
+                user_offer=offer,
+                current_ask=negotiation["current_ask"],
+                is_flattered=cls._flattery_flags.get(key, False)
+            )
+
+        # Detect flattery
+        is_flattered = (
+            BargainingAlgorithm.detect_flattery(user_message)
+            and not cls._flattery_flags.get(key, False)
+        )
+        
+        if is_flattered:
+            cls._flattery_flags[key] = True  # Mark flattery as used
+            if session_id:
+                NegotiationLogger.log_behavior_detected(session_id, "flattery")
+
+        # Calculate mood modifiers based on user behavior
+        previous_offer = negotiation.get("previous_offer")
+        mood_modifiers = BargainingAlgorithm.calculate_mood_change(
+            previous_offer=previous_offer,
+            current_offer=offer,
+            current_ask=negotiation["current_ask"]
+        )
+        
+        negotiation["previous_offer"] = offer  # Track for next round
         negotiation["round"] += 1
 
-        if offer >= int(negotiation["current_ask"] * negotiation["accept_ratio"]):
+        # Run bargaining algorithm
+        algorithm_result = BargainingAlgorithm.evaluate_offer(
+            user_offer=offer,
+            current_ask=negotiation["current_ask"],
+            character=selected_character,
+            round_num=negotiation["round"],
+            is_flattered=is_flattered,
+            mood_modifiers=mood_modifiers if mood_modifiers else None
+        )
+        
+        # Log algorithm result
+        if session_id:
+            NegotiationLogger.log_algorithm_result(
+                session_id=session_id,
+                result_type=algorithm_result["result"].value,
+                context=algorithm_result["context"]
+            )
+
+        result_type = algorithm_result["result"]
+
+        # Handle OFFER_ACCEPTED
+        if result_type == NegotiationResult.OFFER_ACCEPTED:
             try:
-                purchase = ShopService.purchase_item(user_id=user_id, item_id=negotiation["item_id"], paid_price=offer)
+                purchase = ShopService.purchase_item(
+                    user_id=user_id,
+                    item_id=negotiation["item_id"],
+                    paid_price=offer
+                )
             except ValueError as error:
                 return {
                     "message": f"Your purse is too light for this bargain: {error}",
@@ -390,53 +614,138 @@ class NpcChatService:
 
             negotiation["status"] = "accepted"
             cls._negotiation_store.pop(key, None)
+            cls._flattery_flags.pop(key, None)
+            
+            # Log the successful negotiation
+            if session_id:
+                NegotiationLogger.log_negotiation_end(
+                    session_id=session_id,
+                    final_status="accepted",
+                    final_price=offer,
+                    rounds_taken=negotiation["round"]
+                )
+            
+            # Generate LLM response
+            summary = BargainingAlgorithm.get_summary_for_llm(
+                negotiation_state={
+                    "character": selected_character,
+                    "item_name": negotiation["item_name"],
+                    "item_id": negotiation["item_id"],
+                    "original_price": negotiation.get("original_price", negotiation["current_ask"]),
+                    "current_ask": negotiation["current_ask"],
+                    "round": negotiation["round"],
+                },
+                algorithm_result=algorithm_result,
+                user_offer=offer,
+                character_personality=negotiation.get("personality_profile", "bargainer"),
+                is_flattered=is_flattered,
+                mood_modifiers=mood_modifiers or {}
+            )
+            
+            npc_reply = cls._complete_bargaining_with_llm(selected_character, summary)
+            if not npc_reply:
+                npc_reply = f"Agreed at {offer} Gold. The true price was {purchase['purchase']['base_price_revealed']} Gold. Deal score: {purchase['purchase']['savings_percent']:+.2f}%"
+            
             savings = purchase["purchase"]["savings_percent"]
             return {
-                "message": (
-                    f"Agreed at {offer} Gold. The true price was {purchase['purchase']['base_price_revealed']} Gold. "
-                    f"Deal score: {savings:+.2f}%"
-                ),
+                "message": npc_reply,
                 "negotiation": {"status": "accepted", "item_id": purchase['purchase']['item_id']},
                 "purchase_result": purchase,
                 "balance": purchase["balance"],
                 "stats": ShopService.get_user_stats(user_id),
             }
 
-        long_negotiation_lucky_drop = (
-            negotiation["round"] >= max(3, negotiation["patience"])
-            and random.random() < 0.10
-        )
-        if long_negotiation_lucky_drop:
-            lucky_price = max(1, int(negotiation["current_ask"] * 0.6))
-            negotiation["current_ask"] = lucky_price
+        # Handle STOP_BARGAIN
+        elif result_type == NegotiationResult.STOP_BARGAIN:
+            negotiation["status"] = "stop-bargain"
+            cls._negotiation_store.pop(key, None)
+            cls._flattery_flags.pop(key, None)
+            
+            # Log the stop
+            stop_reason = algorithm_result["context"].get("reason", "unknown")
+            if session_id:
+                NegotiationLogger.log_negotiation_end(
+                    session_id=session_id,
+                    final_status="stopped",
+                    final_price=None,
+                    rounds_taken=negotiation["round"]
+                )
+            
+            # Generate LLM response for stopping
+            summary = BargainingAlgorithm.get_summary_for_llm(
+                negotiation_state={
+                    "character": selected_character,
+                    "item_name": negotiation["item_name"],
+                    "item_id": negotiation["item_id"],
+                    "original_price": negotiation.get("original_price", negotiation["current_ask"]),
+                    "current_ask": negotiation["current_ask"],
+                    "round": negotiation["round"],
+                },
+                algorithm_result=algorithm_result,
+                user_offer=offer,
+                character_personality=negotiation.get("personality_profile", "bargainer"),
+                is_flattered=is_flattered,
+                mood_modifiers=mood_modifiers or {}
+            )
+            
+            npc_reply = cls._complete_bargaining_with_llm(selected_character, summary)
+            if not npc_reply:
+                if stop_reason == "boredom_threshold":
+                    npc_reply = "I am bored of haggling. No sale this time."
+                else:
+                    npc_reply = "We are finished haggling."
+            
             return {
-                "message": (
-                    f"You wore me down. Rare mercy: {lucky_price} Gold and not a coin less."
-                ),
+                "message": npc_reply,
+                "negotiation": {"status": "stop-bargain", "item_id": negotiation["item_id"]},
+                "balance": ShopService.get_balance(user_id),
+            }
+
+        # Handle COUNTER_OFFER
+        elif result_type == NegotiationResult.COUNTER_OFFER:
+            new_ask = algorithm_result["counter_offer"]
+            negotiation["current_ask"] = new_ask
+            
+            # Generate LLM response for counter-offer
+            summary = BargainingAlgorithm.get_summary_for_llm(
+                negotiation_state={
+                    "character": selected_character,
+                    "item_name": negotiation["item_name"],
+                    "item_id": negotiation["item_id"],
+                    "original_price": negotiation.get("original_price", new_ask),
+                    "current_ask": new_ask,
+                    "round": negotiation["round"],
+                },
+                algorithm_result=algorithm_result,
+                user_offer=offer,
+                character_personality=negotiation.get("personality_profile", "bargainer"),
+                is_flattered=is_flattered,
+                mood_modifiers=mood_modifiers or {}
+            )
+            
+            npc_reply = cls._complete_bargaining_with_llm(selected_character, summary)
+            if not npc_reply:
+                context = algorithm_result.get("context", {})
+                if context.get("reason") == "lucky_drop":
+                    npc_reply = f"You wore me down. Rare mercy: {new_ask} Gold and not a coin less."
+                else:
+                    npc_reply = (
+                        f"Too low. I can move to {new_ask} Gold for '{negotiation['item_name']}'."
+                    )
+            
+            return {
+                "message": npc_reply,
                 "negotiation": negotiation,
                 "balance": ShopService.get_balance(user_id),
             }
 
-        if negotiation["round"] >= negotiation["patience"] and random.random() < negotiation["boredom"]:
-            negotiation["status"] = "bored"
-            cls._negotiation_store.pop(key, None)
-            return {
-                "message": "I am bored of haggling. No sale this time.",
-                "negotiation": {"status": "bored", "item_id": negotiation["item_id"]},
-                "balance": ShopService.get_balance(user_id),
-            }
-
-        concession = max(1, int(negotiation["current_ask"] * negotiation["concession"]))
-        floor_price = max(1, int(negotiation["current_ask"] * 0.65))
-        negotiation["current_ask"] = max(floor_price, negotiation["current_ask"] - concession)
-
+        # Default fallback
         return {
-            "message": (
-                f"Too low. I can move to {negotiation['current_ask']} Gold for '{negotiation['item_name']}'."
-            ),
+            "message": "Let us continue our negotiation.",
             "negotiation": negotiation,
             "balance": ShopService.get_balance(user_id),
         }
+
 
     @classmethod
     def _build_system_prompt(
@@ -530,7 +839,6 @@ class NpcChatService:
             logger.error(f"✗ Azure OpenAI failed for {character}: {type(e).__name__}: {str(e)}")
             return None
 
-    @classmethod
     @classmethod
     def _fallback_reply(
         cls,

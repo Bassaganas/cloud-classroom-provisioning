@@ -62,6 +62,7 @@ class ShopService:
             paid_price=paid_price,
             base_price_revealed=item.base_price,
             savings_percent=round(savings_percent, 2),
+            acquired_price=paid_price,  # Set to same as paid_price
         )
 
         db.session.add(entry)
@@ -100,4 +101,24 @@ class ShopService:
             'purchased_count': len(entries),
             'best_bargain_percent': round(max(savings_values), 2),
             'average_savings_percent': round(average, 2),
+        }
+
+    @classmethod
+    def reset_for_tests(cls) -> Dict[str, Any]:
+        """Reset shop state for testing: unsell items, reset user gold, clear purchases."""
+        # Mark all items as not sold
+        Item.query.update({'is_sold': False})
+
+        # Reset all users to 300 gold (initial amount)
+        User.query.update({'gold': 300})
+
+        # Clear all inventory items
+        InventoryItem.query.delete()
+
+        db.session.commit()
+
+        return {
+            'items_reset': Item.query.count(),
+            'users_reset': User.query.count(),
+            'purchases_cleared': True,
         }

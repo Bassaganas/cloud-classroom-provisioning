@@ -115,3 +115,19 @@ class ShopBalance(Resource):
             return {'error': 'User not found'}, 404
 
         return ShopService.get_balance(user.id), 200
+
+
+@shop_api.route('/test-reset')
+class TestReset(Resource):
+    """Reset shop state for testing - marks all items as not sold and resets user gold."""
+    def post(self) -> tuple[Dict[str, Any], int]:
+        import os
+        # Only allow in non-production environments
+        if os.getenv('FLASK_ENV') in {'production', 'prod'}:
+            return {'error': 'Test reset not allowed in production'}, 403
+        
+        try:
+            ShopService.reset_for_tests()
+            return {'success': True, 'message': 'Test state reset successfully'}, 200
+        except Exception as e:
+            return {'error': str(e)}, 500

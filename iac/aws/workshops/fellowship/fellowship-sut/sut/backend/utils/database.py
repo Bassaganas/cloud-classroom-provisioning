@@ -5,11 +5,52 @@ from sqlalchemy import text
 import os
 
 def init_db(app: Flask) -> None:
-    """Initialize database with all models and handle migrations."""
     # Initialize db with app
     db.init_app(app)
-    
+
     with app.app_context():
+        # Handle migrations for existing inventory_items table
+        try:
+            result = db.session.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='inventory_items'"))
+            table_exists = result.fetchone() is not None
+
+            if table_exists:
+                result = db.session.execute(text("PRAGMA table_info(inventory_items)"))
+                columns = [row[1] for row in result]
+
+                if 'paid_price' not in columns:
+                    db.session.execute(text("ALTER TABLE inventory_items ADD COLUMN paid_price INTEGER DEFAULT 0"))
+                    print("Added paid_price column to inventory_items")
+
+                if 'base_price_revealed' not in columns:
+                    db.session.execute(text("ALTER TABLE inventory_items ADD COLUMN base_price_revealed INTEGER DEFAULT 0"))
+                    print("Added base_price_revealed column to inventory_items")
+
+                if 'savings_percent' not in columns:
+                    db.session.execute(text("ALTER TABLE inventory_items ADD COLUMN savings_percent FLOAT DEFAULT 0"))
+                    print("Added savings_percent column to inventory_items")
+
+                if 'created_at' not in columns:
+                    db.session.execute(text("ALTER TABLE inventory_items ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP"))
+                    print("Added created_at column to inventory_items")
+
+                # Fix for legacy acquired_price column: add if missing, make nullable if present
+                if 'acquired_price' not in columns:
+                    db.session.execute(text("ALTER TABLE inventory_items ADD COLUMN acquired_price INTEGER NULL"))
+                    print("Added acquired_price column to inventory_items (nullable)")
+                else:
+                    # Try to make it nullable if not already
+                    try:
+                        db.session.execute(text("ALTER TABLE inventory_items ALTER COLUMN acquired_price DROP NOT NULL"))
+                        print("Made acquired_price column nullable")
+                    except Exception as e:
+                        print(f"Could not alter acquired_price nullability: {e}")
+
+                db.session.commit()
+                print("Inventory items table migration completed successfully")
+        except Exception as e:
+            db.session.rollback()
+            print(f"Inventory items migration note: {e} (this is normal for new databases)")
         # Import all models to register them
         from models.user import User
         from models.quest import Quest

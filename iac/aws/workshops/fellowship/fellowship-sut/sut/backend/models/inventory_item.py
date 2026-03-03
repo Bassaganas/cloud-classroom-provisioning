@@ -14,6 +14,7 @@ class InventoryItem(db.Model):
     paid_price = db.Column(db.Integer, nullable=False)
     base_price_revealed = db.Column(db.Integer, nullable=False)
     savings_percent = db.Column(db.Float, nullable=False)
+    acquired_price = db.Column(db.Integer, nullable=False, default=0)  # Legacy field, set to paid_price
     created_at = db.Column(db.DateTime, default=db.func.current_timestamp())
 
     user = db.relationship('User', foreign_keys=[user_id], backref='inventory_items')
@@ -31,6 +32,7 @@ class InventoryItem(db.Model):
             'paid_price': self.paid_price,
             'base_price_revealed': self.base_price_revealed,
             'savings_percent': self.savings_percent,
+            'acquired_price': self.acquired_price,
             'created_at': self.created_at.isoformat() if self.created_at else None,
         }
 

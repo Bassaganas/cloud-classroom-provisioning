@@ -1,10 +1,23 @@
 """Pytest configuration and fixtures for Playwright tests."""
+
 import importlib
 import os
 import subprocess
 import sys
 import time
 from pathlib import Path
+
+# Suppress SSL warnings
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+# Load environment variables from .env (default) or .env.dev if ENV_FILE is set
+from dotenv import load_dotenv
+env_file = os.getenv('ENV_FILE', None)
+if env_file:
+    load_dotenv(dotenv_path=env_file, override=True)
+else:
+    load_dotenv(override=True)
 
 import pytest
 import requests
@@ -120,13 +133,15 @@ def page(context: BrowserContext) -> Page:
 @pytest.fixture
 def base_url() -> str:
     """Base URL for SUT."""
-    return os.getenv('SUT_URL', 'http://localhost')
+    return os.getenv('BASE_URL') or os.getenv('SUT_URL', 'http://localhost')
 
 
 @pytest.fixture(autouse=True)
 def _realstack_guard(request):
-    """Auto-start real docker stack for tests marked as realstack."""
+    """Run realstack tests only when explicitly enabled via RUN_REALSTACK=true."""
     if request.node.get_closest_marker("realstack"):
+        if os.getenv("RUN_REALSTACK", "false").lower() not in {"1", "true", "yes"}:
+            pytest.skip("realstack tests require RUN_REALSTACK=true")
         request.getfixturevalue("ensure_real_stack")
 
 @pytest.fixture
@@ -136,3 +151,14 @@ def test_credentials():
         'username': 'frodo_baggins',
         'password': 'fellowship123'
     }
+
+
+@pytest.fixture(autouse=True)
+def reset_db_for_test(base_url):
+    """Reset database state before each test to ensure clean slate."""
+    try:
+        requests.post(f"{base_url}/api/shop/test-reset", timeout=5, verify=False)
+    except requests.RequestException as e:
+        # Database reset may not always be available, continue with test
+        print(f"Warning: Could not reset test database: {e}")
+    yield

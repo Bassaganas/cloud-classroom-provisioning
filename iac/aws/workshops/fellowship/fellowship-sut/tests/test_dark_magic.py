@@ -44,7 +44,7 @@ def test_dark_magic_quests_display_with_special_styling(authenticated_page: Page
 
 def test_dark_magic_quests_can_be_filtered(api_base_url: str):
     """Test that dark magic quests can be filtered via API."""
-    response = requests.get(f"{api_base_url}/quests?dark_magic=true")
+    response = requests.get(f"{api_base_url}/quests/?dark_magic=true")
     assert response.status_code == 200, "Filtering dark magic quests should return 200"
     quests = response.json()
     assert isinstance(quests, list), "Should return a list"
@@ -79,7 +79,7 @@ def test_dark_magic_quest_completion_may_fail(api_base_url: str):
     assert login_response.status_code == 200
     
     # Get dark magic quests
-    response = session.get(f"{api_base_url}/quests?dark_magic=true")
+    response = session.get(f"{api_base_url}/quests/?dark_magic=true")
     assert response.status_code == 200
     dark_magic_quests = response.json()
     
