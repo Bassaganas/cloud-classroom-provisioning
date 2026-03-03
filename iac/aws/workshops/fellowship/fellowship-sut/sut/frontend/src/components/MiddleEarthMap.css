@@ -299,9 +299,11 @@
   background-color: var(--color-forest-green-dark, #2D5016);
 }
 
+
 .character-marker-icon {
   background: transparent !important;
   border: none !important;
+  z-index: 5000 !important;
 }
 
 .character-marker {
@@ -317,6 +319,8 @@
   font-size: 20px;
   cursor: pointer;
   transition: transform 0.2s ease;
+  z-index: 5001 !important;
+  position: relative;
 }
 
 .character-marker:hover {

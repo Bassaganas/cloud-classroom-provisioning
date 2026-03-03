@@ -636,6 +636,9 @@ function CharacterMarkersComponent({
 
     characterMarkers.forEach((character) => {
       const [lat, lng] = convertToLatLng(character.map_x, character.map_y);
+      console.log(
+        `Character Marker: ${character.name} (${character.id}) at map_x=${character.map_x}, map_y=${character.map_y} -> lat=${lat}, lng=${lng}`
+      );
       const markerIcon = L.divIcon({
         className: 'character-marker-icon',
         html: `<div class="character-marker" data-character="${character.id}">${character.emoji}</div>`,
