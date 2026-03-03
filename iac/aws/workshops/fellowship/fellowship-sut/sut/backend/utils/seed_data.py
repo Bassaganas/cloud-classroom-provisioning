@@ -3,6 +3,7 @@ from models.user import User, db
 from models.member import Member
 from models.location import Location
 from models.quest import Quest
+from models.item import Item
 from flask import Flask
 from typing import List, Dict, Any
 
@@ -315,12 +316,15 @@ def seed_users(members: List[Member]) -> List[User]:
             user = User(
                 username=member.name.lower().replace(' ', '_'),
                 email=f"{member.name.lower().replace(' ', '_')}@fellowship.com",
-                role=member.name
+                role=member.name,
+                gold=500,
             )
             user.set_password(default_password)
             db.session.add(user)
             users.append(user)
         else:
+            if user.gold is None:
+                user.gold = 500
             users.append(user)
     
     db.session.commit()
@@ -477,14 +481,66 @@ def seed_quests(locations: List[Location], users: List[User]) -> List[Quest]:
     db.session.commit()
     return quests
 
+
+def seed_items() -> List[Item]:
+    """Create initial unique seller items for bargaining gameplay."""
+    items_data = [
+        {
+            'name': 'Sting-polished Scabbard',
+            'description': 'A meticulously maintained hobbit scabbard with Elvish runes.',
+            'owner_character': 'frodo',
+            'personality_profile': 'sentimental',
+            'base_price': 140,
+            'asking_price': 195,
+        },
+        {
+            'name': 'Shire Herb Satchel',
+            'description': 'Sam\'s hand-stitched satchel, still smelling faintly of rosemary.',
+            'owner_character': 'sam',
+            'personality_profile': 'generous',
+            'base_price': 95,
+            'asking_price': 120,
+        },
+        {
+            'name': 'Grey Pilgrim Pipe',
+            'description': 'A weathered pipe with intricate wizard-carved symbols.',
+            'owner_character': 'gandalf',
+            'personality_profile': 'bargainer',
+            'base_price': 260,
+            'asking_price': 360,
+        },
+        {
+            'name': 'Second Breakfast Pan',
+            'description': 'A surprisingly sturdy pan fit for long roads and many meals.',
+            'owner_character': 'sam',
+            'personality_profile': 'bargainer',
+            'base_price': 70,
+            'asking_price': 98,
+        },
+        {
+            'name': 'Wizard Hat (Scuffed Edition)',
+            'description': 'A tall, dramatic hat with glorious wear and a few mysterious burns.',
+            'owner_character': 'gandalf',
+            'personality_profile': 'stingy',
+            'base_price': 210,
+            'asking_price': 315,
+        },
+    ]
+
+    seeded_items: List[Item] = []
+    for payload in items_data:
+        item = Item.query.filter_by(name=payload['name']).first()
+        if not item:
+            item = Item(**payload)
+            db.session.add(item)
+        seeded_items.append(item)
+
+    db.session.commit()
+    return seeded_items
+
 def seed_database(app: Flask) -> None:
     """Seed the database with initial data."""
     with app.app_context():
-        # Check if database is already seeded
-        if User.query.first() is not None:
-            print("Database already seeded, skipping...")
-            return
-        
         print("Seeding database...")
         
         # Seed in order: members -> locations -> users -> quests
@@ -499,5 +555,8 @@ def seed_database(app: Flask) -> None:
         
         quests = seed_quests(locations, users)
         print(f"Seeded {len(quests)} quests")
+
+        items = seed_items()
+        print(f"Seeded {len(items)} market items")
         
         print("Database seeding completed!")

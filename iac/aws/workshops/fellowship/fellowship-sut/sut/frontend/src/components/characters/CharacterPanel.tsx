@@ -9,7 +9,8 @@ import { useCharacter } from '../../store/characterStore';
 import { Avatar } from '../ui/Avatar';
 import { Button } from '../ui/Button';
 import { apiService } from '../../services/api';
-import { NpcCharacter } from '../../types';
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+import { NpcCharacter, NpcSuggestedQuest, ShopItem } from '../../types';
 
 const characterInfo: Record<NpcCharacter, { name: string; emoji: string }> = {
   frodo: { name: 'Frodo', emoji: '🧝' },
@@ -23,13 +24,19 @@ export const CharacterPanel: React.FC = () => {
     activeCharacter,
     chatMessages,
     suggestedAction,
+    suggestedQuest,
     isChatLoading,
     setActiveCharacter,
     setChatMessages,
     setSuggestedAction,
+    setSuggestedQuest,
     setChatLoading,
   } = useCharacter();
   const [draft, setDraft] = useState('');
+  const [offerDraft, setOfferDraft] = useState('');
+  const [shopItems, setShopItems] = useState<ShopItem[]>([]);
+  const [gold, setGold] = useState<number>(0);
+  const [negotiationStatus, setNegotiationStatus] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
 
   const currentCharacter = useMemo(() => characterInfo[activeCharacter], [activeCharacter]);
@@ -48,6 +55,7 @@ export const CharacterPanel: React.FC = () => {
         if (session.messages.length > 0) {
           setChatMessages(session.messages);
           setSuggestedAction(session.suggested_action);
+          setSuggestedQuest(session.suggested_quest || null);
           return;
         }
 
@@ -56,6 +64,7 @@ export const CharacterPanel: React.FC = () => {
 
         setChatMessages(started.messages);
         setSuggestedAction(started.suggested_action);
+        setSuggestedQuest(started.suggested_quest || null);
       } catch (bootstrapError) {
         if (!mounted) return;
         setError('The companion is gathering thoughts. Try again in a moment.');
@@ -68,28 +77,64 @@ export const CharacterPanel: React.FC = () => {
 
     bootstrapConversation();
 
+    const loadTradeData = async () => {
+      try {
+        const [items, balance] = await Promise.all([
+          apiService.getShopItems(activeCharacter),
+          apiService.getGoldBalance(),
+        ]);
+        if (!mounted) return;
+        setShopItems(items);
+        setGold(balance);
+      } catch {
+        if (!mounted) return;
+        setShopItems([]);
+      }
+    };
+
+    loadTradeData();
+
     return () => {
       mounted = false;
     };
-  }, [activeCharacter, setChatLoading, setChatMessages, setSuggestedAction]);
+  }, [activeCharacter, setChatLoading, setChatMessages, setSuggestedAction, setSuggestedQuest]);
 
-  const handleSend = async () => {
-    const message = draft.trim();
+  const sendChat = async (messageInput: string) => {
+    const message = messageInput.trim();
     if (!message) return;
 
     try {
       setError(null);
-      setDraft('');
       setChatLoading(true);
 
       const response = await apiService.sendNpcMessage(activeCharacter, message);
       setChatMessages(response.messages);
       setSuggestedAction(response.suggested_action);
+      setSuggestedQuest(response.suggested_quest || null);
+      if (response.balance?.gold !== undefined) {
+        setGold(response.balance.gold);
+      }
+      if (response.negotiation?.status) {
+        setNegotiationStatus(response.negotiation.status);
+      }
+      if (response.shop_items) {
+        setShopItems(response.shop_items);
+      } else {
+        const refreshedItems = await apiService.getShopItems(activeCharacter);
+        setShopItems(refreshedItems);
+      }
     } catch (sendError) {
       setError('The character did not answer. Try sending again.');
     } finally {
       setChatLoading(false);
     }
+  };
+
+  const handleSend = async () => {
+    const message = draft.trim();
+    if (!message) return;
+    setDraft('');
+    await sendChat(message);
   };
 
   const handleReset = async () => {
@@ -100,6 +145,7 @@ export const CharacterPanel: React.FC = () => {
       const started = await apiService.startNpcChat(activeCharacter);
       setChatMessages(started.messages);
       setSuggestedAction(started.suggested_action);
+      setSuggestedQuest(started.suggested_quest || null);
     } catch (resetError) {
       setError('Unable to reset this conversation right now.');
     } finally {
@@ -107,7 +153,37 @@ export const CharacterPanel: React.FC = () => {
     }
   };
 
+  const handleAcceptQuest = async () => {
+    if (!suggestedQuest) return;
+
+    try {
+      setError(null);
+      setChatLoading(true);
+      const result = await apiService.createQuestFromNpc(activeCharacter, suggestedQuest);
+      setSuggestedQuest(null);
+      // Briefly show success, then navigate to quest
+      setTimeout(() => {
+        navigate(`/quests?focusQuestId=${result.quest.id}`);
+      }, 1000);
+    } catch (questError) {
+      setError('Unable to create the quest right now. Try again?');
+    } finally {
+      setChatLoading(false);
+    }
+  };
+
   const quickCharacters: NpcCharacter[] = ['frodo', 'sam', 'gandalf'];
+
+  const handleStartBargain = async (item: ShopItem) => {
+    await sendChat(`I want to bargain for ${item.name} #${item.id}`);
+  };
+
+  const handleSendOffer = async () => {
+    const cleanOffer = offerDraft.trim();
+    if (!cleanOffer) return;
+    setOfferDraft('');
+    await sendChat(`Offer ${cleanOffer}`);
+  };
 
   const buildActionUrl = () => {
     const route = suggestedAction?.target?.route || '/quests';
@@ -205,6 +281,98 @@ export const CharacterPanel: React.FC = () => {
             </Button>
           )}
         </div>
+      )}
+
+      <div className="rounded-lg border border-gold-dark/30 bg-white/60 p-3 space-y-2">
+        <p className="text-xs uppercase tracking-wide text-text-secondary">Trader Ledger</p>
+        <p className="text-sm text-text-primary">Gold: {gold}</p>
+        {shopItems.length === 0 ? (
+          <p className="text-xs text-text-secondary">No available items for this character.</p>
+        ) : (
+          <div className="space-y-2 max-h-36 overflow-y-auto">
+            {shopItems.map((item) => (
+              <div key={item.id} className="rounded border border-gold-dark/20 bg-parchment-light/50 p-2">
+                <p className="text-sm font-semibold text-forest-dark">{item.name}</p>
+                <p className="text-xs text-text-secondary">Ask: {item.asking_price} Gold</p>
+                <Button
+                  variant="small"
+                  className="mt-2"
+                  onClick={() => handleStartBargain(item)}
+                  disabled={isChatLoading}
+                >
+                  Bargain
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="flex gap-2 items-center">
+          <input
+            value={offerDraft}
+            onChange={(event) => setOfferDraft(event.target.value)}
+            placeholder="Offer amount"
+            className="w-full rounded border border-gold-dark/30 bg-white/80 px-2 py-1 text-sm"
+          />
+          <Button variant="secondary" onClick={handleSendOffer} disabled={isChatLoading}>
+            Send Offer
+          </Button>
+        </div>
+        {negotiationStatus && (
+          <p className="text-xs text-text-secondary">Negotiation: {negotiationStatus}</p>
+        )}
+      </div>
+
+      {suggestedQuest && (
+        <motion.div
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -8 }}
+          className="rounded-lg border-2 border-gold bg-gradient-to-br from-gold/20 to-gold/10 p-3"
+        >
+          <p className="text-xs uppercase tracking-wider font-epic text-gold-dark mb-2">
+            ✨ {currentCharacter.name} Proposes a Quest!
+          </p>
+          <div className="space-y-2">
+            <div>
+              <p className="font-epic text-sm text-forest-dark">{suggestedQuest.title}</p>
+              <p className="text-xs text-text-secondary mt-1">{suggestedQuest.description}</p>
+            </div>
+            <div className="flex gap-2 text-xs">
+              <span className="inline-block px-2 py-1 rounded bg-forest/20 text-forest-dark font-medium">
+                {suggestedQuest.quest_type}
+              </span>
+              <span
+                className={`inline-block px-2 py-1 rounded font-medium ${
+                  suggestedQuest.priority === 'Critical'
+                    ? 'bg-red/20 text-red-700'
+                    : suggestedQuest.priority === 'Important'
+                      ? 'bg-orange/20 text-orange-700'
+                      : 'bg-yellow/20 text-yellow-700'
+                }`}
+              >
+                {suggestedQuest.priority}
+              </span>
+            </div>
+          </div>
+          <div className="flex gap-2 mt-3">
+            <Button
+              variant="epic"
+              className="flex-1"
+              onClick={handleAcceptQuest}
+              disabled={isChatLoading}
+            >
+              Accept Quest
+            </Button>
+            <Button
+              variant="secondary"
+              className="flex-1"
+              onClick={() => setSuggestedQuest(null)}
+              disabled={isChatLoading}
+            >
+              Decline
+            </Button>
+          </div>
+        </motion.div>
       )}
 
       <div className="space-y-2">

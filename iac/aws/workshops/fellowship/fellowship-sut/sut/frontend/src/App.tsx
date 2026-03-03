@@ -4,6 +4,7 @@ import LoginPage from './pages/LoginPage';
 import DashboardPage from './pages/DashboardPage';
 import QuestsPage from './pages/QuestsPage';
 import MapPage from './pages/MapPage';
+import InventoryPage from './pages/InventoryPage';
 import { apiService } from './services/api';
 import { useQuestStore } from './store/questStore';
 import { useCharacterStore } from './store/characterStore';
@@ -104,6 +105,16 @@ function App() {
             element={
               currentUser ? (
                 <MapPage user={currentUser} onLogout={handleLogout} />
+              ) : (
+                <Navigate to="/login" replace />
+              )
+            }
+          />
+          <Route
+            path="/inventory"
+            element={
+              currentUser ? (
+                <InventoryPage user={currentUser} onLogout={handleLogout} />
               ) : (
                 <Navigate to="/login" replace />
               )

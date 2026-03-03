@@ -257,6 +257,16 @@
   overflow: hidden;
 }
 
+.map-character-panel {
+  position: fixed;
+  top: 6rem;
+  right: 1.5rem;
+  width: min(420px, 38vw);
+  z-index: 650;
+  max-height: calc(100vh - 8rem);
+  overflow-y: auto;
+}
+
 .quest-details-card::before {
   content: '';
   position: absolute;

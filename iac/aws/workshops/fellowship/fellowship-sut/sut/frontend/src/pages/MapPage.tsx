@@ -1,9 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import MiddleEarthMap from '../components/MiddleEarthMap';
+import { CharacterPanel } from '../components/characters/CharacterPanel';
+import GoldCounter from '../components/GoldCounter';
 import { apiService } from '../services/api';
-import { Quest, Location, User } from '../types';
+import { Quest, Location, NpcCharacter, User } from '../types';
 import { Button } from '../components/ui/Button';
+import { useCharacterStore } from '../store/characterStore';
 import './MapPage.css';
 
 interface MapPageProps {
@@ -21,6 +24,9 @@ const MapPage: React.FC<MapPageProps> = ({ user, onLogout }) => {
   const [zoomToLocation, setZoomToLocation] = useState<number | undefined>();
   const [loading, setLoading] = useState(true);
   const [filterOpen, setFilterOpen] = useState(window.innerWidth > 1024);
+  const [gold, setGold] = useState<number>(user.gold || 0);
+  const [showCharacterPanel, setShowCharacterPanel] = useState(false);
+  const setActiveCharacter = useCharacterStore((state) => state.setActiveCharacter);
 
   // Filters
   const [statusFilter, setStatusFilter] = useState<string[]>(['all']);
@@ -64,6 +70,8 @@ const MapPage: React.FC<MapPageProps> = ({ user, onLogout }) => {
       console.log(`MapPage: Loaded ${questsData.length} quests and ${locationsData.length} locations`);
       setAllQuests(questsData);
       setLocations(locationsData);
+      const currentGold = await apiService.getGoldBalance();
+      setGold(currentGold);
     } catch (error) {
       console.error('Failed to load data:', error);
     } finally {
@@ -103,10 +111,17 @@ const MapPage: React.FC<MapPageProps> = ({ user, onLogout }) => {
     try {
       await apiService.completeQuest(questId);
       setSelectedQuestId(questId);
+      const currentGold = await apiService.getGoldBalance();
+      setGold(currentGold);
       await loadData();
     } catch (error) {
       console.error('Failed to complete quest from map:', error);
     }
+  };
+
+  const handleCharacterClick = (character: NpcCharacter) => {
+    setActiveCharacter(character);
+    setShowCharacterPanel(true);
   };
 
   // Apply filters
@@ -206,6 +221,13 @@ const MapPage: React.FC<MapPageProps> = ({ user, onLogout }) => {
             >
               Map of Middle-earth
             </Link>
+            <Link
+              to="/inventory"
+              className="text-parchment hover:text-gold transition-colors font-readable"
+            >
+              Inventory
+            </Link>
+            <GoldCounter gold={gold} />
             <Button
               onClick={onLogout}
               variant="secondary"
@@ -395,7 +417,22 @@ const MapPage: React.FC<MapPageProps> = ({ user, onLogout }) => {
             onLocationClick={handleLocationClick}
             onQuestClick={handleQuestClick}
             onCompleteQuest={handleCompleteQuest}
+            onCharacterClick={handleCharacterClick}
           />
+
+          {showCharacterPanel && (
+            <div className="map-character-panel">
+              <div className="flex justify-end mb-2">
+                <button
+                  className="btn btn-secondary btn-sm"
+                  onClick={() => setShowCharacterPanel(false)}
+                >
+                  Close Trader
+                </button>
+              </div>
+              <CharacterPanel />
+            </div>
+          )}
 
 
 

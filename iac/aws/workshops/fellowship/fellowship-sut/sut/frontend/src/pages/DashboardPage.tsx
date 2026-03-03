@@ -4,6 +4,7 @@ import Dashboard from '../components/Dashboard';
 import { apiService } from '../services/api';
 import { Quest, Member, User } from '../types';
 import { Button } from '../components/ui/Button';
+import GoldCounter from '../components/GoldCounter';
 
 interface DashboardPageProps {
   user: User;
@@ -14,6 +15,7 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user, onLogout }) => {
   const [quests, setQuests] = useState<Quest[]>([]);
   const [members, setMembers] = useState<Member[]>([]);
   const [loading, setLoading] = useState(true);
+  const [gold, setGold] = useState<number>(user.gold || 0);
 
   useEffect(() => {
     const loadData = async () => {
@@ -24,6 +26,8 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user, onLogout }) => {
         ]);
         setQuests(questsData);
         setMembers(membersData);
+        const currentGold = await apiService.getGoldBalance();
+        setGold(currentGold);
       } catch (error) {
         console.error('Failed to load dashboard data:', error);
       } finally {
@@ -74,6 +78,13 @@ const DashboardPage: React.FC<DashboardPageProps> = ({ user, onLogout }) => {
             >
               Map of Middle-earth
             </Link>
+            <Link
+              to="/inventory"
+              className="text-parchment hover:text-gold transition-colors font-readable"
+            >
+              Inventory
+            </Link>
+            <GoldCounter gold={gold} />
             <Button
               onClick={onLogout}
               variant="secondary"

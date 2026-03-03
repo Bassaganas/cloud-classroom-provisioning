@@ -105,6 +105,7 @@ def context(browser: Browser):
     video_dir.mkdir(parents=True, exist_ok=True)
     context = browser.new_context(
         record_video_dir=str(video_dir),
+        ignore_https_errors=True,
     )
     yield context
     context.close()

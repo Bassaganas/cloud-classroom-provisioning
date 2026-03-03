@@ -5,6 +5,7 @@ import QuestForm from '../components/QuestForm';
 import { apiService } from '../services/api';
 import { Quest, Location, Member, User } from '../types';
 import { Button } from '../components/ui/Button';
+import GoldCounter from '../components/GoldCounter';
 
 interface QuestsPageProps {
   user: User;
@@ -21,6 +22,7 @@ const QuestsPage: React.FC<QuestsPageProps> = ({ user, onLogout }) => {
   const [editingQuest, setEditingQuest] = useState<Quest | undefined>();
   const [prefilledQuest, setPrefilledQuest] = useState<Partial<Quest> | undefined>();
   const [filterStatus, setFilterStatus] = useState<string | null>(null);
+  const [gold, setGold] = useState<number>(user.gold || 0);
 
   useEffect(() => {
     loadData();
@@ -109,6 +111,8 @@ const QuestsPage: React.FC<QuestsPageProps> = ({ user, onLogout }) => {
       setQuests(questsData);
       setLocations(locationsData);
       setMembers(membersData);
+      const currentGold = await apiService.getGoldBalance();
+      setGold(currentGold);
     } catch (error) {
       console.error('Failed to load data:', error);
     } finally {
@@ -144,6 +148,9 @@ const QuestsPage: React.FC<QuestsPageProps> = ({ user, onLogout }) => {
       const result = await apiService.completeQuest(id);
       if (result.message) {
         alert(result.message + (result.character_quote ? `\n\n"${result.character_quote}"` : ''));
+      }
+      if ((result as any).current_gold !== undefined) {
+        setGold((result as any).current_gold);
       }
       await loadData();
     } catch (error) {
@@ -212,6 +219,13 @@ const QuestsPage: React.FC<QuestsPageProps> = ({ user, onLogout }) => {
             >
               Map of Middle-earth
             </Link>
+            <Link
+              to="/inventory"
+              className="text-parchment hover:text-gold transition-colors font-readable"
+            >
+              Inventory
+            </Link>
+            <GoldCounter gold={gold} />
             <Button
               onClick={onLogout}
               variant="secondary"

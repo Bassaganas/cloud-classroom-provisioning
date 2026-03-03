@@ -15,11 +15,29 @@ def init_db(app: Flask) -> None:
         from models.quest import Quest
         from models.member import Member
         from models.location import Location
+        from models.item import Item
+        from models.inventory_item import InventoryItem
         
         # Create all tables
         db.create_all()
         print("Database tables created successfully")
         
+        # Handle migrations for existing users table
+        try:
+            users_result = db.session.execute(text("PRAGMA table_info(users)"))
+            user_columns = {row[1]: row[2] for row in users_result}
+
+            if 'gold' not in user_columns:
+                db.session.execute(text("ALTER TABLE users ADD COLUMN gold INTEGER DEFAULT 500"))
+                print("Added gold column to users")
+
+            db.session.execute(text("UPDATE users SET gold = 500 WHERE gold IS NULL"))
+            db.session.commit()
+            print("Users table migration completed successfully")
+        except Exception as e:
+            db.session.rollback()
+            print(f"Users migration note: {e} (this is normal for new databases)")
+
         # Handle migrations for existing quests table
         try:
             # Check if quests table exists and has old columns
@@ -99,3 +117,47 @@ def init_db(app: Flask) -> None:
             print(f"Locations migration error: {e}")
             import traceback
             traceback.print_exc()
+
+        # Handle migrations for existing items table
+        try:
+            result = db.session.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='items'"))
+            table_exists = result.fetchone() is not None
+
+            if table_exists:
+                result = db.session.execute(text("PRAGMA table_info(items)"))
+                columns = [row[1] for row in result]
+
+                if 'owner_character' not in columns:
+                    db.session.execute(text("ALTER TABLE items ADD COLUMN owner_character VARCHAR(80) DEFAULT 'gandalf'"))
+                    print("Added owner_character column to items")
+
+                if 'personality_profile' not in columns:
+                    db.session.execute(text("ALTER TABLE items ADD COLUMN personality_profile VARCHAR(40) DEFAULT 'bargainer'"))
+                    print("Added personality_profile column to items")
+
+                if 'asking_price' not in columns:
+                    db.session.execute(text("ALTER TABLE items ADD COLUMN asking_price INTEGER DEFAULT 100"))
+                    print("Added asking_price column to items")
+
+                if 'is_sold' not in columns:
+                    db.session.execute(text("ALTER TABLE items ADD COLUMN is_sold BOOLEAN DEFAULT 0"))
+                    print("Added is_sold column to items")
+
+                if 'created_at' not in columns:
+                    db.session.execute(text("ALTER TABLE items ADD COLUMN created_at DATETIME"))
+                    print("Added created_at column to items")
+
+                if 'updated_at' not in columns:
+                    db.session.execute(text("ALTER TABLE items ADD COLUMN updated_at DATETIME"))
+                    print("Added updated_at column to items")
+
+                db.session.execute(text("UPDATE items SET asking_price = COALESCE(asking_price, base_price, 100)"))
+                db.session.execute(text("UPDATE items SET personality_profile = COALESCE(personality_profile, 'bargainer')"))
+                db.session.execute(text("UPDATE items SET owner_character = COALESCE(owner_character, 'gandalf')"))
+                db.session.execute(text("UPDATE items SET created_at = COALESCE(created_at, CURRENT_TIMESTAMP)"))
+                db.session.execute(text("UPDATE items SET updated_at = COALESCE(updated_at, CURRENT_TIMESTAMP)"))
+                db.session.commit()
+                print("Items table migration completed successfully")
+        except Exception as e:
+            db.session.rollback()
+            print(f"Items migration note: {e} (this is normal for new databases)")

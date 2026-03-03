@@ -18,7 +18,8 @@ user_response_model = auth_api.model('UserResponse', {
     'id': fields.Integer(description='User ID'),
     'username': fields.String(description='Username'),
     'email': fields.String(description='Email'),
-    'role': fields.String(description='Fellowship member role')
+    'role': fields.String(description='Fellowship member role'),
+    'gold': fields.Integer(description='Current gold balance'),
 })
 
 login_response_model = auth_api.model('LoginResponse', {

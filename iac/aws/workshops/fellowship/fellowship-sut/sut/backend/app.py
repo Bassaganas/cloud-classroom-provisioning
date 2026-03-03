@@ -1,4 +1,11 @@
 """Main Flask application for the Fellowship Quest Tracker."""
+from dotenv import load_dotenv
+import os
+
+# Load environment variables from .env file (if present)
+# This must happen before any config is loaded
+load_dotenv()
+
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from flask_restx import Api
@@ -11,7 +18,7 @@ from routes.quests import quests_bp, quests_api
 from routes.members import members_bp, members_api
 from routes.locations import locations_bp, locations_api
 from routes.npc_chat import npc_chat_bp, npc_chat_api
-import os
+from routes.shop import shop_bp, shop_api
 
 def create_app(config_name: str = None) -> Flask:
     """Create and configure Flask application."""
@@ -69,6 +76,7 @@ def create_app(config_name: str = None) -> Flask:
     app.register_blueprint(members_bp)
     app.register_blueprint(locations_bp)
     app.register_blueprint(npc_chat_bp)
+    app.register_blueprint(shop_bp)
     
     # Note: We don't add the Api objects as namespaces because they're already bound to blueprints
     # Adding them as namespaces would cause route conflicts. The routes work from blueprints alone.

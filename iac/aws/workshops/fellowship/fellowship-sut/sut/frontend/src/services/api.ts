@@ -8,6 +8,10 @@ import {
   LoginResponse,
   NpcCharacter,
   NpcChatResponse,
+  NpcSuggestedQuest,
+  ShopItem,
+  InventoryItem,
+  BargainStats,
 } from '../types';
 
 // Determine API URL based on environment and current location
@@ -167,6 +171,51 @@ class ApiService {
   async resetNpcChat(character: NpcCharacter): Promise<NpcChatResponse> {
     const response = await this.api.post<NpcChatResponse>('/chat/reset', { character });
     return response.data;
+  }
+
+  async createQuestFromNpc(
+    character: NpcCharacter,
+    quest: NpcSuggestedQuest
+  ): Promise<{ quest: Quest; message: string }> {
+    const response = await this.api.post<{ quest: Quest; message: string }>('/chat/create_quest', {
+      character,
+      ...quest,
+    });
+    return response.data;
+  }
+
+  // Bargaining shop
+  async getShopItems(character?: string): Promise<ShopItem[]> {
+    const suffix = character ? `?character=${encodeURIComponent(character)}` : '';
+    const response = await this.api.get<{ items: ShopItem[] }>(`/shop/items${suffix}`);
+    return response.data.items;
+  }
+
+  async purchaseItem(itemId: number, paidPrice: number): Promise<{
+    purchase: InventoryItem;
+    balance: { gold: number };
+    deal_quality: 'good' | 'fair' | 'bad';
+  }> {
+    const response = await this.api.post('/shop/purchase', {
+      item_id: itemId,
+      paid_price: paidPrice,
+    });
+    return response.data;
+  }
+
+  async getInventory(): Promise<InventoryItem[]> {
+    const response = await this.api.get<{ inventory: InventoryItem[] }>('/shop/inventory');
+    return response.data.inventory;
+  }
+
+  async getBargainStats(): Promise<BargainStats> {
+    const response = await this.api.get<{ stats: BargainStats }>('/shop/stats');
+    return response.data.stats;
+  }
+
+  async getGoldBalance(): Promise<number> {
+    const response = await this.api.get<{ gold: number }>('/shop/balance');
+    return response.data.gold;
   }
 }
 

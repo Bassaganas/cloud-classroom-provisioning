@@ -6,6 +6,7 @@ from flask import Blueprint, request, session
 from flask_restx import Api, Resource, fields
 
 from models.user import User
+from models.quest import Quest, db
 from services.npc_chat_service import NpcChatService
 
 npc_chat_bp = Blueprint('npc_chat', __name__, url_prefix='/api')
@@ -18,6 +19,14 @@ chat_start_model = npc_chat_api.model('ChatStartRequest', {
 chat_message_model = npc_chat_api.model('ChatMessageRequest', {
     'character': fields.String(required=False, description='frodo|sam|gandalf'),
     'message': fields.String(required=True, description='User message'),
+})
+
+quest_creation_model = npc_chat_api.model('QuestCreationRequest', {
+    'character': fields.String(required=False, description='frodo|sam|gandalf - NPC who proposes the quest'),
+    'title': fields.String(required=True, description='Quest title'),
+    'description': fields.String(required=True, description='Quest description'),
+    'quest_type': fields.String(required=True, description='Quest type (The Journey, The Battle, The Fellowship, The Ring, Dark Magic)'),
+    'priority': fields.String(required=True, description='Quest priority (Critical, Important, Standard)'),
 })
 
 
@@ -118,3 +127,48 @@ class ChatReset(Resource):
         scope_id = _get_chat_scope_id()
         payload = NpcChatService.reset_session(user_id=user.id, character=data.get('character'), scope_id=scope_id)
         return payload, 200
+
+
+@npc_chat_api.route('/create_quest')
+class ChatCreateQuest(Resource):
+    """Create a quest from NPC chat interaction."""
+    
+    @npc_chat_api.expect(quest_creation_model)
+    def post(self) -> tuple[Dict[str, Any], int]:
+        """Create a quest proposed by an NPC.
+        
+        This endpoint allows the frontend to persist a suggested quest
+        that was generated during NPC chat.
+        """
+        if not _require_auth():
+            return {'error': 'Authentication required'}, 401
+
+        user = _get_current_user()
+        if not user:
+            return {'error': 'User not found'}, 404
+
+        data = request.get_json() or {}
+        
+        # Validate required fields
+        required_fields = ['title', 'description', 'quest_type', 'priority']
+        if not all(data.get(field) for field in required_fields):
+            return {'error': 'Missing required fields: title, description, quest_type, priority'}, 400
+
+        # Create the quest
+        quest = Quest(
+            title=data.get('title'),
+            description=data.get('description'),
+            quest_type=data.get('quest_type'),
+            priority=data.get('priority'),
+            is_dark_magic=data.get('is_dark_magic', False),
+            assigned_to=user.id,
+            location_id=data.get('location_id'),
+        )
+        
+        db.session.add(quest)
+        db.session.commit()
+        
+        return {
+            'quest': quest.to_dict(),
+            'message': f'{data.get("character", "An NPC")} has created a quest for you!',
+        }, 201

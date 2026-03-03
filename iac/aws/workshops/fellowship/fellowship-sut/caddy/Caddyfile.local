@@ -1,0 +1,26 @@
+# Caddyfile for local Fellowship SUT development
+# HTTP-only by using explicit http:// site addresses (no HTTPS redirects)
+
+http://localhost, http://127.0.0.1, :80 {
+    # API routes with CORS handling
+    handle /api/* {
+        # Set CORS headers for all requests
+        header Access-Control-Allow-Origin "http://localhost:3000"
+        header Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
+        header Access-Control-Allow-Headers "Content-Type, Authorization"
+        header Access-Control-Allow-Credentials "true"
+        header Vary "Origin"
+
+        # Handle CORS preflight requests
+        @preflight method OPTIONS
+        handle @preflight {
+            respond 204
+        }
+
+        # Proxy all requests to backend
+        reverse_proxy backend:5000
+    }
+
+    # Frontend routes - proxy to React app
+    reverse_proxy /* frontend:3000
+}

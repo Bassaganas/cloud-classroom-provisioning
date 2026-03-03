@@ -30,11 +30,13 @@ class Config:
     RESTX_ERROR_404_HELP = False
 
     # Azure OpenAI configuration (server-side only)
+    # Load from environment variables—supply via .env file or container env vars
+    # DO NOT hardcode API keys or other sensitive values
     AZURE_OPENAI_ENDPOINT = os.environ.get('AZURE_OPENAI_ENDPOINT', '').strip()
     AZURE_OPENAI_API_KEY = os.environ.get('AZURE_OPENAI_API_KEY', '').strip()
     AZURE_OPENAI_DEPLOYMENT = os.environ.get('AZURE_OPENAI_DEPLOYMENT', '').strip()
-    AZURE_OPENAI_API_VERSION = os.environ.get('AZURE_OPENAI_API_VERSION', '2024-02-15-preview').strip()
-    AZURE_OPENAI_MAX_TOKENS = int(os.environ.get('AZURE_OPENAI_MAX_TOKENS', '220'))
+    AZURE_OPENAI_API_VERSION = os.environ.get('AZURE_OPENAI_API_VERSION', '2024-11-20').strip()
+    AZURE_OPENAI_MAX_TOKENS = int(os.environ.get('AZURE_OPENAI_MAX_TOKENS', '500'))
     AZURE_OPENAI_TEMPERATURE = float(os.environ.get('AZURE_OPENAI_TEMPERATURE', '0.85'))
 
 class DevelopmentConfig(Config):

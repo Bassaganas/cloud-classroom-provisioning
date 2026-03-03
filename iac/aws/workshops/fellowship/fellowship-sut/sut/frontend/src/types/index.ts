@@ -3,6 +3,7 @@ export interface User {
   username: string;
   email: string;
   role: string;
+  gold?: number;
   created_at?: string;
 }
 
@@ -72,14 +73,73 @@ export interface NpcChatMessage {
   content: string;
 }
 
+export interface NpcSuggestedQuest {
+  title: string;
+  description: string;
+  quest_type: 'The Journey' | 'The Battle' | 'The Fellowship' | 'The Ring' | 'Dark Magic';
+  priority: 'Critical' | 'Important' | 'Standard';
+  location_id?: number;
+}
+
 export interface NpcChatResponse {
   conversation_id: string;
   character: NpcCharacter;
   message?: string;
   opener?: string;
   suggested_action: NpcSuggestedAction;
+  suggested_quest?: NpcSuggestedQuest;
   messages: NpcChatMessage[];
+  negotiation?: {
+    item_id?: number;
+    item_name?: string;
+    owner_character?: string;
+    personality_profile?: string;
+    current_ask?: number;
+    round?: number;
+    status?: 'active' | 'accepted' | 'bored' | 'no_items';
+  };
+  balance?: {
+    gold: number;
+  };
+  purchase_result?: {
+    purchase: InventoryItem;
+    balance: {
+      gold: number;
+    };
+    deal_quality: 'good' | 'fair' | 'bad';
+  };
+  stats?: BargainStats;
+  shop_items?: ShopItem[];
   timestamp?: string;
+}
+
+export interface ShopItem {
+  id: number;
+  name: string;
+  description?: string;
+  owner_character: string;
+  personality_profile: string;
+  asking_price: number;
+  is_sold: boolean;
+}
+
+export interface InventoryItem {
+  id: number;
+  user_id: number;
+  item_id: number;
+  item_name?: string;
+  owner_character?: string;
+  description?: string;
+  paid_price: number;
+  base_price_revealed: number;
+  savings_percent: number;
+  created_at?: string;
+}
+
+export interface BargainStats {
+  purchased_count: number;
+  best_bargain_percent: number;
+  average_savings_percent: number;
 }
 
 // Re-export MiddleEarthMap types

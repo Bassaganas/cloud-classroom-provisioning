@@ -14,7 +14,7 @@ import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 // @ts-ignore - leaflet.markercluster extends Leaflet namespace
 import 'leaflet.markercluster';
-import { Location, Quest } from '../types';
+import { Location, NpcCharacter, Quest } from '../types';
 import './MiddleEarthMap.css';
 
 // Extend Leaflet types for markercluster
@@ -83,10 +83,47 @@ interface MiddleEarthMapProps {
   onLocationClick: (locationId: number) => void;
   onQuestClick?: (questId: number) => void;  // Support quest click
   onCompleteQuest?: (questId: number) => void;  // Support quest completion
+  onCharacterClick?: (character: NpcCharacter) => void;
   focusLocationId?: number;  // Location to focus on
   zoomToLocation?: number;  // Location to zoom to from navigation
   onFocusComplete?: () => void;  // Callback when focus animation completes
 }
+
+interface CharacterMarkerData {
+  id: NpcCharacter;
+  name: string;
+  emoji: string;
+  map_x: number;
+  map_y: number;
+  title: string;
+}
+
+const characterMarkers: CharacterMarkerData[] = [
+  {
+    id: 'frodo',
+    name: 'Frodo',
+    emoji: '🧝',
+    map_x: 1482,
+    map_y: 1158,
+    title: 'Sentimental Seller',
+  },
+  {
+    id: 'sam',
+    name: 'Sam',
+    emoji: '👨‍🌾',
+    map_x: 2589,
+    map_y: 2383,
+    title: 'Friendly Bargainer',
+  },
+  {
+    id: 'gandalf',
+    name: 'Gandalf',
+    emoji: '🧙‍♂️',
+    map_x: 2516,
+    map_y: 1123,
+    title: 'Mystic Merchant',
+  },
+];
 
 // Component to handle map bounds and view updates
 // For L.CRS.Simple (pixel-based), we disable bounds fitting to avoid animation loops
@@ -576,6 +613,72 @@ function MarkerClusterComponent({
   return null;
 }
 
+function CharacterMarkersComponent({
+  convertToLatLng,
+  onCharacterClick,
+}: {
+  convertToLatLng: (mapX: number, mapY: number) => [number, number];
+  onCharacterClick?: (character: NpcCharacter) => void;
+}) {
+  const map = useMap();
+  const layerRef = useRef<L.LayerGroup | null>(null);
+
+  useEffect(() => {
+    if (!map || !onCharacterClick) {
+      return;
+    }
+
+    if (layerRef.current) {
+      map.removeLayer(layerRef.current);
+    }
+
+    const layerGroup = L.layerGroup();
+
+    characterMarkers.forEach((character) => {
+      const [lat, lng] = convertToLatLng(character.map_x, character.map_y);
+      const markerIcon = L.divIcon({
+        className: 'character-marker-icon',
+        html: `<div class="character-marker" data-character="${character.id}">${character.emoji}</div>`,
+        iconSize: [40, 40],
+        iconAnchor: [20, 20],
+      });
+
+      const marker = L.marker([lat, lng], {
+        icon: markerIcon,
+        title: `${character.name} - ${character.title}`,
+      });
+
+      marker.bindPopup(
+        `<div class="character-popup">
+          <h4>${character.emoji} ${character.name}</h4>
+          <p>${character.title}</p>
+          <button class="btn-bargain-character" onclick="window.characterBargainHandler && window.characterBargainHandler('${character.id}')">Start Bargain</button>
+        </div>`
+      );
+
+      marker.on('click', () => {
+        onCharacterClick(character.id);
+      });
+
+      layerGroup.addLayer(marker);
+    });
+
+    layerGroup.addTo(map);
+    layerRef.current = layerGroup;
+    (window as any).characterBargainHandler = onCharacterClick;
+
+    return () => {
+      if (layerRef.current) {
+        map.removeLayer(layerRef.current);
+        layerRef.current = null;
+      }
+      delete (window as any).characterBargainHandler;
+    };
+  }, [map, convertToLatLng, onCharacterClick]);
+
+  return null;
+}
+
 const MiddleEarthMap: React.FC<MiddleEarthMapProps> = ({ 
   locations, 
   quests,
@@ -584,6 +687,7 @@ const MiddleEarthMap: React.FC<MiddleEarthMapProps> = ({
   onLocationClick,
   onQuestClick,
   onCompleteQuest,
+  onCharacterClick,
   focusLocationId,
   zoomToLocation,
   onFocusComplete
@@ -672,6 +776,11 @@ const MiddleEarthMap: React.FC<MiddleEarthMapProps> = ({
           selectedLocationId={selectedLocationId}
           convertToLatLng={convertToLatLng}
           onLocationClick={onLocationClick}
+        />
+
+        <CharacterMarkersComponent
+          convertToLatLng={convertToLatLng}
+          onCharacterClick={onCharacterClick}
         />
         
         {/* Individual quest markers - added last to ensure they render on top and are clickable */}

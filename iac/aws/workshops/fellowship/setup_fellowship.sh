@@ -283,6 +283,56 @@ if [ ! -x "/home/ec2-user/.docker/cli-plugins/docker-compose" ]; then
     exit 1
 fi
 
+# Get Azure OpenAI credentials from Secrets Manager
+log "Retrieving Azure OpenAI credentials from Secrets Manager..."
+AZURE_SECRET=""
+AZURE_ENDPOINT=""
+AZURE_API_KEY=""
+AZURE_DEPLOYMENT=""
+AZURE_API_VERSION=""
+
+# Determine the environment for the secret path
+ENVIRONMENT="${ENVIRONMENT:-dev}"
+SECRET_NAME="classroom/shared/${ENVIRONMENT}/azure-openai"
+
+AZURE_SECRET=$(aws secretsmanager get-secret-value \
+  --secret-id "$SECRET_NAME" \
+  --region "${AWS_REGION}" \
+  --query SecretString \
+  --output text 2>/dev/null || echo "")
+
+if [ -z "$AZURE_SECRET" ] || [ "$AZURE_SECRET" = "None" ]; then
+    log "WARNING: Failed to retrieve Azure OpenAI secret from Secrets Manager"
+    log "  Secret name: $SECRET_NAME"
+    log "  Region: $AWS_REGION"
+    log "  Fellowship SUT will work with fallback responses only (no Azure AI)"
+else
+    # Parse secret JSON and extract values
+    # Use jq if available, otherwise use grep/awk as fallback
+    if command -v jq &> /dev/null; then
+        AZURE_ENDPOINT=$(echo "$AZURE_SECRET" | jq -r '.endpoint // empty' 2>/dev/null || echo "")
+        AZURE_API_KEY=$(echo "$AZURE_SECRET" | jq -r '.api_key // empty' 2>/dev/null || echo "")
+        AZURE_DEPLOYMENT=$(echo "$AZURE_SECRET" | jq -r '.deployment // empty' 2>/dev/null || echo "")
+        AZURE_API_VERSION=$(echo "$AZURE_SECRET" | jq -r '.api_version // empty' 2>/dev/null || echo "")
+    else
+        log "WARNING: jq not available, attempting to parse secret with grep"
+        AZURE_ENDPOINT=$(echo "$AZURE_SECRET" | grep -o '"endpoint":"[^"]*' | cut -d'"' -f4 || echo "")
+        AZURE_API_KEY=$(echo "$AZURE_SECRET" | grep -o '"api_key":"[^"]*' | cut -d'"' -f4 || echo "")
+        AZURE_DEPLOYMENT=$(echo "$AZURE_SECRET" | grep -o '"deployment":"[^"]*' | cut -d'"' -f4 || echo "")
+        AZURE_API_VERSION=$(echo "$AZURE_SECRET" | grep -o '"api_version":"[^"]*' | cut -d'"' -f4 || echo "")
+    fi
+    
+    if [ -n "$AZURE_ENDPOINT" ] && [ -n "$AZURE_API_KEY" ]; then
+        log "✓ Azure OpenAI credentials retrieved successfully"
+        log "  Deployment: ${AZURE_DEPLOYMENT:-not set}"
+        log "  API Version: ${AZURE_API_VERSION:-not set}"
+    else
+        log "WARNING: Failed to parse Azure credentials from secret"
+        log "  Endpoint: ${AZURE_ENDPOINT:-empty}"
+        log "  API Key: ${AZURE_API_KEY:0:10}***"
+    fi
+fi
+
 # Create .env file for docker-compose BEFORE deployment
 # This ensures all environment variables are persistently available
 log "Creating .env file with deployment configuration for docker-compose..."
@@ -292,6 +342,12 @@ cat > /home/ec2-user/fellowship-sut/.env << EOF
 
 # Domain configuration for Caddy reverse proxy
 CADDY_DOMAIN=${CADDY_DOMAIN}
+
+# Azure OpenAI Configuration (fetched from AWS Secrets Manager)
+AZURE_OPENAI_ENDPOINT=${AZURE_ENDPOINT}
+AZURE_OPENAI_API_KEY=${AZURE_API_KEY}
+AZURE_OPENAI_DEPLOYMENT=${AZURE_DEPLOYMENT}
+AZURE_OPENAI_API_VERSION=${AZURE_API_VERSION}
 EOF
 
 # Verify .env file was created and is readable
@@ -304,11 +360,16 @@ fi
 chown ec2-user:ec2-user /home/ec2-user/fellowship-sut/.env
 chmod 644 /home/ec2-user/fellowship-sut/.env
 
-log "✓ Created /home/ec2-user/fellowship-sut/.env with CADDY_DOMAIN=${CADDY_DOMAIN}"
+log "✓ Created /home/ec2-user/fellowship-sut/.env"
+if [ -n "$AZURE_ENDPOINT" ]; then
+    log "  ✓ Azure OpenAI configured (deployment: ${AZURE_DEPLOYMENT})"
+else
+    log "  ⚠ Azure OpenAI not configured - using fallback responses"
+fi
 
-# Verify .env file contents
+# Verify .env file contents (mask sensitive values)
 log "Verifying .env file contents:"
-cat /home/ec2-user/fellowship-sut/.env | sed 's/^/  /'
+grep -E "^CADDY_DOMAIN=|^AZURE_OPENAI" /home/ec2-user/fellowship-sut/.env 2>/dev/null | sed 's/AZURE_OPENAI_API_KEY=.*/AZURE_OPENAI_API_KEY=***MASKED***/g' | sed 's/^/  /' || true
 
 # Additional safety check: ensure CADDY_DOMAIN is not empty
 if [ -z "$CADDY_DOMAIN" ]; then

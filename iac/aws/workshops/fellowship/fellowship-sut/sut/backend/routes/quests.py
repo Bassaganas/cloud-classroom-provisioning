@@ -44,6 +44,15 @@ def require_auth() -> bool:
     """Check if user is authenticated."""
     return session.get('user_id') is not None
 
+
+def _reward_for_priority(priority: Optional[str]) -> int:
+    rewards = {
+        'Critical': 100,
+        'Important': 60,
+        'Standard': 40,
+    }
+    return rewards.get(priority or '', 50)
+
 @quests_api.route('/')
 class QuestList(Resource):
     """Quest list endpoints."""
@@ -207,11 +216,19 @@ class QuestComplete(Resource):
         # Set status to completed
         quest.status = 'it_is_done'
         quest.completed_at = datetime.utcnow()
+
+        user_id = session.get('user_id')
+        current_user = User.query.get(user_id) if user_id else None
+        reward = _reward_for_priority(quest.priority)
+        if current_user:
+            current_user.gold = (current_user.gold or 0) + reward
         
         db.session.commit()
         
         # Return quest with completion message
         result = quest.to_dict()
-        result['message'] = 'The Quest Is Done!'
+        result['gold_reward'] = reward
+        result['current_gold'] = current_user.gold if current_user else None
+        result['message'] = f'The Quest Is Done! You earned {reward} Gold.'
         
         return result, 200

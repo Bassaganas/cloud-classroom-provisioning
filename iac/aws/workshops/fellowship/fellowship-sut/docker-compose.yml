@@ -17,10 +17,10 @@ services:
       - FLASK_ENV=development
       - DATABASE_URL=sqlite:////app/data/fellowship.db
       - SECRET_KEY=dev-secret-key-change-in-production
-      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT:-https://classroom-open-ai.openai.azure.com/}
-      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY:-}
-      - AZURE_OPENAI_DEPLOYMENT=${AZURE_OPENAI_DEPLOYMENT:-gpt-4.1-mini}
-      - AZURE_OPENAI_API_VERSION=${AZURE_OPENAI_API_VERSION:-2025-04-14}
+      - AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT}
+      - AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY}
+      - AZURE_OPENAI_DEPLOYMENT=${AZURE_OPENAI_DEPLOYMENT}
+      - AZURE_OPENAI_API_VERSION=${AZURE_OPENAI_API_VERSION}
     working_dir: /app
     command: python app.py
     restart: unless-stopped

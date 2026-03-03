@@ -299,6 +299,58 @@
   background-color: var(--color-forest-green-dark, #2D5016);
 }
 
+.character-marker-icon {
+  background: transparent !important;
+  border: none !important;
+}
+
+.character-marker {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(circle at 30% 30%, #ffe7a3, #d4a939);
+  border: 2px solid #8b4513;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+  font-size: 20px;
+  cursor: pointer;
+  transition: transform 0.2s ease;
+}
+
+.character-marker:hover {
+  transform: scale(1.12);
+}
+
+.character-popup {
+  min-width: 200px;
+}
+
+.character-popup h4 {
+  margin: 0 0 6px 0;
+  color: var(--color-earth-brown-dark, #8B4513);
+}
+
+.character-popup p {
+  margin: 0 0 10px 0;
+  font-size: 0.9rem;
+}
+
+.character-popup .btn-bargain-character {
+  width: 100%;
+  border: none;
+  border-radius: 4px;
+  padding: 8px 10px;
+  background-color: var(--color-forest-green-medium, #3D6B1F);
+  color: #fff;
+  cursor: pointer;
+}
+
+.character-popup .btn-bargain-character:hover {
+  background-color: var(--color-forest-green-dark, #2D5016);
+}
+
 /* Quest marker styling */
 .quest-marker-icon {
   background: transparent !important;

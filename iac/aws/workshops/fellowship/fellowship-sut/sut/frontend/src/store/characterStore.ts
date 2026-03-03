@@ -5,7 +5,7 @@
 
 import { create } from 'zustand';
 import { DialogueResponse } from '../services/characterService';
-import { NpcCharacter, NpcChatMessage, NpcSuggestedAction } from '../types';
+import { NpcCharacter, NpcChatMessage, NpcSuggestedAction, NpcSuggestedQuest } from '../types';
 
 interface CharacterState {
   // State
@@ -17,6 +17,7 @@ interface CharacterState {
   questCompletionCount: number;
   chatMessages: NpcChatMessage[];
   suggestedAction: NpcSuggestedAction | null;
+  suggestedQuest: NpcSuggestedQuest | null;
   isChatLoading: boolean;
 
   // Actions
@@ -30,6 +31,7 @@ interface CharacterState {
   setChatMessages: (messages: NpcChatMessage[]) => void;
   appendChatMessage: (message: NpcChatMessage) => void;
   setSuggestedAction: (action: NpcSuggestedAction | null) => void;
+  setSuggestedQuest: (quest: NpcSuggestedQuest | null) => void;
   setChatLoading: (loading: boolean) => void;
 
   // Computed
@@ -48,6 +50,7 @@ export const useCharacterStore = create<CharacterState>((set, get) => ({
   questCompletionCount: 0,
   chatMessages: [],
   suggestedAction: null,
+  suggestedQuest: null,
   isChatLoading: false,
 
   // Actions
@@ -84,6 +87,8 @@ export const useCharacterStore = create<CharacterState>((set, get) => ({
     })),
 
   setSuggestedAction: (action) => set({ suggestedAction: action }),
+
+  setSuggestedQuest: (quest) => set({ suggestedQuest: quest }),
 
   setChatLoading: (loading) => set({ isChatLoading: loading }),
 
@@ -123,6 +128,7 @@ export const useCharacter = () =>
     mood: state.characterMood,
     chatMessages: state.chatMessages,
     suggestedAction: state.suggestedAction,
+    suggestedQuest: state.suggestedQuest,
     isChatLoading: state.isChatLoading,
     avatar: state.getCharacterAvatar(),
     color: state.getCharacterColor(),
@@ -131,6 +137,7 @@ export const useCharacter = () =>
     setChatMessages: state.setChatMessages,
     appendChatMessage: state.appendChatMessage,
     setSuggestedAction: state.setSuggestedAction,
+    setSuggestedQuest: state.setSuggestedQuest,
     setChatLoading: state.setChatLoading,
   }));
 
