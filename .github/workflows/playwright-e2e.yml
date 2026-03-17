@@ -61,7 +61,9 @@ jobs:
           if [ -n "${{ inputs.test_url }}" ]; then
             echo "Running tests against deployed URL: ${{ inputs.test_url }}"
             cd frontend/ec2-manager
-            VITE_API_URL="${{ inputs.test_url }}/api" npm run test -- --config ../../e2e/playwright.config.js
+            TEST_URL="${{ inputs.test_url }}"
+            TEST_URL="${TEST_URL%/}"
+            VITE_API_URL="${TEST_URL}/api" npx playwright test tests/e2e/tutorial-instance-manager.spec.js --reporter=list,html --output=test-results
             cd ../..
           else
             echo "Running tests in test mode (mock server)"
