@@ -1,6 +1,7 @@
 import { expect } from '@playwright/test'
 import { createBdd } from 'playwright-bdd'
 import {
+  cleanupTestTutorialSessions,
   givenIAmLoggedIn,
   thenAllTutorialLinksUseHttp,
   thenEndpointColumnContainsHttpOrHttpsLinks,
@@ -35,7 +36,7 @@ import {
   thenLandingSessionCostsMatchApi,
 } from '../bdd/steps.js'
 
-const { Given, When, Then, Before } = createBdd()
+const { Given, When, Then, Before, After } = createBdd()
 
 let currentSessionId = null
 let expectedTutorialRows = null
@@ -55,6 +56,10 @@ Before(async () => {
   expectedTutorialRows = null
   latestListApiResult = null
   latestSessionsCostApiResult = null
+})
+
+After(async () => {
+  await cleanupTestTutorialSessions(['bdd-sess-', 'bdd-fab-'])
 })
 
 Given('I am logged in to EC2 Tutorials Manager', async ({ page }) => {

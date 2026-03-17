@@ -1,5 +1,6 @@
 import { expect, test } from '@playwright/test'
 import {
+  cleanupTestTutorialSessions,
   givenIAmLoggedIn,
   thenAllTutorialLinksUseHttp,
   thenEndpointColumnContainsHttpOrHttpsLinks,
@@ -26,6 +27,10 @@ import {
 const isDeployedRun = !!process.env.E2E_BASE_URL
 
 test.describe('Tutorial Instance Manager critical workflows', () => {
+  test.afterAll(async () => {
+    await cleanupTestTutorialSessions(['pw-'])
+  })
+
   test('1) create tutorial instance and initial instances', async ({ page }) => {
     await givenIAmLoggedIn(page)
 

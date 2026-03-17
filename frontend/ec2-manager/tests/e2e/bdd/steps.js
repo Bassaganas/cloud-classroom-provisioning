@@ -9,6 +9,25 @@ import { WorkshopOverviewPage } from '../pom/workshop-overview.page.js'
 
 const PASSWORD = process.env.E2E_INSTANCE_MANAGER_PASSWORD || 'test123'
 
+function getApiBaseUrl() {
+  const explicitApiUrl = process.env.E2E_API_URL
+  if (explicitApiUrl) {
+    return explicitApiUrl.replace(/\/$/, '')
+  }
+
+  const externalApiUrl = process.env.VITE_API_URL
+  if (externalApiUrl) {
+    return externalApiUrl.replace(/\/$/, '')
+  }
+
+  const deployedBaseUrl = process.env.E2E_BASE_URL
+  if (deployedBaseUrl) {
+    return `${deployedBaseUrl.replace(/\/$/, '')}/api`
+  }
+
+  return 'http://127.0.0.1:3001/api'
+}
+
 function toNumber(value) {
   if (value === null || value === undefined) return null
   const numeric = Number(value)
@@ -168,6 +187,7 @@ export async function thenAllTutorialLinksUseHttp(page) {
 }
 
 export async function whenIRequestInstancesApiWithActualCosts(workshop, costSourceMode = null) {
+  const apiBaseUrl = getApiBaseUrl()
   const query = new URLSearchParams({
     password: PASSWORD,
     workshop,
@@ -178,13 +198,14 @@ export async function whenIRequestInstancesApiWithActualCosts(workshop, costSour
     query.append('cost_source_mode', costSourceMode)
   }
 
-  const response = await fetch(`http://127.0.0.1:3001/api/list?${query.toString()}`)
+  const response = await fetch(`${apiBaseUrl}/list?${query.toString()}`)
   const payload = await response.json()
   return { status: response.status, payload }
 }
 
 export async function whenIRequestTutorialSessionsApiCostsForAllWorkshops() {
-  const templatesResponse = await fetch(`http://127.0.0.1:3001/api/templates?password=${PASSWORD}`)
+  const apiBaseUrl = getApiBaseUrl()
+  const templatesResponse = await fetch(`${apiBaseUrl}/templates?password=${PASSWORD}`)
   const templatesPayload = await templatesResponse.json()
   const workshopNames = Object.keys(templatesPayload.templates || {})
 
@@ -193,7 +214,7 @@ export async function whenIRequestTutorialSessionsApiCostsForAllWorkshops() {
 
   for (const workshop of workshopNames) {
     const response = await fetch(
-      `http://127.0.0.1:3001/api/tutorial_sessions?password=${PASSWORD}&workshop=${encodeURIComponent(workshop)}`
+      `${apiBaseUrl}/tutorial_sessions?password=${PASSWORD}&workshop=${encodeURIComponent(workshop)}`
     )
     const payload = await response.json()
     const sessions = payload.sessions || []
@@ -207,6 +228,47 @@ export async function whenIRequestTutorialSessionsApiCostsForAllWorkshops() {
   return {
     sessionsByWorkshop,
     totalEstimated: Number(totalEstimated.toFixed(2))
+  }
+}
+
+export async function cleanupTestTutorialSessions(prefixes = ['pw-', 'bdd-sess-', 'bdd-fab-']) {
+  const apiBaseUrl = getApiBaseUrl()
+
+  try {
+    const templatesResponse = await fetch(`${apiBaseUrl}/templates?password=${encodeURIComponent(PASSWORD)}`)
+    if (!templatesResponse.ok) {
+      return
+    }
+
+    const templatesPayload = await templatesResponse.json()
+    const workshopNames = Object.keys(templatesPayload.templates || {})
+
+    for (const workshop of workshopNames) {
+      const sessionsResponse = await fetch(
+        `${apiBaseUrl}/tutorial_sessions?password=${encodeURIComponent(PASSWORD)}&workshop=${encodeURIComponent(workshop)}`
+      )
+
+      if (!sessionsResponse.ok) {
+        continue
+      }
+
+      const sessionsPayload = await sessionsResponse.json()
+      const sessions = sessionsPayload.sessions || []
+
+      for (const session of sessions) {
+        const sessionId = session.session_id || ''
+        if (!prefixes.some((prefix) => sessionId.startsWith(prefix))) {
+          continue
+        }
+
+        await fetch(
+          `${apiBaseUrl}/tutorial_session/${encodeURIComponent(sessionId)}?password=${encodeURIComponent(PASSWORD)}&workshop=${encodeURIComponent(workshop)}&delete_instances=true`,
+          { method: 'DELETE' }
+        )
+      }
+    }
+  } catch {
+    // Best-effort cleanup only.
   }
 }
 

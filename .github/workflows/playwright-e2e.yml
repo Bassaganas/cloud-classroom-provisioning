@@ -106,7 +106,9 @@ jobs:
             cd frontend/ec2-manager
             TEST_URL="${{ inputs.test_url }}"
             TEST_URL="${TEST_URL%/}"
-            E2E_BASE_URL="$TEST_URL" E2E_INSTANCE_MANAGER_PASSWORD="$E2E_INSTANCE_MANAGER_PASSWORD" npx playwright test tests/e2e/tutorial-instance-manager.spec.js --reporter=list,html --output=test-results
+            TARGET_ENV="${{ inputs.aws_environment }}"
+            E2E_API_URL="https://ec2-management-api-${TARGET_ENV}.testingfantasy.com/api"
+            E2E_BASE_URL="$TEST_URL" E2E_API_URL="$E2E_API_URL" E2E_INSTANCE_MANAGER_PASSWORD="$E2E_INSTANCE_MANAGER_PASSWORD" npx playwright test tests/e2e/tutorial-instance-manager.spec.js --reporter=list,html --output=test-results
             cd ../..
           else
             echo "Running tests in test mode (mock server)"
