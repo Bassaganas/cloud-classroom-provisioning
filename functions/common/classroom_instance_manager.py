@@ -796,7 +796,7 @@ def _delete_route53_a_record(domain_name, strict=False, max_retries=3):
                 HostedZoneId=HTTPS_HOSTED_ZONE_ID,
                 StartRecordName=domain_name,
                 StartRecordType='A',
-                MaxItems=10
+                MaxItems='10'
             )
 
             record_to_delete = None
@@ -1221,7 +1221,7 @@ def get_latest_ami():
 def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_name=None,
                     stop_timeout=None, terminate_timeout=None, hard_terminate_timeout=None,
                     tutorial_session_id=None, purchase_type='on-demand', spot_duration_hours=2,
-                    spot_max_price=None, idempotency_key=None):
+                    spot_max_price=None, idempotency_key=None, fallback_to_on_demand=False):
     """Create EC2 instance(s) for a workshop template
     
     Args:
@@ -1236,6 +1236,7 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
         purchase_type: 'on-demand' or 'spot' for EC2 instance purchase type (default: 'on-demand')
         spot_duration_hours: Deprecated, ignored for regular Spot instances
         spot_max_price: Optional maximum Spot price in USD/hour (string or Decimal)
+        fallback_to_on_demand: If True, retry with on-demand instances if Spot capacity is exhausted (default: False)
     """
     try:
         if purchase_type == 'spot':
@@ -1374,6 +1375,8 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
             'user-data.log': '/var/log/user-data.log' in user_data,
             'S3 download': 'aws s3 cp' in user_data or 's3://' in user_data,
             'SSM parameter': 'aws ssm get-parameter' in user_data,
+            'setup_fellowship.sh': 'setup_fellowship.sh' in user_data,
+            'exec setup script': 'exec "$SETUP_SCRIPT"' in user_data or "exec '$SETUP_SCRIPT'" in user_data,
             'devops-escape-room': 'devops-escape-room' in user_data.lower(),
             'dify': 'dify' in user_data.lower()
         }
@@ -1386,6 +1389,8 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
         if workshop_name in ['fellowship', 'fellowship-of-the-build']:
             if markers['fellowship-sut']:
                 logger.info("  ✓ Fellowship SUT deployment code DETECTED in user_data")
+            elif markers['setup_fellowship.sh'] and markers['exec setup script'] and markers['S3 download']:
+                logger.info("  ✓ Fellowship deployment is delegated to setup_fellowship.sh from S3")
             else:
                 logger.warning("  ⚠ Fellowship SUT deployment code NOT FOUND - instance will NOT have SUT deployed!")
         
@@ -1591,7 +1596,100 @@ export WORKSHOP_NAME={workshop_name}
             else:
                 logger.info(f"  Purchase Type: ON-DEMAND")
             
-            response = ec2.run_instances(**run_instances_params)
+            # Launch instance with error handling for capacity issues
+            try:
+                response = ec2.run_instances(**run_instances_params)
+            except ClientError as e:
+                error_code = e.response['Error'].get('Code', 'Unknown')
+                error_msg = e.response['Error'].get('Message', str(e))
+                
+                # Handle Spot capacity exhaustion
+                if error_code == 'InsufficientInstanceCapacity' and purchase_type == 'spot':
+                    logger.warning(f"Spot instance capacity exhausted: {error_msg}")
+                    
+                    # If fallback to on-demand is enabled, retry with on-demand
+                    if fallback_to_on_demand:
+                        logger.info("⚠ Spot capacity unavailable - retrying with ON-DEMAND instances (as per fallback_to_on_demand=True)")
+                        # Remove Spot instance options and retry
+                        if 'InstanceMarketOptions' in run_instances_params:
+                            del run_instances_params['InstanceMarketOptions']
+                        
+                        try:
+                            logger.info(f"  Retrying instance creation with ON-DEMAND instead of SPOT")
+                            response = ec2.run_instances(**run_instances_params)
+                            logger.info(f"✓ Instance created successfully with ON-DEMAND (fallback from Spot)")
+                            # Mark instance as fallback in response
+                            instances.append({
+                                'note': 'Created with on-demand (Spot capacity unavailable)',
+                                'fallback_from_spot': True
+                            })
+                        except ClientError as fallback_error:
+                            fallback_error_code = fallback_error.response['Error'].get('Code', 'Unknown')
+                            fallback_error_msg = fallback_error.response['Error'].get('Message', str(fallback_error))
+                            logger.error(f"On-demand fallback also failed ({fallback_error_code}): {fallback_error_msg}")
+                            
+                            error_response = {
+                                'success': False,
+                                'error': f'Instance creation failed: {fallback_error_msg}',
+                                'error_code': fallback_error_code,
+                                'details': f'Spot capacity unavailable. On-demand fallback also failed.',
+                                'instances_created': len(instances)
+                            }
+                            
+                            if idempotency_item_key:
+                                table.update_item(
+                                    Key={'instance_id': idempotency_item_key},
+                                    UpdateExpression='SET #status = :status, error_message = :error, completed_at = :completed_at',
+                                    ExpressionAttributeNames={'#status': 'status'},
+                                    ExpressionAttributeValues={
+                                        ':status': 'failed',
+                                        ':error': fallback_error_msg,
+                                        ':completed_at': datetime.now(timezone.utc).isoformat()
+                                    }
+                                )
+                            return error_response
+                    else:
+                        # No fallback - return error with suggestions
+                        logger.info("Suggestions for resolving Spot capacity issues:")
+                        logger.info("1. Set fallback_to_on_demand=true to automatically use on-demand instances")
+                        logger.info("2. Try creating fewer instances (reduce count)")
+                        logger.info("3. Try a different instance type (e.g., t3.small instead of t3.medium)")
+                        logger.info("4. Try a different region or availability zone")
+                        logger.info("5. Wait a few minutes and retry (Spot capacity changes frequently)")
+                        
+                        error_response = {
+                            'success': False,
+                            'error': f'Spot instance capacity not available: {error_msg}',
+                            'error_code': error_code,
+                            'suggestions': [
+                                'Set fallback_to_on_demand=true to automatically retry with on-demand',
+                                'Reduce the number of instances requested',
+                                'Try a different instance type (t3.small, t3.large, etc)',
+                                'Wait a few minutes - Spot capacity changes frequently',
+                                'Check AWS Spot capacity dashboard for your region'
+                            ],
+                            'instances_created': len(instances),
+                            'instances': instances if instances else None
+                        }
+                        
+                        if idempotency_item_key:
+                            table.update_item(
+                                Key={'instance_id': idempotency_item_key},
+                                UpdateExpression='SET #status = :status, error_message = :error, completed_at = :completed_at',
+                                ExpressionAttributeNames={'#status': 'status'},
+                                ExpressionAttributeValues={
+                                    ':status': 'failed',
+                                    ':error': error_msg,
+                                    ':completed_at': datetime.now(timezone.utc).isoformat()
+                                }
+                            )
+                        
+                        return error_response
+                
+                # Handle other errors
+                logger.error(f"EC2 RunInstances error ({error_code}): {error_msg}")
+                raise
+            
             
             instance_id = response['Instances'][0]['InstanceId']
             initial_state = response['Instances'][0]['State']['Name']
@@ -1987,6 +2085,74 @@ def stop_instances(instance_ids):
             'error': str(e)
         }
 
+def _terminate_on_demand_instance(instance_id, ec2_client, instance_details=None):
+    """Terminate an on-demand EC2 instance.
+    
+    Args:
+        instance_id: The EC2 instance ID to terminate
+        ec2_client: The boto3 EC2 client
+        instance_details: Optional cached instance details to avoid redundant API calls
+    
+    Returns:
+        bool: True if termination was initiated successfully, False otherwise
+    """
+    try:
+        ec2_client.terminate_instances(InstanceIds=[instance_id])
+        logger.info(f"Terminated on-demand instance {instance_id}")
+        return True
+    except Exception as e:
+        logger.error(f"Error terminating on-demand instance {instance_id}: {str(e)}")
+        return False
+
+
+def _terminate_spot_instance(instance_id, ec2_client, instance_details=None):
+    """Terminate a spot EC2 instance by canceling its Spot Instance Request first.
+    
+    For spot instances with 'persistent' type, terminating without canceling the spot request
+    causes AWS to automatically launch replacement instances. This function:
+    1. Cancels spot requests for spot instances (with TerminateInstances=True)
+    2. Falls back to regular termination if spot request cancellation fails
+    
+    Args:
+        instance_id: The EC2 instance ID to terminate
+        ec2_client: The boto3 EC2 client
+        instance_details: Optional cached instance details to avoid redundant API calls
+    
+    Returns:
+        bool: True if termination was initiated successfully, False otherwise
+    """
+    try:
+        # Get instance details if not provided
+        if instance_details is None:
+            response = ec2_client.describe_instances(InstanceIds=[instance_id])
+            if not response['Reservations']:
+                logger.warning(f"Spot instance {instance_id} not found for termination")
+                return False
+            instance_details = response['Reservations'][0]['Instances'][0]
+        
+        spot_request_id = instance_details.get('SpotInstanceRequestId')
+        if spot_request_id:
+            logger.info(f"Terminating spot instance {instance_id} by canceling spot request {spot_request_id}")
+            try:
+                ec2_client.cancel_spot_instance_requests(
+                    SpotInstanceRequestIds=[spot_request_id]
+                )
+                logger.info(f"Canceled spot request {spot_request_id} and terminated instance {instance_id}")
+            except ClientError as e:
+                logger.warning(f"Failed to cancel spot request {spot_request_id}: {str(e)}, falling back to regular termination")
+        else:
+            logger.warning(f"Spot instance {instance_id} has no SpotInstanceRequestId, falling back to regular termination")
+        
+        # Fallback: Regular termination for spot instances without SIR or as fallback
+        ec2_client.terminate_instances(InstanceIds=[instance_id])
+        logger.info(f"Terminated spot instance {instance_id} (fallback to regular termination)")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error terminating spot instance {instance_id}: {str(e)}")
+        return False
+
+
 def delete_instances(instance_ids=None, delete_type='individual'):
     """Delete EC2 instance(s)
     
@@ -2047,29 +2213,29 @@ def delete_instances(instance_ids=None, delete_type='individual'):
         # Process deletions asynchronously - don't wait for completion
         for instance_id in instance_ids:
             try:
-                # Get instance tags before deletion to retrieve domain information
+                # Get instance details to check if it's spot or on-demand
+                instance_details = None
                 instance_tags = {}
                 domain_to_delete = None
+                is_spot = False
+                
                 try:
                     response = ec2.describe_instances(InstanceIds=[instance_id])
                     if response.get('Reservations') and response['Reservations'][0].get('Instances'):
-                        instance = response['Reservations'][0]['Instances'][0]
-                        instance_tags = {tag['Key']: tag['Value'] for tag in instance.get('Tags', [])}
+                        instance_details = response['Reservations'][0]['Instances'][0]
+                        instance_tags = {tag['Key']: tag['Value'] for tag in instance_details.get('Tags', [])}
                         domain_to_delete = instance_tags.get('HttpsDomain')
+                        is_spot = instance_details.get('InstanceLifecycle') == 'spot'
                 except Exception as e:
-                    logger.warning(f"Error getting instance tags for {instance_id}: {str(e)}")
+                    logger.warning(f"Error getting instance details for {instance_id}: {str(e)}")
                 
-                # Clean up Route53 record before termination (strict mode)
-                dns_cleanup = _delete_route53_a_record(domain_to_delete, strict=True, max_retries=3)
+                # Clean up Route53 record before termination (non-blocking - failure doesn't prevent deletion)
+                dns_cleanup = _delete_route53_a_record(domain_to_delete, strict=False, max_retries=3)
                 if not dns_cleanup.get('success'):
-                    errors.append(
-                        f"{instance_id}: Route53 cleanup failed for {domain_to_delete} "
-                        f"(reason={dns_cleanup.get('reason')}, attempts={dns_cleanup.get('attempts')})"
+                    logger.warning(
+                        f"Route53 cleanup incomplete for {instance_id} (domain={domain_to_delete}), "
+                        f"but proceeding with instance termination: reason={dns_cleanup.get('reason')}, attempts={dns_cleanup.get('attempts')}"
                     )
-                    logger.error(
-                        f"Skipping termination for {instance_id} because Route53 cleanup failed: {dns_cleanup}"
-                    )
-                    continue
 
                 # Clean up DynamoDB assignment (non-blocking)
                 try:
@@ -2083,18 +2249,25 @@ def delete_instances(instance_ids=None, delete_type='individual'):
                 except Exception as e:
                     logger.warning(f"Error cleaning up assignment: {str(e)}")
                 
-                # Terminate instance directly - EC2 can terminate running instances without stopping first
-                # This is much faster than stopping then terminating
-                try:
-                    ec2.terminate_instances(InstanceIds=[instance_id])
-                    deleted.append(instance_id)
-                    logger.info(f"Initiated termination for instance {instance_id} (async)")
-                except ClientError as e:
-                    if e.response['Error']['Code'] == 'InvalidInstanceID.NotFound':
-                        errors.append(f'{instance_id}: not found')
-                    else:
-                        errors.append(f'{instance_id}: {str(e)}')
+                # Terminate instance - handle spot and on-demand instances differently
+                terminate_success = False
+                if is_spot:
+                    terminate_success = _terminate_spot_instance(instance_id, ec2, instance_details)
+                else:
+                    terminate_success = _terminate_on_demand_instance(instance_id, ec2, instance_details)
                 
+                if terminate_success:
+                    deleted.append(instance_id)
+                    logger.info(f"Initiated termination for {'spot' if is_spot else 'on-demand'} instance {instance_id} (async)")
+                else:
+                    errors.append(f'{instance_id}: failed to initiate termination')
+                    
+            except ClientError as e:
+                if e.response['Error']['Code'] == 'InvalidInstanceID.NotFound':
+                    errors.append(f'{instance_id}: not found')
+                else:
+                    errors.append(f'{instance_id}: {str(e)}')
+                logger.error(f"Error processing deletion for {instance_id}: {str(e)}")
             except Exception as e:
                 errors.append(f'{instance_id}: {str(e)}')
                 logger.error(f"Error processing deletion for {instance_id}: {str(e)}")
@@ -2440,9 +2613,84 @@ def normalize_event(event):
             'headers': event.get('headers', {})
         }
 
+def get_always_on_tutorials():
+    """Return always-on tutorial links and attempt light-touch recovery when needed."""
+    ec2 = boto3.client('ec2', region_name=REGION)
+    response = ec2.describe_instances(Filters=[
+        {'Name': 'tag:Type', 'Values': ['always-on-tutorial']}
+    ])
+
+    found = {}
+    for reservation in response.get('Reservations', []):
+        for instance in reservation.get('Instances', []):
+            tags = {t['Key']: t['Value'] for t in instance.get('Tags', [])}
+            tutorial = tags.get('TutorialType') or tags.get('WorkshopID')
+            if tutorial:
+                found.setdefault(tutorial, []).append(instance)
+
+    tutorials = []
+    for tutorial, instances in found.items():
+        healthy_instance = None
+        unhealthy_instance = None
+
+        for inst in instances:
+            state = inst.get('State', {}).get('Name')
+            public_ip = inst.get('PublicIpAddress')
+            if state == 'running' and public_ip:
+                health, _, _ = check_instance_health(public_ip, tutorial)
+                if health == 'healthy':
+                    healthy_instance = inst
+                    break
+                unhealthy_instance = inst
+            elif state == 'stopped':
+                unhealthy_instance = inst
+
+        instance = healthy_instance or unhealthy_instance
+
+        if not healthy_instance:
+            if unhealthy_instance:
+                instance_state = unhealthy_instance.get('State', {}).get('Name')
+                if instance_state == 'stopped':
+                    try:
+                        ec2.start_instances(InstanceIds=[unhealthy_instance['InstanceId']])
+                        logger.info(f"Started stopped always-on instance for {tutorial}")
+                    except Exception as e:
+                        logger.warning(f"Failed to start stopped instance for {tutorial}: {e}")
+                elif instance_state == 'running':
+                    try:
+                        ec2.reboot_instances(InstanceIds=[unhealthy_instance['InstanceId']])
+                        logger.info(f"Rebooted unhealthy always-on instance for {tutorial}")
+                    except Exception as e:
+                        logger.warning(f"Failed to reboot unhealthy instance for {tutorial}: {e}")
+            else:
+                try:
+                    result = create_instance(
+                        count=1,
+                        instance_type='always-on-tutorial',
+                        workshop_name=tutorial,
+                        purchase_type='spot',
+                        tutorial_session_id=None
+                    )
+                    instance = result['instances'][0] if result.get('instances') else None
+                    logger.info(f"Created new always-on instance for {tutorial}")
+                except Exception as e:
+                    logger.error(f"Failed to create always-on instance for {tutorial}: {e}")
+                    instance = None
+
+        url = f"https://sut-{tutorial}.testingfantasy.com"
+        if instance and instance.get('PublicIpAddress'):
+            try:
+                setup_caddy_domain(instance['InstanceId'], tutorial, domain=f"sut-{tutorial}.testingfantasy.com")
+            except Exception as e:
+                logger.warning(f"Failed to update Route53 for {tutorial}: {e}")
+
+        tutorials.append({'tutorial': tutorial, 'url': url})
+
+    return tutorials
+
 def lambda_handler(event, context):
     """Lambda handler for EC2 instance pool management - API only
-    
+
     Supports both Lambda Function URL and API Gateway event formats
     """
     logger.info("=" * 50)
@@ -2450,7 +2698,7 @@ def lambda_handler(event, context):
     logger.info(f"Event type: {type(event)}")
     logger.info(f"Event keys: {list(event.keys()) if isinstance(event, dict) else 'Not a dict'}")
     logger.info(f"Context: {context}")
-    
+
     try:
         # Normalize event format (supports both Function URL and API Gateway)
         normalized = normalize_event(event)
@@ -2459,10 +2707,10 @@ def lambda_handler(event, context):
         query_params = normalized['queryParams']
         body_str = normalized['body']
         headers = normalized['headers']
-        
+
         logger.info(f"HTTP Method: {http_method}, Path: {path}")
         logger.info(f"Event format: {'API Gateway' if 'httpMethod' in event else 'Function URL'}")
-        
+
         # Handle OPTIONS for CORS preflight
         if http_method == 'OPTIONS':
             return {
@@ -2470,7 +2718,7 @@ def lambda_handler(event, context):
                 'headers': get_cors_headers(),
                 'body': ''
             }
-        
+
         # Strip stage prefix if present (e.g., /dev/api/login -> /api/login)
         # API Gateway stage paths are typically /dev, /prod, /staging, etc.
         normalized_path = path
@@ -2530,6 +2778,17 @@ def lambda_handler(event, context):
                     'workshop_name': WORKSHOP_NAME,
                     'region': REGION,
                     'message': 'Instance Manager API is healthy'
+                })
+            }
+
+        # Handle always-on tutorials endpoint (no authentication required)
+        if api_path == '/always-on-tutorials' and http_method == 'GET':
+            return {
+                'statusCode': 200,
+                'headers': get_cors_headers(),
+                'body': json.dumps({
+                    'success': True,
+                    'tutorials': get_always_on_tutorials()
                 })
             }
         

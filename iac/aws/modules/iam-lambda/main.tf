@@ -102,7 +102,8 @@ resource "aws_iam_role_policy" "lambda_iam_policy" {
           "ec2:CreateTags",
           "ec2:StopInstances",
           "ec2:StartInstances",
-          "ec2:DescribeAccountAttributes"
+          "ec2:DescribeAccountAttributes",
+          "ec2:CancelSpotInstanceRequests"
         ]
         Resource = "*"
       },

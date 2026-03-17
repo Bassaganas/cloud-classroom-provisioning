@@ -36,11 +36,12 @@ def cleanup_route53_record(instance_id: str, tags: dict, strict: bool = True, ma
 
     for attempt in range(1, max_retries + 1):
         try:
+            # BUGFIX: Use normalized domain (with trailing dot) for Route53 lookup
             response = route53.list_resource_record_sets(
                 HostedZoneId=HTTPS_HOSTED_ZONE_ID,
-                StartRecordName=domain_to_delete,
+                StartRecordName=normalized_domain,
                 StartRecordType='A',
-                MaxItems=10
+                MaxItems='10'
             )
 
             record_to_delete = None
@@ -53,12 +54,24 @@ def cleanup_route53_record(instance_id: str, tags: dict, strict: bool = True, ma
                 logger.info(f"Route53 record {domain_to_delete} not found (already deleted)")
                 return {'success': True, 'deleted': False, 'skipped': True, 'reason': 'already-deleted', 'attempts': attempt}
 
+            # BUGFIX: Construct ResourceRecordSet with only necessary fields for deletion
+            delete_record_set = {
+                'Name': record_to_delete['Name'],
+                'Type': record_to_delete['Type']
+            }
+            # Include TTL if present (required for non-alias records)
+            if 'TTL' in record_to_delete:
+                delete_record_set['TTL'] = record_to_delete['TTL']
+            # Include ResourceRecords if present (required for non-alias records)
+            if 'ResourceRecords' in record_to_delete:
+                delete_record_set['ResourceRecords'] = record_to_delete['ResourceRecords']
+            
             route53.change_resource_record_sets(
                 HostedZoneId=HTTPS_HOSTED_ZONE_ID,
                 ChangeBatch={
                     'Changes': [{
                         'Action': 'DELETE',
-                        'ResourceRecordSet': record_to_delete
+                        'ResourceRecordSet': delete_record_set
                     }]
                 }
             )
@@ -172,16 +185,14 @@ def lambda_handler(event, context):
                 except Exception as e:
                     logger.warning(f"Error getting instance tags for {instance_id}: {str(e)}")
                 
-                # Clean up Route53 record before termination
-                dns_cleanup = cleanup_route53_record(instance_id, instance_tags, strict=True)
+                # BUGFIX: Non-blocking Route53 cleanup - failure doesn't prevent deletion
+                # Log Route53 cleanup issues but continue with instance termination
+                dns_cleanup = cleanup_route53_record(instance_id, instance_tags, strict=False)
                 if not dns_cleanup.get('success'):
-                    error_msg = (
-                        f"{instance_id}: Route53 cleanup failed "
-                        f"(reason={dns_cleanup.get('reason')}, attempts={dns_cleanup.get('attempts')})"
+                    logger.warning(
+                        f"Route53 cleanup incomplete for {instance_id}: "
+                        f"reason={dns_cleanup.get('reason')}, attempts={dns_cleanup.get('attempts')}"
                     )
-                    errors.append(error_msg)
-                    logger.error(error_msg)
-                    continue
 
                 # Terminate the instance (EC2 can terminate running instances directly)
                 ec2_client.terminate_instances(InstanceIds=[instance_id])
@@ -201,8 +212,10 @@ def lambda_handler(event, context):
                 errors.append(error_msg)
                 logger.error(f"Error processing admin instance {instance_id}: {str(e)}")
         
+        # BUGFIX: Always return 200 (success) to prevent EventBridge from retrying
+        # Errors are logged but tracked separately
         result = {
-            'statusCode': 200 if len(errors) == 0 else 207,  # 207 = Multi-Status (some succeeded, some failed)
+            'statusCode': 200,  # Always return 200 for Lambda to be considered successful
             'body': json.dumps({
                 'message': f'Processed {len(instances_to_delete)} admin instance(s)',
                 'cleanup_interval_days': cleanup_interval_days,

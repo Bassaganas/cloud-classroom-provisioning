@@ -1,3 +1,6 @@
+# Allow patching the route53 client for tests
+def get_route53_client():
+    return boto3.client('route53', region_name=region)
 import boto3
 import json
 import logging
@@ -53,13 +56,72 @@ def get_timeout_parameters():
             'hard_terminate_timeout': 240
         }
 
+def terminate_instance_properly(instance_id: str, ec2_client, instance_details: Dict = None) -> bool:
+    """
+    Properly terminate an instance, handling spot instances by canceling their spot requests first.
+    
+    For spot instances with 'persistent' type, terminating without canceling the spot request
+    causes AWS to automatically launch replacement instances. This function:
+    1. Cancels spot requests for spot instances (with TerminateInstances=True)
+    2. Falls back to regular termination if spot request cancellation fails or instance is on-demand
+    
+    Args:
+        instance_id: The EC2 instance ID to terminate
+        ec2_client: The boto3 EC2 client
+        instance_details: Optional cached instance details to avoid redundant API calls
+    
+    Returns:
+        bool: True if termination was successful, False otherwise
+    """
+    try:
+        # Get instance details if not provided
+        if instance_details is None:
+            response = ec2_client.describe_instances(InstanceIds=[instance_id])
+            if not response['Reservations']:
+                logger.warning(f"Instance {instance_id} not found for termination")
+                return False
+            instance_details = response['Reservations'][0]['Instances'][0]
+        
+        lifecycle = instance_details.get('InstanceLifecycle', 'on-demand')
+        is_spot = lifecycle == 'spot'
+        
+        # For spot instances, cancel the spot request with TerminateInstances=True
+        # This properly cleans up both the instance and prevents AWS from auto-launching replacements
+        if is_spot:
+            spot_request_id = instance_details.get('SpotInstanceRequestId')
+            if spot_request_id:
+                logger.info(f"Terminating spot instance {instance_id} by canceling spot request {spot_request_id}")
+                try:
+                    ec2_client.cancel_spot_instance_requests(
+                        SpotInstanceRequestIds=[spot_request_id]
+                    )
+                    logger.info(f"Successfully canceled spot request {spot_request_id} for instance {instance_id}")
+                except ClientError as e:
+                    error_code = e.response['Error'].get('Code', 'Unknown')
+                    if error_code == 'InvalidSpotInstanceRequestID.NotFound':
+                        logger.warning(f"Spot request {spot_request_id} not found (may already be canceled), falling back to instance termination")
+                    else:
+                        logger.warning(f"Error canceling spot request {spot_request_id}: {str(e)}, falling back to instance termination")
+                    # Fall through to regular termination
+            else:
+                logger.warning(f"Spot instance {instance_id} has no SpotInstanceRequestId, falling back to regular termination")
+        
+        # Regular termination for on-demand or as fallback for spot instances
+        ec2_client.terminate_instances(InstanceIds=[instance_id])
+        logger.info(f"Terminated {'spot' if is_spot else 'on-demand'} instance {instance_id}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Error terminating instance {instance_id}: {str(e)}")
+        return False
+
 def _normalize_record_name(record_name: str) -> str:
     if not record_name:
         return ''
     return record_name if record_name.endswith('.') else f"{record_name}."
 
 
-def cleanup_route53_record(instance_id: str, tags: Dict, strict: bool = True, max_retries: int = 3) -> Dict:
+def cleanup_route53_record(instance_id: str, tags: Dict, strict: bool = True, max_retries: int = 3, route53_client=None) -> Dict:
     """Clean up Route53 A record for an instance.
 
     Returns:
@@ -72,16 +134,17 @@ def cleanup_route53_record(instance_id: str, tags: Dict, strict: bool = True, ma
     if not domain_to_delete:
         return {'success': True, 'deleted': False, 'skipped': True, 'reason': 'no-domain', 'attempts': 0}
 
-    route53 = boto3.client('route53', region_name=region)
+    route53 = route53_client if route53_client is not None else get_route53_client()
     normalized_domain = _normalize_record_name(domain_to_delete)
 
     for attempt in range(1, max_retries + 1):
         try:
+            # BUGFIX: Use normalized domain (with trailing dot) for Route53 lookup
             response = route53.list_resource_record_sets(
                 HostedZoneId=HTTPS_HOSTED_ZONE_ID,
-                StartRecordName=domain_to_delete,
+                StartRecordName=normalized_domain,
                 StartRecordType='A',
-                MaxItems=10
+                MaxItems='10'
             )
 
             record_to_delete = None
@@ -94,12 +157,24 @@ def cleanup_route53_record(instance_id: str, tags: Dict, strict: bool = True, ma
                 logger.info(f"Route53 record {domain_to_delete} not found (already deleted)")
                 return {'success': True, 'deleted': False, 'skipped': True, 'reason': 'already-deleted', 'attempts': attempt}
 
+            # BUGFIX: Construct ResourceRecordSet with only necessary fields for deletion
+            delete_record_set = {
+                'Name': record_to_delete['Name'],
+                'Type': record_to_delete['Type']
+            }
+            # Include TTL if present (required for non-alias records)
+            if 'TTL' in record_to_delete:
+                delete_record_set['TTL'] = record_to_delete['TTL']
+            # Include ResourceRecords if present (required for non-alias records)
+            if 'ResourceRecords' in record_to_delete:
+                delete_record_set['ResourceRecords'] = record_to_delete['ResourceRecords']
+            
             route53.change_resource_record_sets(
                 HostedZoneId=HTTPS_HOSTED_ZONE_ID,
                 ChangeBatch={
                     'Changes': [{
                         'Action': 'DELETE',
-                        'ResourceRecordSet': record_to_delete
+                        'ResourceRecordSet': delete_record_set
                     }]
                 }
             )
@@ -191,14 +266,13 @@ def process_instance(instance_id, ec2_client, ssm_client, table):
                     logger.warning(f"Instance {instance_id} is assigned but has exceeded hard terminate timeout. Forcing termination.")
                     # Notify the student (you could add notification logic here)
                 
-                # Clean up Route53 record before termination
-                dns_cleanup = cleanup_route53_record(instance_id, tags, strict=True)
-                if not dns_cleanup.get('success'):
-                    logger.error(f"Skipping hard termination for {instance_id}; Route53 cleanup failed: {dns_cleanup}")
-                    return {'instance_id': instance_id, 'status': 'error', 'error': f"Route53 cleanup failed: {dns_cleanup.get('reason')}"}
+                    # BUGFIX: Non-blocking Route53 cleanup - don't block hard termination
+                    dns_cleanup = cleanup_route53_record(instance_id, tags, strict=False)
+                    if not dns_cleanup.get('success'):
+                        logger.warning(f"Route53 cleanup incomplete for hard termination of {instance_id}: {dns_cleanup}")
 
-                # Terminate the instance regardless of state
-                ec2_client.terminate_instances(InstanceIds=[instance_id])
+                    # Terminate the instance regardless of state and Route53 cleanup outcome
+                terminate_instance_properly(instance_id, ec2_client, instance)
                 logger.info(f"Hard terminating instance {instance_id}")
                 waiter = ec2_client.get_waiter('instance_terminated')
                 waiter.wait(InstanceIds=[instance_id], WaiterConfig={'Delay': 5, 'MaxAttempts': 12})
@@ -246,13 +320,13 @@ def process_instance(instance_id, ec2_client, ssm_client, table):
             if is_spot:
                 logger.info(f"Terminating spot instance {instance_id} (exceeds STOP_TIMEOUT_MINUTES={STOP_TIMEOUT_MINUTES})")
                 try:
-                    # Clean up Route53 record before termination
-                    dns_cleanup = cleanup_route53_record(instance_id, tags, strict=True)
+                    # BUGFIX: Non-blocking Route53 cleanup - don't block instance termination
+                    dns_cleanup = cleanup_route53_record(instance_id, tags, strict=False)
                     if not dns_cleanup.get('success'):
-                        logger.error(f"Skipping spot termination for {instance_id}; Route53 cleanup failed: {dns_cleanup}")
-                        return {'instance_id': instance_id, 'status': 'error', 'error': f"Route53 cleanup failed: {dns_cleanup.get('reason')}"}
+                        logger.warning(f"Route53 cleanup incomplete for spot instance {instance_id}: {dns_cleanup}")
 
-                    ec2_client.terminate_instances(InstanceIds=[instance_id])
+                    # Properly terminate spot instance by canceling spot request first
+                    terminate_instance_properly(instance_id, ec2_client, instance)
                     logger.info(f"Initiated termination for spot instance {instance_id}")
                     
                     # Delete DynamoDB record if it exists
@@ -403,13 +477,13 @@ def process_instance(instance_id, ec2_client, ssm_client, table):
                                     f"(stopped for more than {terminate_threshold.total_seconds() / 60:.0f} minutes)"
                                 )
                                 try:
-                                    # Clean up Route53 record before termination
-                                    dns_cleanup = cleanup_route53_record(instance_id, tags, strict=True)
+                                    # BUG FIX: Non-blocking Route53 cleanup - don't block instance termination
+                                    dns_cleanup = cleanup_route53_record(instance_id, tags, strict=False)
                                     if not dns_cleanup.get('success'):
-                                        logger.error(f"Skipping termination for {instance_id}; Route53 cleanup failed: {dns_cleanup}")
-                                        return {'instance_id': instance_id, 'status': 'error', 'error': f"Route53 cleanup failed: {dns_cleanup.get('reason')}"}
+                                        logger.warning(f"Route53 cleanup incomplete for stopped instance {instance_id}: {dns_cleanup}")
 
-                                    ec2_client.terminate_instances(InstanceIds=[instance_id])
+                                    # Properly terminate by handling spot instances
+                                    terminate_instance_properly(instance_id, ec2_client, instance)
                                     logger.info(f"Terminating instance {instance_id}")
                                     waiter = ec2_client.get_waiter('instance_terminated')
                                     waiter.wait(InstanceIds=[instance_id], WaiterConfig={'Delay': 5, 'MaxAttempts': 12})
@@ -493,14 +567,13 @@ def process_admin_instance(instance_id, ec2_client, table):
         if age_days >= cleanup_days:
             logger.info(f"Admin instance {instance_id} has expired (age={age_days} >= cleanup_days={cleanup_days}). Deleting...")
             try:
-                # Clean up Route53 record before termination
-                dns_cleanup = cleanup_route53_record(instance_id, tags, strict=True)
+                # BUG FIX: Non-blocking Route53 cleanup - don't block admin instance deletion
+                dns_cleanup = cleanup_route53_record(instance_id, tags, strict=False)
                 if not dns_cleanup.get('success'):
-                    logger.error(f"Skipping admin deletion for {instance_id}; Route53 cleanup failed: {dns_cleanup}")
-                    return {'instance_id': instance_id, 'status': 'error', 'error': f"Route53 cleanup failed: {dns_cleanup.get('reason')}"}
+                    logger.warning(f"Route53 cleanup incomplete for expired admin instance {instance_id}: {dns_cleanup}")
 
-                # Terminate the instance
-                ec2_client.terminate_instances(InstanceIds=[instance_id])
+                # Properly terminate by handling spot instances
+                terminate_instance_properly(instance_id, ec2_client, instance)
                 logger.info(f"Terminated expired admin instance {instance_id}")
                 
                 # Wait for termination (with timeout)
