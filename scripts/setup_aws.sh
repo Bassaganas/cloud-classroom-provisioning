@@ -465,6 +465,29 @@ aws_region         = "$REGION"
 state_bucket_name  = "$BACKEND_BUCKET"
 dynamodb_table_name = "$BACKEND_TABLE"
 EOF
+
+# Make backend bootstrap idempotent: import existing resources before apply
+BUCKET_EXISTS=false
+TABLE_EXISTS=false
+
+if aws s3api head-bucket --bucket "$BACKEND_BUCKET" >/dev/null 2>&1; then
+  BUCKET_EXISTS=true
+  echo "Detected existing backend bucket: $BACKEND_BUCKET"
+fi
+
+if aws dynamodb describe-table --table-name "$BACKEND_TABLE" --region "$REGION" >/dev/null 2>&1; then
+  TABLE_EXISTS=true
+  echo "Detected existing backend lock table: $BACKEND_TABLE"
+fi
+
+if [ "$BUCKET_EXISTS" = true ]; then
+  terraform import aws_s3_bucket.terraform_state "$BACKEND_BUCKET" >/dev/null 2>&1 || true
+fi
+
+if [ "$TABLE_EXISTS" = true ]; then
+  terraform import aws_dynamodb_table.terraform_locks "$BACKEND_TABLE" >/dev/null 2>&1 || true
+fi
+
 terraform apply -auto-approve
 STATE_BUCKET=$(terraform output -raw state_bucket_name)
 STATE_TABLE=$(terraform output -raw dynamodb_table_name)
