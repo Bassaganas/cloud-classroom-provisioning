@@ -23,6 +23,8 @@ import {
   whenISelectFirstWorkshopFromSelectorUsingKeyboard,
 } from './bdd/steps.js'
 
+const isDeployedRun = !!process.env.E2E_BASE_URL
+
 test.describe('Tutorial Instance Manager critical workflows', () => {
   test('1) create tutorial instance and initial instances', async ({ page }) => {
     await givenIAmLoggedIn(page)
@@ -76,6 +78,8 @@ test.describe('Tutorial Instance Manager critical workflows', () => {
   })
 
   test('5) view tutorial dashboard with all tutorial instances', async ({ page }) => {
+    test.skip(isDeployedRun, 'Depends on seeded tutorial IDs that are only guaranteed in mock mode')
+
     await givenIAmLoggedIn(page)
 
     const expectedCount = await whenIGotoTutorialDashboardAndCaptureExpectedCount(page, 'fellowship', 'tut1')
@@ -84,6 +88,8 @@ test.describe('Tutorial Instance Manager critical workflows', () => {
   })
 
   test('11) testus patronus machines fallback to public IP links when HTTPS URL is unavailable', async ({ page }) => {
+    test.skip(isDeployedRun, 'Depends on seeded tutorial IDs that are only guaranteed in mock mode')
+
     await givenIAmLoggedIn(page)
 
     await whenIGotoTutorialPage(page, 'testus_patronus', 'tutorial_wetest_athenes')
@@ -106,6 +112,8 @@ test.describe('Tutorial Instance Manager critical workflows', () => {
   })
 
   test('8) FAB button in tutorial dashboard creates new instances', async ({ page }) => {
+    test.skip(isDeployedRun, 'Provisioning latency is variable on deployed environments')
+
     await givenIAmLoggedIn(page)
 
     const sessionId = `pw-fab-inst-${Date.now()}`
@@ -122,6 +130,8 @@ test.describe('Tutorial Instance Manager critical workflows', () => {
   })
 
   test('9) test tutorial enforces Spot when creating instances', async ({ page }) => {
+    test.skip(isDeployedRun, 'Provisioning latency is variable on deployed environments')
+
     await givenIAmLoggedIn(page)
 
     const sessionId = `pw-spot-${Date.now()}`

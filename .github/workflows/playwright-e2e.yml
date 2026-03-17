@@ -22,10 +22,27 @@ on:
         required: false
         type: string
         default: 'https://ec2-management-dev.testingfantasy.com'
+      aws_environment:
+        description: 'AWS environment to resolve instance manager password secret when running against deployed URL'
+        required: false
+        type: choice
+        default: dev
+        options:
+          - dev
+          - staging
+          - prod
+      password_secret_name:
+        description: 'Optional override for Secrets Manager name containing the EC2 Manager password'
+        required: false
+        type: string
 
 permissions:
   contents: read
   pull-requests: write
+  id-token: write
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'eu-west-1' }}
 
 jobs:
   e2e:
@@ -48,6 +65,32 @@ jobs:
         with:
           python-version: '3.11'
 
+      - name: Configure AWS credentials (OIDC)
+        if: ${{ inputs.test_url != '' }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve EC2 manager password from Secrets Manager
+        if: ${{ inputs.test_url != '' }}
+        run: |
+          SECRET_NAME="${{ inputs.password_secret_name }}"
+          if [ -z "$SECRET_NAME" ]; then
+            TARGET_ENV="${{ inputs.aws_environment }}"
+            SECRET_NAME="classroom/shared/${TARGET_ENV}/instance-manager/password"
+          fi
+
+          echo "Using password secret: $SECRET_NAME"
+          SECRET_VALUE=$(aws secretsmanager get-secret-value --secret-id "$SECRET_NAME" --query SecretString --output text)
+          if [ -z "$SECRET_VALUE" ] || [ "$SECRET_VALUE" = "None" ]; then
+            echo "Failed to resolve EC2 manager password from secret: $SECRET_NAME"
+            exit 1
+          fi
+
+          echo "::add-mask::$SECRET_VALUE"
+          echo "E2E_INSTANCE_MANAGER_PASSWORD=$SECRET_VALUE" >> "$GITHUB_ENV"
+
       - name: Install frontend dependencies
         working-directory: frontend/ec2-manager
         run: npm ci
@@ -63,7 +106,7 @@ jobs:
             cd frontend/ec2-manager
             TEST_URL="${{ inputs.test_url }}"
             TEST_URL="${TEST_URL%/}"
-            VITE_API_URL="${TEST_URL}/api" npx playwright test tests/e2e/tutorial-instance-manager.spec.js --reporter=list,html --output=test-results
+            E2E_BASE_URL="$TEST_URL" E2E_INSTANCE_MANAGER_PASSWORD="$E2E_INSTANCE_MANAGER_PASSWORD" npx playwright test tests/e2e/tutorial-instance-manager.spec.js --reporter=list,html --output=test-results
             cd ../..
           else
             echo "Running tests in test mode (mock server)"

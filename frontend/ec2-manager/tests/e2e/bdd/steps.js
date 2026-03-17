@@ -7,7 +7,7 @@ import { CreateInstanceDialogPage } from '../pom/create-instance-dialog.page.js'
 import { TutorialOverviewPage } from '../pom/tutorial-overview.page.js'
 import { WorkshopOverviewPage } from '../pom/workshop-overview.page.js'
 
-const PASSWORD = 'test123'
+const PASSWORD = process.env.E2E_INSTANCE_MANAGER_PASSWORD || 'test123'
 
 function toNumber(value) {
   if (value === null || value === undefined) return null
