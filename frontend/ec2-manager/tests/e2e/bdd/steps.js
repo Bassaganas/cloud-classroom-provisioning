@@ -149,11 +149,12 @@ export async function whenIGotoTutorialPage(page, workshopSlug, tutorialId) {
 
 export async function whenIGotoTutorialDashboardAndCaptureExpectedCount(page, workshopSlug, tutorialId) {
   const tutorialOverviewPage = new TutorialOverviewPage(page)
+  const sessionResponsePromise = tutorialOverviewPage.waitForTutorialSessionResponse(tutorialId)
+
   await tutorialOverviewPage.gotoTutorialPath(`/tutorial/${workshopSlug}/${tutorialId}`)
+  const sessionResponse = await sessionResponsePromise
   await tutorialOverviewPage.expectTableVisible()
-  
-  // Wait for the API response and extract instance count
-  const sessionResponse = await tutorialOverviewPage.waitForTutorialSessionResponse(tutorialId)
+
   const instances = sessionResponse.instances || []
   return instances.length
 }
