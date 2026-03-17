@@ -121,7 +121,7 @@ resource "aws_secretsmanager_secret" "instance_manager_password" {
 
   name        = "classroom/${var.workshop_name}/${var.environment}/instance-manager/password"
   description = "Password for EC2 Instance Manager authentication"
-  
+
   # Allow immediate deletion for clean redeployment
   recovery_window_in_days = 0
 

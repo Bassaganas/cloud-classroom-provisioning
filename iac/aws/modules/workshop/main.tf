@@ -187,9 +187,9 @@ module "cloudfront_dify_jira" {
 
 # S3 Module - Workshop setup script deployment (for fellowship and testus_patronus)
 module "s3_sut" {
-  count = (var.workshop_name == "fellowship" || var.workshop_name == "fellowship-of-the-build" || var.workshop_name == "testus_patronus") ? 1 : 0
+  count  = (var.workshop_name == "fellowship" || var.workshop_name == "fellowship-of-the-build" || var.workshop_name == "testus_patronus") ? 1 : 0
   source = "../s3-sut"
-  
+
   environment   = var.environment
   owner         = var.owner
   workshop_name = var.workshop_name
@@ -199,7 +199,7 @@ module "s3_sut" {
 # SSM Parameter for SUT bucket name (for fellowship and testus_patronus)
 resource "aws_ssm_parameter" "sut_bucket_name" {
   count = (var.workshop_name == "fellowship" || var.workshop_name == "fellowship-of-the-build" || var.workshop_name == "testus_patronus") ? 1 : 0
-  
+
   name        = var.workshop_name == "testus_patronus" ? "/classroom/testus_patronus/sut-bucket" : "/classroom/fellowship/sut-bucket"
   description = "Name of the S3 bucket containing ${var.workshop_name} setup script files"
   type        = "String"
@@ -234,13 +234,13 @@ resource "aws_iam_role_policy" "ec2_sut_access" {
     Version = "2012-10-17"
     Statement = [
       {
-        Effect = "Allow"
-        Action = ["s3:ListBucket"]
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket"]
         Resource = module.s3_sut[0].bucket_arn
       },
       {
-        Effect = "Allow"
-        Action = ["s3:GetObject"]
+        Effect   = "Allow"
+        Action   = ["s3:GetObject"]
         Resource = "${module.s3_sut[0].bucket_arn}/*"
       }
     ]

@@ -41,4 +41,4 @@ variable "azure_location" {
   description = "The Azure location to deploy to"
   type        = string
   default     = "westeurope"
-} 
+}

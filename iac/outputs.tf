@@ -36,4 +36,4 @@ output "storage_account_id" {
 output "key_vault_id" {
   description = "ID of the Key Vault (Azure only)"
   value       = try(module.azure[0].key_vault_id, null)
-} 
+}
