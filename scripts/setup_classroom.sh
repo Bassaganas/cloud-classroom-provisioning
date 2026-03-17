@@ -162,7 +162,13 @@ else
   if [ "$WORKSHOP_ROOT" = "testus_patronus" ] && [ -d "iac/aws/workshops/$CLASSROOM_NAME" ]; then
     WORKSHOP_ROOT="$CLASSROOM_NAME"
   fi
-  
+
+  # Always package Lambda before validation, even in --validate-only mode
+  if [ "$VALIDATE_ONLY" = true ] && [ "$SKIP_PACKAGING" = false ]; then
+    echo "Ensuring Lambda packages exist for validation..."
+    ./scripts/package_lambda.sh --cloud aws
+  fi
+
   # Call setup_aws.sh with all necessary parameters
   AWS_ARGS=("$CLASSROOM_NAME" "$REGION" "$ACTION")
   if [ "$WITH_POOL" = true ]; then

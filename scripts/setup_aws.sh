@@ -482,15 +482,19 @@ if [ "$SKIP_PACKAGING" = false ]; then
   ./scripts/package_lambda.sh --cloud aws
 else
   echo "Skipping Lambda function packaging (--skip-packaging specified)"
-  
   # Check if packages exist
   if [ ! -d "${ROOT_DIR}/functions/packages" ] || [ -z "$(ls -A "${ROOT_DIR}/functions/packages" 2>/dev/null)" ]; then
     echo "Warning: No Lambda packages found in functions/packages/"
     echo "Run without --skip-packaging to create packages first"
     exit 1
   fi
-  
   echo "Using existing Lambda packages from functions/packages/"
+fi
+
+# Always package Lambda before validation, even in --validate-only mode
+if [ "$VALIDATE_ONLY" = true ] && [ "$SKIP_PACKAGING" = false ]; then
+  echo "Ensuring Lambda packages exist for validation..."
+  ./scripts/package_lambda.sh --cloud aws
 fi
 
 # Configure root module backend and apply
