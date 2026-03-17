@@ -150,6 +150,8 @@ export const api = {
     body: JSON.stringify(data),
   }),
 
+  alwaysOnTutorials: () => apiRequest('/always-on-tutorials'),
+
   // Workshop templates (accepts optional password parameter for auth check)
   getWorkshopTemplates: (password) => apiRequest('/templates', password ? { password } : {}),
 

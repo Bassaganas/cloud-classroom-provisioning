@@ -125,6 +125,11 @@ function TutorialDashboard() {
   const [selectedIds, setSelectedIds] = useState([])
   const [batchDeleting, setBatchDeleting] = useState(false)
 
+  const [showExtendDaysModal, setShowExtendDaysModal] = useState(false)
+  const [extendDaysInstance, setExtendDaysInstance] = useState(null)
+  const [extendDaysValue, setExtendDaysValue] = useState(7)
+  const [updatingCleanupDays, setUpdatingCleanupDays] = useState(false)
+
   const [createFormData, setCreateFormData] = useState({
     type: 'pool',
     count: 1,
@@ -331,6 +336,34 @@ function TutorialDashboard() {
       }
     } catch (error) {
       showToast(error.message, 'error')
+    }
+  }
+
+  const handleExtendDaysClick = (instance) => {
+    setExtendDaysInstance(instance)
+    setExtendDaysValue(instance.cleanup_days_remaining + Math.ceil((new Date(instance.launch_time).getTime() - Date.now()) / (1000 * 60 * 60 * 24)) || 7)
+    setShowExtendDaysModal(true)
+  }
+
+  const handleExtendDaysSave = async () => {
+    if (!extendDaysInstance) return
+
+    try {
+      setUpdatingCleanupDays(true)
+      const response = await api.updateCleanupDays(extendDaysInstance.instance_id, parseInt(extendDaysValue))
+      
+      if (response.success) {
+        showToast(`Cleanup days updated to ${extendDaysValue}`, 'success')
+        setShowExtendDaysModal(false)
+        setExtendDaysInstance(null)
+        await loadSession()
+      } else {
+        showToast(response.error || 'Failed to update cleanup days', 'error')
+      }
+    } catch (error) {
+      showToast(error.message, 'error')
+    } finally {
+      setUpdatingCleanupDays(false)
     }
   }
 
@@ -653,6 +686,7 @@ function TutorialDashboard() {
                   <HeaderSort label="State" sortKey="state" sortConfig={sortConfig} onSort={toggleSort} />
                   <HeaderSort label="Endpoint" sortKey="endpoint" sortConfig={sortConfig} onSort={toggleSort} />
                   <HeaderSort label="Assigned" sortKey="assigned_to" sortConfig={sortConfig} onSort={toggleSort} />
+                  <TableCell>Remaining Days</TableCell>
                   <TableCell>Hourly (Est.)</TableCell>
                   <TableCell>Cost (Est./Actual)</TableCell>
                   {showHealthColumn && <HeaderSort label="Health" sortKey="health_status" sortConfig={sortConfig} onSort={toggleSort} />}
@@ -662,13 +696,13 @@ function TutorialDashboard() {
               <TableBody>
                 {loading ? (
                   <TableRow>
-                    <TableCell colSpan={showHealthColumn ? 11 : 10} align="center" sx={{ py: 6 }}>
+                    <TableCell colSpan={showHealthColumn ? 12 : 11} align="center" sx={{ py: 6 }}>
                       <CircularProgress size={24} />
                     </TableCell>
                   </TableRow>
                 ) : sortedInstances.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={showHealthColumn ? 11 : 10} align="center" sx={{ py: 6 }}>
+                    <TableCell colSpan={showHealthColumn ? 12 : 11} align="center" sx={{ py: 6 }}>
                       No instances found
                     </TableCell>
                   </TableRow>
@@ -707,6 +741,26 @@ function TutorialDashboard() {
                           ) : 'Pending...'}
                         </TableCell>
                         <TableCell>{instance.assigned_to || '-'}</TableCell>
+                        <TableCell>
+                          {type === 'admin' && instance.cleanup_days_remaining !== null ? (
+                            <Stack spacing={0.5}>
+                              <Typography variant="body2" fontWeight={600}>{instance.cleanup_days_remaining} days</Typography>
+                              {type === 'admin' && instance.state === 'running' && (
+                                <Button
+                                  size="small"
+                                  variant="outlined"
+                                  onClick={() => handleExtendDaysClick(instance)}
+                                  disabled={updatingCleanupDays}
+                                  sx={{ fontSize: '0.7rem', padding: '2px 6px' }}
+                                >
+                                  Extend
+                                </Button>
+                              )}
+                            </Stack>
+                          ) : (
+                            '-'
+                          )}
+                        </TableCell>
                         <TableCell>{formatUsd(costMeta.hourlyEstimate)}</TableCell>
                         <TableCell>
                           <Typography variant="caption" display="block">Est: {formatUsd(costMeta.estimatedCost, 2)}</Typography>
@@ -851,6 +905,42 @@ function TutorialDashboard() {
             </Button>
           </DialogActions>
         </Box>
+      </Dialog>
+
+      <Dialog open={showExtendDaysModal} onClose={() => setShowExtendDaysModal(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Extend Cleanup Days</DialogTitle>
+        <DialogContent>
+          <Stack spacing={2} sx={{ pt: 2 }}>
+            <Typography variant="body2">
+              Instance: <strong>{extendDaysInstance?.instance_id}</strong>
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Current cleanup days configured: {extendDaysInstance?.cleanup_days || 7} days
+            </Typography>
+            <TextField
+              label="New cleanup days"
+              type="number"
+              inputProps={{ min: 1, max: 365 }}
+              value={extendDaysValue}
+              onChange={(e) => setExtendDaysValue(e.target.value)}
+              fullWidth
+              disabled={updatingCleanupDays}
+              helperText="Set between 1 and 365 days. Admin instances will be automatically deleted after this period."
+            />
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setShowExtendDaysModal(false)} disabled={updatingCleanupDays}>
+            Cancel
+          </Button>
+          <Button
+            variant="contained"
+            onClick={handleExtendDaysSave}
+            disabled={updatingCleanupDays || !extendDaysValue || extendDaysValue < 1 || extendDaysValue > 365}
+          >
+            {updatingCleanupDays ? 'Updating...' : 'Update'}
+          </Button>
+        </DialogActions>
       </Dialog>
 
       <Dialog open={showDeleteConfirm} onClose={() => setShowDeleteConfirm(false)} maxWidth="sm" fullWidth>

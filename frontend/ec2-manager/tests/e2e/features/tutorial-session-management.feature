@@ -53,3 +53,23 @@ Feature: Tutorial session management workflows
     And I create 3 new instances
     Then I should see "Instances (4)"
     And the instances table should contain 4 rows
+  Scenario: Bulk delete multiple instances from tutorial dashboard
+    When I create a test tutorial session with 3 pool and 2 admin
+    And I open the tutorial dashboard for that session
+    Then I should see "Instances (5)"
+    When I select all instances in the table
+    And I click the "Delete Selected (5)" button
+    Then I should see a confirmation dialog for bulk deletion
+    When I confirm the bulk deletion
+    Then all instances should be deleted
+    And I should see "Instances (0)"
+
+  Scenario: Cancel bulk delete operation
+    When I create a test tutorial session with 2 pool and 1 admin
+    And I open the tutorial dashboard for that session
+    Then I should see "Instances (3)"
+    When I select all instances in the table
+    And I click the "Delete Selected (3)" button
+    And I cancel the deletion dialog
+    Then all instances should still exist
+    And I should still see "Instances (3)"
