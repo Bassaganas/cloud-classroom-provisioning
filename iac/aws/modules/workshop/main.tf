@@ -232,10 +232,17 @@ resource "aws_iam_role_policy" "ec2_sut_access" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = ["s3:GetObject"]
-      Resource = "${module.s3_sut[0].bucket_arn}/*"
-    }]
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = ["s3:ListBucket"]
+        Resource = module.s3_sut[0].bucket_arn
+      },
+      {
+        Effect = "Allow"
+        Action = ["s3:GetObject"]
+        Resource = "${module.s3_sut[0].bucket_arn}/*"
+      }
+    ]
   })
 }

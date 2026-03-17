@@ -314,8 +314,12 @@ upload_sut_to_s3() {
     fi
     
     if [ ! -f "$SETUP_SCRIPT" ]; then
-      echo "  ✗ Error: Setup script not found at $SETUP_SCRIPT"
-      echo "  Expected location: $SETUP_SCRIPT"
+      if [ "$WORKSHOP" = "fellowship" ] || [ "$WORKSHOP" = "fellowship-of-the-build" ]; then
+        echo "  ℹ Fellowship setup script is managed by the external SUT repository; skipping local upload"
+      else
+        echo "  ✗ Error: Setup script not found at $SETUP_SCRIPT"
+        echo "  Expected location: $SETUP_SCRIPT"
+      fi
       continue
     fi
     
