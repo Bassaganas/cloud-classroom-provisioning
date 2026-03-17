@@ -1,0 +1,185 @@
+name: Deploy AWS Classroom
+
+on:
+  push:
+    branches: ['**']
+    paths:
+      - 'iac/**'
+      - 'functions/**'
+      - 'scripts/setup_aws.sh'
+      - 'scripts/setup_classroom.sh'
+      - 'scripts/package_lambda.sh'
+      - 'scripts/build_frontend.sh'
+      - '.github/workflows/deploy-aws.yml'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Target environment'
+        required: true
+        type: choice
+        default: staging
+        options:
+          - dev
+          - staging
+          - prod
+      action:
+        description: 'Create or destroy infrastructure'
+        required: true
+        type: choice
+        default: create
+        options:
+          - create
+          - destroy
+      workshop:
+        description: 'Workshop to deploy'
+        required: true
+        type: choice
+        default: fellowship
+        options:
+          - fellowship
+          - testus_patronus
+      classroom_name:
+        description: 'Classroom name override (optional)'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: ${{ vars.AWS_REGION || 'eu-west-1' }}
+
+jobs:
+  branch_smoke:
+    if: github.event_name == 'push' && github.ref_name != 'main'
+    runs-on: ubuntu-latest
+    environment: dev
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.6
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: OIDC identity smoke test
+        run: aws sts get-caller-identity
+
+      - name: Validate deploy scripts syntax
+        run: |
+          bash -n scripts/setup_classroom.sh
+          bash -n scripts/setup_aws.sh
+
+  deploy_dev:
+    if: github.event_name == 'push' && github.ref_name == 'main'
+    runs-on: ubuntu-latest
+    environment: dev
+    concurrency:
+      group: deploy-aws-dev
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.6
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy dev environment
+        env:
+          CLASSROOM_NAME: ${{ vars.CLASSROOM_NAME || 'fellowship-dev' }}
+          WORKSHOP: ${{ vars.WORKSHOP || 'fellowship' }}
+        run: |
+          ./scripts/setup_classroom.sh \
+            --name "$CLASSROOM_NAME" \
+            --cloud aws \
+            --region "${AWS_REGION}" \
+            --environment dev \
+            --workshop "$WORKSHOP"
+
+  deploy_manual:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    concurrency:
+      group: deploy-aws-${{ inputs.environment }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.6
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Run deployment action
+        env:
+          CLASSROOM_NAME: ${{ inputs.classroom_name != '' && inputs.classroom_name || vars.CLASSROOM_NAME || 'fellowship-manual' }}
+        run: |
+          EXTRA_FLAGS=""
+          if [ "${{ inputs.action }}" = "destroy" ]; then
+            EXTRA_FLAGS="--destroy"
+          fi
+
+          ./scripts/setup_classroom.sh \
+            --name "$CLASSROOM_NAME" \
+            --cloud aws \
+            --region "${AWS_REGION}" \
+            --environment "${{ inputs.environment }}" \
+            --workshop "${{ inputs.workshop }}" \
+            $EXTRA_FLAGS
