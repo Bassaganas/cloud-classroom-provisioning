@@ -70,7 +70,7 @@ echo "[SETUP] Waiting for API server to be ready..."
 max_retries=30
 retry_count=0
 while ! curl -s "$API_URL/templates" > /dev/null 2>&1; do
-    ((retry_count++))
+    retry_count=$((retry_count + 1))
     if [ $retry_count -ge $max_retries ]; then
         echo "[SETUP] ✗ Server failed to start. Check /tmp/mock_api_server.log"
         cat /tmp/mock_api_server.log

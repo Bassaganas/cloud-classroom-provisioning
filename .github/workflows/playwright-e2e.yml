@@ -73,6 +73,7 @@ jobs:
         with:
           name: playwright-report
           path: frontend/ec2-manager/playwright-report
+          if-no-files-found: ignore
           retention-days: 14
 
       - name: Upload Playwright raw results
@@ -81,6 +82,7 @@ jobs:
         with:
           name: playwright-test-results
           path: frontend/ec2-manager/test-results
+          if-no-files-found: ignore
           retention-days: 14
 
       - name: Upload mock API server logs
@@ -90,7 +92,16 @@ jobs:
           name: mock-api-server-log
           path: /tmp/mock_api_server.log
           retention-days: 7
-
+      
+      - name: Print mock API server log on failure
+        if: failure()
+        run: |
+          if [ -f /tmp/mock_api_server.log ]; then
+            echo "===== /tmp/mock_api_server.log ====="
+            cat /tmp/mock_api_server.log
+          else
+            echo "No mock API server log file found"
+          fi
       - name: Add run summary
         if: always()
         run: |
