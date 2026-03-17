@@ -18,9 +18,10 @@ on:
   workflow_dispatch:
     inputs:
       test_url:
-        description: 'Optional: Lambda URL to test against (e.g., https://example.lambda-url.eu-west-1.on.aws). If empty, runs in test mode.'
+        description: 'Optional: deployed EC2 Manager base URL (e.g., https://ec2-management-dev.testingfantasy.com). If empty, runs in test mode.'
         required: false
         type: string
+        default: 'https://ec2-management-dev.testingfantasy.com'
 
 permissions:
   contents: read
@@ -120,9 +121,9 @@ jobs:
             echo ""
             echo "### How to run tests against deployed EC2 Manager:"
             echo ""
-            echo "1. After \`deploy-aws.yml\` completes, get the instance_manager_lambda_url output"
-            echo "2. Run this workflow with workflow_dispatch and provide the Lambda URL:"
-            echo "   - URL example: \`https://abc123.lambda-url.eu-west-1.on.aws\`"
+            echo "1. Ensure EC2 Manager is deployed and reachable"
+            echo "2. Run this workflow with workflow_dispatch and provide the deployed base URL:"
+            echo "   - URL example: \`https://ec2-management-dev.testingfantasy.com\`"
             echo "3. Tests will run against the deployed instance"
             echo ""
             echo "Download artifacts from this workflow run to open the HTML report locally."
