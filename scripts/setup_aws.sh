@@ -8,7 +8,7 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # Function to display usage
 usage() {
-  echo "Usage: $0 <classroom-name> <region> [create|destroy] [--environment <dev|staging|prod>] [--workshop <name>] [--with-pool] [--pool-size <number>] [--skip-packaging] [--only-common|--only-workshop]"
+  echo "Usage: $0 <classroom-name> <region> [create|destroy] [--environment <dev|staging|prod>] [--workshop <name>] [--with-pool] [--pool-size <number>] [--skip-packaging] [--only-common|--only-workshop] [--validate-only]"
   echo ""
   echo "Arguments:"
   echo "  classroom-name    Name of the classroom (required)"
@@ -23,6 +23,7 @@ usage() {
   echo "  --skip-packaging Skip Lambda function packaging (use existing packages)"
   echo "  --only-common    Apply/destroy only the common stack"
   echo "  --only-workshop  Apply/destroy only the workshop stack"
+  echo "  --validate-only  Validate deployment without making changes"
   echo "  --help           Show this help message"
   echo ""
   echo "Note: EC2 instances are normally created dynamically via the instance_manager Lambda function."
@@ -351,6 +352,7 @@ WORKSHOP_ROOT="testus_patronus"
 ENVIRONMENT="dev"
 ONLY_COMMON=false
 ONLY_WORKSHOP=false
+VALIDATE_ONLY=false
 
 # Shift past the required arguments
 shift 3 2>/dev/null || true
@@ -390,6 +392,10 @@ while [[ $# -gt 0 ]]; do
     --workshop)
       WORKSHOP_ROOT="$2"
       shift 2
+      ;;
+    --validate-only)
+      VALIDATE_ONLY=true
+      shift
       ;;
     --help)
       usage
@@ -537,6 +543,24 @@ if [ "$ACTION" = "destroy" ]; then
   fi
   exit 0
 else
+  # Run plan to show what will be applied
+  echo "Running Terraform plan..."
+  if [ -n "$TARGET_FLAGS" ]; then
+    terraform plan -no-color $TARGET_FLAGS
+  else
+    terraform plan -no-color
+  fi
+
+  # If validation only, exit here
+  if [ "$VALIDATE_ONLY" = true ]; then
+    echo ""
+    echo "✓ Validation completed successfully!"
+    echo "Terraform plan shows the planned changes above."
+    echo "Run without --validate-only to apply these changes."
+    exit 0
+  fi
+
+  # Apply the plan
   if [ -n "$TARGET_FLAGS" ]; then
     terraform apply -auto-approve $TARGET_FLAGS
   else

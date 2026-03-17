@@ -5,7 +5,7 @@ set -e
 
 # Function to display usage
 usage() {
-  echo "Usage: $0 --name <classroom-name> --cloud [aws|azure] [--region <aws-region>] [--location <azure-location>] [--destroy] [--parallelism <number>] [--force-unlock] [--setup-rbac] [--workshop <name>] [--environment <dev|staging|prod>] [--skip-packaging] [--only-common|--only-workshop]"
+  echo "Usage: $0 --name <classroom-name> --cloud [aws|azure] [--region <aws-region>] [--location <azure-location>] [--destroy] [--parallelism <number>] [--force-unlock] [--setup-rbac] [--workshop <name>] [--environment <dev|staging|prod>] [--skip-packaging] [--only-common|--only-workshop] [--validate-only]"
   echo ""
   echo "Options:"
   echo "  --name         Name of the classroom (required)"
@@ -23,6 +23,7 @@ usage() {
   echo "  --skip-packaging Skip Lambda packaging (use existing packages, AWS only)"
   echo "  --only-common  Apply/destroy only the common stack (AWS only)"
   echo "  --only-workshop Apply/destroy only the workshop stack (AWS only)"
+  echo "  --validate-only Validate deployment without making changes"
   exit 1
 }
 
@@ -42,6 +43,7 @@ SKIP_PACKAGING=false
 ENVIRONMENT="dev"
 ONLY_COMMON=false
 ONLY_WORKSHOP=false
+VALIDATE_ONLY=false
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -106,6 +108,10 @@ while [[ $# -gt 0 ]]; do
       ONLY_WORKSHOP=true
       shift
       ;;
+    --validate-only)
+      VALIDATE_ONLY=true
+      shift
+      ;;
     --help)
       usage
       ;;
@@ -149,7 +155,8 @@ if [ "$CLOUD_PROVIDER" = "azure" ]; then
     --action "${ACTION:-create}" \
     --parallelism "${PARALLELISM:-4}" \
     ${FORCE_UNLOCK:+"--force-unlock"} \
-    ${SETUP_RBAC:+"--setup-rbac"}
+    ${SETUP_RBAC:+"--setup-rbac"} \
+    ${VALIDATE_ONLY:+"--validate-only"}
 else
   # Infer workshop name from classroom name if not explicitly set and a matching folder exists
   if [ "$WORKSHOP_ROOT" = "testus_patronus" ] && [ -d "iac/aws/workshops/$CLASSROOM_NAME" ]; then
@@ -175,6 +182,9 @@ else
   fi
   if [ "$ONLY_WORKSHOP" = true ]; then
     AWS_ARGS+=("--only-workshop")
+  fi
+  if [ "$VALIDATE_ONLY" = true ]; then
+    AWS_ARGS+=("--validate-only")
   fi
   ./scripts/setup_aws.sh "${AWS_ARGS[@]}"
 fi

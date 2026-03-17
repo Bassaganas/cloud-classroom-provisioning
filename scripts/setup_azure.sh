@@ -5,7 +5,7 @@ set -e
 
 # Function to display usage
 usage() {
-  echo "Usage: $0 --name <classroom-name> --location <azure-location> --action [create|destroy] [--parallelism <number>] [--force-unlock] [--setup-rbac]"
+  echo "Usage: $0 --name <classroom-name> --location <azure-location> --action [create|destroy] [--parallelism <number>] [--force-unlock] [--setup-rbac] [--validate-only]"
   exit 1
 }
 
@@ -41,6 +41,7 @@ run_terraform() {
   local action=$1
   local classroom_name=$2
   local parallelism=$3
+  local validate_only=$4
   
   # First setup state backend
   echo "Setting up Terraform state backend..."
@@ -65,7 +66,21 @@ run_terraform() {
     -backend-config="access_key=$STORAGE_KEY" \
     -backend=true
   
-  # Run Terraform
+  # Run Terraform plan first
+  echo "Running Terraform plan..."
+  terraform plan -no-color -parallelism="$parallelism"
+  
+  # If validation only, exit here
+  if [ "$validate_only" = true ]; then
+    echo ""
+    echo "✓ Validation completed successfully!"
+    echo "Terraform plan shows the planned changes above."
+    echo "Run without --validate-only to apply these changes."
+    cd - > /dev/null
+    return 0
+  fi
+  
+  # Run Terraform apply/destroy
   if [ "$action" = "destroy" ]; then
     terraform destroy -auto-approve -parallelism="$parallelism"
   else
@@ -155,6 +170,10 @@ while [[ $# -gt 0 ]]; do
       SETUP_RBAC=true
       shift
       ;;
+    --validate-only)
+      VALIDATE_ONLY=true
+      shift
+      ;;
     *)
       echo "Unknown parameter: $1"
       usage
@@ -171,4 +190,4 @@ if [ "$SETUP_RBAC" = true ]; then
   ./scripts/setup_azure_rbac.sh --create
 fi
 
-run_terraform "$ACTION" "$CLASSROOM_NAME" "${PARALLELISM:-4}" 
+run_terraform "$ACTION" "$CLASSROOM_NAME" "${PARALLELISM:-4}" "${VALIDATE_ONLY:-false}" 

@@ -96,6 +96,8 @@ jobs:
     concurrency:
       group: deploy-aws-dev
       cancel-in-progress: false
+    outputs:
+      instance_manager_url: ${{ steps.deploy.outputs.instance_manager_url }}
 
     steps:
       - name: Checkout
@@ -123,6 +125,7 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       - name: Deploy dev environment
+        id: deploy
         env:
           CLASSROOM_NAME: ${{ vars.CLASSROOM_NAME || 'fellowship-dev' }}
           WORKSHOP: ${{ vars.WORKSHOP || 'fellowship' }}
@@ -133,6 +136,16 @@ jobs:
             --region "${AWS_REGION}" \
             --environment dev \
             --workshop "$WORKSHOP"
+          
+          # Extract Lambda Function URL from Terraform outputs
+          cd iac/aws
+          INSTANCE_MANAGER_URL=$(terraform output -raw instance_manager_lambda_url 2>/dev/null || echo "")
+          if [ -n "$INSTANCE_MANAGER_URL" ]; then
+            echo "instance_manager_url=$INSTANCE_MANAGER_URL" >> "$GITHUB_OUTPUT"
+            echo "✓ Instance Manager URL: $INSTANCE_MANAGER_URL"
+          else
+            echo "⚠ Instance Manager URL not found in outputs"
+          fi
 
   deploy_manual:
     if: github.event_name == 'workflow_dispatch'

@@ -16,6 +16,11 @@ on:
       - 'scripts/mock_api_server_test_mode.py'
       - '.github/workflows/playwright-e2e.yml'
   workflow_dispatch:
+    inputs:
+      test_url:
+        description: 'Optional: Lambda URL to test against (e.g., https://example.lambda-url.eu-west-1.on.aws). If empty, runs in test mode.'
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -50,8 +55,17 @@ jobs:
         working-directory: frontend/ec2-manager
         run: npx playwright install --with-deps chromium
 
-      - name: Run E2E tests in test mode
-        run: ./scripts/run_e2e_tests.sh --install-moto
+      - name: Run E2E tests (Test Mode or Against Deployed URL)
+        run: |
+          if [ -n "${{ inputs.test_url }}" ]; then
+            echo "Running tests against deployed URL: ${{ inputs.test_url }}"
+            cd frontend/ec2-manager
+            VITE_API_URL="${{ inputs.test_url }}/api" npm run test -- --config ../../e2e/playwright.config.js
+            cd ../..
+          else
+            echo "Running tests in test mode (mock server)"
+            ./scripts/run_e2e_tests.sh --install-moto
+          fi
 
       - name: Upload Playwright HTML report
         if: always()
@@ -86,6 +100,19 @@ jobs:
             echo "- Workflow status: ${{ job.status }}"
             echo "- HTML report artifact: playwright-report"
             echo "- Raw results artifact: playwright-test-results"
+            echo ""
+            if [ -n "${{ inputs.test_url }}" ]; then
+              echo "✓ Tests ran against deployed URL: ${{ inputs.test_url }}"
+            else
+              echo "✓ Tests ran in test mode (mock API server)"
+            fi
+            echo ""
+            echo "### How to run tests against deployed EC2 Manager:"
+            echo ""
+            echo "1. After \`deploy-aws.yml\` completes, get the instance_manager_lambda_url output"
+            echo "2. Run this workflow with workflow_dispatch and provide the Lambda URL:"
+            echo "   - URL example: \`https://abc123.lambda-url.eu-west-1.on.aws\`"
+            echo "3. Tests will run against the deployed instance"
             echo ""
             echo "Download artifacts from this workflow run to open the HTML report locally."
           } >> "$GITHUB_STEP_SUMMARY"
