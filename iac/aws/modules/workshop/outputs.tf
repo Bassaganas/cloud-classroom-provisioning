@@ -62,3 +62,8 @@ output "dify_jira_acm_certificate_validation_records" {
   description = "DNS validation records for Dify Jira API ACM certificate"
   value       = module.cloudfront_dify_jira.certificate_validation_records
 }
+
+output "sut_bucket_name" {
+  description = "Name of the S3 bucket for workshop setup scripts (fellowship SUT or testus_patronus setup script)"
+  value       = (var.workshop_name == "fellowship" || var.workshop_name == "fellowship-of-the-build" || var.workshop_name == "testus_patronus") ? module.s3_sut[0].bucket_name : ""
+}

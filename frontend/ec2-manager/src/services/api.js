@@ -10,6 +10,13 @@ function getPassword() {
   return sessionStorage.getItem(PASSWORD_STORAGE_KEY) || ''
 }
 
+function generateIdempotencyKey() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return `req-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`
+}
+
 async function apiRequest(endpoint, options = {}) {
   // Get password from sessionStorage or from options
   const password = options.password || getPassword()
@@ -44,14 +51,17 @@ async function apiRequest(endpoint, options = {}) {
   
   // Re-stringify body if it was modified
   const finalBody = Object.keys(body).length > 0 ? JSON.stringify(body) : options.body
-  
+
+  const requestHeaders = {
+    'Content-Type': 'application/json',
+    ...options.headers,
+  }
+
+
   const response = await fetch(url, {
     ...options,
     body: finalBody,
-    headers: {
-      'Content-Type': 'application/json',
-      ...options.headers,
-    },
+    headers: requestHeaders,
   })
 
   if (!response.ok) {
@@ -77,15 +87,25 @@ export const api = {
   }),
 
   // Instances
-  listInstances: (includeTerminated = false) => {
-    const query = includeTerminated ? '?include_terminated=true' : ''
-    return apiRequest(`/list${query}`)
+  listInstances: (includeTerminated = false, includeHealth = false, includeActualCosts = false) => {
+    const queryParams = new URLSearchParams()
+    if (includeTerminated) queryParams.append('include_terminated', 'true')
+    if (includeHealth) queryParams.append('include_health', 'true')
+    if (includeActualCosts) queryParams.append('include_actual_costs', 'true')
+    const query = queryParams.toString()
+    return apiRequest(`/list${query ? `?${query}` : ''}`)
   },
   
-  createInstances: (data) => apiRequest('/create', {
-    method: 'POST',
-    body: JSON.stringify(data),
-  }),
+  createInstances: (data) => {
+    const requestPayload = {
+      ...data,
+      idempotency_key: data?.idempotency_key || generateIdempotencyKey(),
+    }
+    return apiRequest('/create', {
+      method: 'POST',
+      body: JSON.stringify(requestPayload),
+    })
+  },
 
   assignInstance: (instanceId, studentName) => apiRequest('/assign', {
     method: 'POST',
@@ -95,6 +115,11 @@ export const api = {
   deleteInstance: (instanceId) => apiRequest('/delete', {
     method: 'POST',
     body: JSON.stringify({ instance_id: instanceId }),
+  }),
+
+  deleteInstances: (instanceIds) => apiRequest('/delete', {
+    method: 'POST',
+    body: JSON.stringify({ instance_ids: instanceIds }),
   }),
 
   enableHttps: (instanceId) => apiRequest('/enable_https', {
@@ -125,6 +150,8 @@ export const api = {
     body: JSON.stringify(data),
   }),
 
+  alwaysOnTutorials: () => apiRequest('/always-on-tutorials'),
+
   // Workshop templates (accepts optional password parameter for auth check)
   getWorkshopTemplates: (password) => apiRequest('/templates', password ? { password } : {}),
 
@@ -143,5 +170,10 @@ export const api = {
   }),
 
   // List instances with optional tutorial session filter
-  listInstancesBySession: (tutorialSessionId) => apiRequest(`/list?tutorial_session_id=${tutorialSessionId}`),
+  listInstancesBySession: (tutorialSessionId, includeHealth = false, includeTerminated = false) => {
+    const queryParams = new URLSearchParams({ tutorial_session_id: tutorialSessionId })
+    if (includeHealth) queryParams.append('include_health', 'true')
+    if (includeTerminated) queryParams.append('include_terminated', 'true')
+    return apiRequest(`/list?${queryParams.toString()}`)
+  },
 }

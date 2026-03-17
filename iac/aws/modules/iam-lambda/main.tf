@@ -102,7 +102,8 @@ resource "aws_iam_role_policy" "lambda_iam_policy" {
           "ec2:CreateTags",
           "ec2:StopInstances",
           "ec2:StartInstances",
-          "ec2:DescribeAccountAttributes"
+          "ec2:DescribeAccountAttributes",
+          "ec2:CancelSpotInstanceRequests"
         ]
         Resource = "*"
       },
@@ -117,10 +118,22 @@ resource "aws_iam_role_policy" "lambda_iam_policy" {
           "ssm:GetParameter",
           "ssm:GetParameters"
         ]
-        Resource = [
-          "arn:aws:ssm:${var.region}:${var.account_id}:parameter/classroom/${var.workshop_name}/${var.environment}/*",
-          "arn:aws:ssm:${var.region}:${var.account_id}:parameter/classroom/templates/${var.environment}"
-        ]
+        Resource = concat(
+          # Workshop-specific parameters (for this workshop)
+          [
+            "arn:aws:ssm:${var.region}:${var.account_id}:parameter/classroom/${var.workshop_name}/${var.environment}/*"
+          ],
+          # Template parameters (for all workshops)
+          [
+            "arn:aws:ssm:${var.region}:${var.account_id}:parameter/classroom/templates/${var.environment}",
+            "arn:aws:ssm:${var.region}:${var.account_id}:parameter/classroom/templates/${var.environment}/*"
+          ],
+          # For common/shared Lambda: allow access to all workshop parameters
+          # This is needed because the common Lambda manages instances for all workshops
+          var.workshop_name == "shared" ? [
+            "arn:aws:ssm:${var.region}:${var.account_id}:parameter/classroom/*/${var.environment}/*"
+          ] : []
+        )
       },
       {
         Effect = "Allow"
@@ -176,6 +189,13 @@ resource "aws_iam_role_policy" "lambda_iam_policy" {
           "ssm:DescribeInstanceInformation",
           "ssm:SendCommand",
           "ssm:GetCommandInvocation"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "ce:GetCostAndUsage"
         ]
         Resource = "*"
       }

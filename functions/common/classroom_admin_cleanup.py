@@ -3,6 +3,7 @@ import json
 import logging
 from datetime import datetime, timezone
 from botocore.exceptions import ClientError
+import time
 import os
 
 logger = logging.getLogger()
@@ -12,6 +13,93 @@ logger.setLevel(logging.INFO)
 region = os.environ.get('CLASSROOM_REGION', 'eu-west-3')
 ec2_client = boto3.client('ec2', region_name=region)
 environment = os.environ.get('ENVIRONMENT', 'dev')
+HTTPS_BASE_DOMAIN = os.environ.get('INSTANCE_MANAGER_BASE_DOMAIN', '')
+HTTPS_HOSTED_ZONE_ID = os.environ.get('INSTANCE_MANAGER_HOSTED_ZONE_ID', '')
+
+
+def _normalize_record_name(record_name: str) -> str:
+    if not record_name:
+        return ''
+    return record_name if record_name.endswith('.') else f"{record_name}."
+
+
+def cleanup_route53_record(instance_id: str, tags: dict, strict: bool = True, max_retries: int = 3) -> dict:
+    if not HTTPS_HOSTED_ZONE_ID:
+        return {'success': True, 'deleted': False, 'skipped': True, 'reason': 'hosted-zone-not-configured', 'attempts': 0}
+
+    domain_to_delete = tags.get('HttpsDomain')
+    if not domain_to_delete:
+        return {'success': True, 'deleted': False, 'skipped': True, 'reason': 'no-domain', 'attempts': 0}
+
+    route53 = boto3.client('route53', region_name=region)
+    normalized_domain = _normalize_record_name(domain_to_delete)
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            # BUGFIX: Use normalized domain (with trailing dot) for Route53 lookup
+            response = route53.list_resource_record_sets(
+                HostedZoneId=HTTPS_HOSTED_ZONE_ID,
+                StartRecordName=normalized_domain,
+                StartRecordType='A',
+                MaxItems='10'
+            )
+
+            record_to_delete = None
+            for record in response.get('ResourceRecordSets', []):
+                if record.get('Type') == 'A' and _normalize_record_name(record.get('Name')) == normalized_domain:
+                    record_to_delete = record
+                    break
+
+            if not record_to_delete:
+                logger.info(f"Route53 record {domain_to_delete} not found (already deleted)")
+                return {'success': True, 'deleted': False, 'skipped': True, 'reason': 'already-deleted', 'attempts': attempt}
+
+            # BUGFIX: Construct ResourceRecordSet with only necessary fields for deletion
+            delete_record_set = {
+                'Name': record_to_delete['Name'],
+                'Type': record_to_delete['Type']
+            }
+            # Include TTL if present (required for non-alias records)
+            if 'TTL' in record_to_delete:
+                delete_record_set['TTL'] = record_to_delete['TTL']
+            # Include ResourceRecords if present (required for non-alias records)
+            if 'ResourceRecords' in record_to_delete:
+                delete_record_set['ResourceRecords'] = record_to_delete['ResourceRecords']
+            
+            route53.change_resource_record_sets(
+                HostedZoneId=HTTPS_HOSTED_ZONE_ID,
+                ChangeBatch={
+                    'Changes': [{
+                        'Action': 'DELETE',
+                        'ResourceRecordSet': delete_record_set
+                    }]
+                }
+            )
+            logger.info(f"Deleted Route53 record: {domain_to_delete} for admin instance {instance_id}")
+            return {'success': True, 'deleted': True, 'skipped': False, 'reason': 'deleted', 'attempts': attempt}
+        except ClientError as e:
+            code = e.response['Error'].get('Code', 'Unknown')
+            if code == 'InvalidChangeBatch':
+                logger.info(f"Route53 record {domain_to_delete} already absent")
+                return {'success': True, 'deleted': False, 'skipped': True, 'reason': 'already-deleted', 'attempts': attempt}
+            if code == 'NoSuchHostedZone':
+                logger.error(f"Hosted zone {HTTPS_HOSTED_ZONE_ID} not found")
+                return {'success': not strict, 'deleted': False, 'skipped': False, 'reason': 'hosted-zone-missing', 'attempts': attempt, 'error': str(e)}
+
+            logger.warning(f"Route53 delete attempt {attempt}/{max_retries} failed for {domain_to_delete}: {str(e)}")
+            if attempt < max_retries:
+                time.sleep(attempt)
+            else:
+                return {'success': not strict, 'deleted': False, 'skipped': False, 'reason': 'delete-failed', 'attempts': attempt, 'error': str(e)}
+        except Exception as e:
+            logger.warning(f"Route53 delete unexpected error attempt {attempt}/{max_retries} for {domain_to_delete}: {str(e)}")
+            if attempt < max_retries:
+                time.sleep(attempt)
+            else:
+                return {'success': not strict, 'deleted': False, 'skipped': False, 'reason': 'delete-failed', 'attempts': attempt, 'error': str(e)}
+
+    return {'success': not strict, 'deleted': False, 'skipped': False, 'reason': 'delete-failed', 'attempts': max_retries}
+
 
 def lambda_handler(event, context):
     """
@@ -87,6 +175,25 @@ def lambda_handler(event, context):
         for instance_info in instances_to_delete:
             instance_id = instance_info['instance_id']
             try:
+                # Get instance tags to retrieve domain information for Route53 cleanup
+                instance_tags = {}
+                try:
+                    instance_response = ec2_client.describe_instances(InstanceIds=[instance_id])
+                    if instance_response.get('Reservations') and instance_response['Reservations'][0].get('Instances'):
+                        instance = instance_response['Reservations'][0]['Instances'][0]
+                        instance_tags = {tag['Key']: tag['Value'] for tag in instance.get('Tags', [])}
+                except Exception as e:
+                    logger.warning(f"Error getting instance tags for {instance_id}: {str(e)}")
+                
+                # BUGFIX: Non-blocking Route53 cleanup - failure doesn't prevent deletion
+                # Log Route53 cleanup issues but continue with instance termination
+                dns_cleanup = cleanup_route53_record(instance_id, instance_tags, strict=False)
+                if not dns_cleanup.get('success'):
+                    logger.warning(
+                        f"Route53 cleanup incomplete for {instance_id}: "
+                        f"reason={dns_cleanup.get('reason')}, attempts={dns_cleanup.get('attempts')}"
+                    )
+
                 # Terminate the instance (EC2 can terminate running instances directly)
                 ec2_client.terminate_instances(InstanceIds=[instance_id])
                 deleted.append(instance_info)
@@ -105,8 +212,10 @@ def lambda_handler(event, context):
                 errors.append(error_msg)
                 logger.error(f"Error processing admin instance {instance_id}: {str(e)}")
         
+        # BUGFIX: Always return 200 (success) to prevent EventBridge from retrying
+        # Errors are logged but tracked separately
         result = {
-            'statusCode': 200 if len(errors) == 0 else 207,  # 207 = Multi-Status (some succeeded, some failed)
+            'statusCode': 200,  # Always return 200 for Lambda to be considered successful
             'body': json.dumps({
                 'message': f'Processed {len(instances_to_delete)} admin instance(s)',
                 'cleanup_interval_days': cleanup_interval_days,

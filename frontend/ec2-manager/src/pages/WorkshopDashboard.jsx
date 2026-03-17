@@ -1,43 +1,82 @@
-import { useState, useEffect } from 'react'
-import { useParams, useNavigate, Link } from 'react-router-dom'
-import { api } from '../services/api'
+import { useEffect, useMemo, useState } from 'react'
+import { useNavigate, useParams } from 'react-router-dom'
+import {
+  Box,
+  Button,
+  Card,
+  CardContent,
+  Checkbox,
+  Chip,
+  CircularProgress,
+  Container,
+  FormControl,
+  Grid,
+  InputLabel,
+  LinearProgress,
+  Link,
+  MenuItem,
+  Select,
+  Stack,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
+  TextField,
+  Typography
+} from '@mui/material'
+import RefreshRoundedIcon from '@mui/icons-material/RefreshRounded'
+import DeleteOutlineRoundedIcon from '@mui/icons-material/DeleteOutlineRounded'
+import SecurityRoundedIcon from '@mui/icons-material/SecurityRounded'
+import AppToast from '../components/AppToast'
 import Header from '../components/Header'
-import './WorkshopDashboard.css'
+import { api } from '../services/api'
 
 function WorkshopDashboard() {
   const { name: workshopName } = useParams()
   const navigate = useNavigate()
+
   const [instances, setInstances] = useState([])
+  const [costs, setCosts] = useState({
+    actual_total_usd: null,
+    actual_data_source: 'unavailable'
+  })
   const [loading, setLoading] = useState(true)
   const [settings, setSettings] = useState(null)
   const [settingsLoading, setSettingsLoading] = useState(true)
-  const [message, setMessage] = useState({ text: '', type: '' })
+  const [toast, setToast] = useState({ open: false, message: '', severity: 'success' })
+
   const [showTerminated, setShowTerminated] = useState(false)
-  const [sortConfig, setSortConfig] = useState({ key: null, direction: 'asc' })
+  const [search, setSearch] = useState('')
+  const [stateFilter, setStateFilter] = useState('all')
+  const [typeFilter, setTypeFilter] = useState('all')
+  const [selectedIds, setSelectedIds] = useState([])
 
   useEffect(() => {
     refreshList()
     loadSettings()
-    const interval = setInterval(refreshList, 30000) // Auto-refresh every 30s
+    const interval = setInterval(refreshList, 30000)
     return () => clearInterval(interval)
   }, [workshopName, showTerminated])
 
   const refreshList = async () => {
     try {
-      const response = await api.listInstances()
+      const response = await api.listInstances(showTerminated, false, true)
       if (response.success) {
-        let filtered = response.instances || []
+        let data = response.instances || []
+        data = data.filter((instance) => instance.workshop === workshopName || !instance.workshop)
         if (!showTerminated) {
-          filtered = filtered.filter(i => i.state !== 'terminated')
+          data = data.filter((instance) => instance.state !== 'terminated')
         }
-        // Filter by workshop if needed
-        const workshopInstances = filtered.filter(i => 
-          i.workshop === workshopName || !i.workshop
-        )
-        setInstances(workshopInstances)
+        setInstances(data)
+        setCosts({
+          actual_total_usd: response.actual_total_usd ?? null,
+          actual_data_source: response.actual_data_source || 'unavailable'
+        })
       }
     } catch (error) {
-      showMessage(`Error: ${error.message}`, 'error')
+      showToast(error.message, 'error')
     } finally {
       setLoading(false)
     }
@@ -51,302 +90,515 @@ function WorkshopDashboard() {
         setSettings(response.settings)
       }
     } catch (error) {
-      console.error('Error loading settings:', error)
+      showToast(`Error loading settings: ${error.message}`, 'error')
     } finally {
       setSettingsLoading(false)
     }
   }
 
-  const showMessage = (text, type) => {
-    setMessage({ text, type })
-    setTimeout(() => setMessage({ text: '', type: '' }), 5000)
+  const showToast = (message, severity = 'success') => {
+    setToast({ open: true, message, severity })
+  }
+
+  const filteredInstances = useMemo(() => {
+    const query = search.trim().toLowerCase()
+
+    return instances.filter((instance) => {
+      if (stateFilter !== 'all' && instance.state !== stateFilter) return false
+      const currentType = instance.instance_type || instance.type || 'pool'
+      if (typeFilter !== 'all' && currentType !== typeFilter) return false
+
+      if (!query) return true
+      const sessionId = instance.tutorial_session_id || ''
+      const assignedTo = instance.assigned || instance.assigned_to || ''
+
+      return [
+        instance.instance_id || '',
+        instance.public_ip || '',
+        sessionId,
+        assignedTo,
+        currentType,
+        instance.state || ''
+      ].some((value) => String(value).toLowerCase().includes(query))
+    })
+  }, [instances, search, stateFilter, typeFilter])
+
+  const selectedSet = useMemo(() => new Set(selectedIds), [selectedIds])
+
+  const toNumber = (value) => {
+    if (value === null || value === undefined) return null
+    const numeric = Number(value)
+    return Number.isFinite(numeric) ? numeric : null
+  }
+
+  const formatUsd = (value, decimals = 2) => {
+    const numeric = toNumber(value)
+    if (numeric === null) return '-'
+    return `$${numeric.toFixed(decimals)}`
+  }
+
+  const instanceStats = useMemo(() => {
+    const running = instances.filter((item) => item.state === 'running').length
+    const stopped = instances.filter((item) => item.state === 'stopped').length
+    const terminated = instances.filter((item) => item.state === 'terminated').length
+    const pool = instances.filter((item) => (item.instance_type || item.type || 'pool') === 'pool').length
+    const admin = instances.filter((item) => (item.instance_type || item.type || 'pool') === 'admin').length
+    const total = instances.length || 1
+
+    return {
+      running,
+      stopped,
+      terminated,
+      pool,
+      admin,
+      runningPct: Math.round((running / total) * 100),
+      stoppedPct: Math.round((stopped / total) * 100)
+    }
+  }, [instances])
+
+  const costTotals = useMemo(() => {
+    let estimatedHourly = 0
+    let estimatedAccrued = 0
+    let estimated24h = 0
+    let actualTotal = 0
+    let hasActual = false
+
+    instances.forEach((instance) => {
+      estimatedHourly += toNumber(instance.hourly_rate_estimate_usd) || 0
+      estimatedAccrued += toNumber(instance.estimated_cost_usd) || 0
+      estimated24h += toNumber(instance.estimated_cost_24h_usd) || 0
+
+      const actual = toNumber(instance.actual_cost_usd)
+      if (actual !== null) {
+        actualTotal += actual
+        hasActual = true
+      }
+    })
+
+    return {
+      estimatedHourly,
+      estimatedAccrued,
+      estimated24h,
+      estimatedMonthly: estimated24h * 30,
+      actualTotal: hasActual ? actualTotal : toNumber(costs.actual_total_usd),
+      actualDataSource: costs.actual_data_source || 'unavailable'
+    }
+  }, [instances, costs])
+
+  const toggleSelected = (instanceId) => {
+    setSelectedIds((prev) => (
+      prev.includes(instanceId)
+        ? prev.filter((item) => item !== instanceId)
+        : [...prev, instanceId]
+    ))
+  }
+
+  const toggleSelectAllFiltered = () => {
+    const allFilteredIds = filteredInstances.map((item) => item.instance_id)
+    const allSelected = allFilteredIds.every((id) => selectedSet.has(id))
+
+    if (allSelected) {
+      setSelectedIds((prev) => prev.filter((id) => !allFilteredIds.includes(id)))
+    } else {
+      setSelectedIds((prev) => [...new Set([...prev, ...allFilteredIds])])
+    }
   }
 
   const deleteInstance = async (instanceId) => {
-    if (!confirm(`Delete instance ${instanceId}?`)) return
+    if (!window.confirm(`Delete instance ${instanceId}?`)) return
     try {
       const response = await api.deleteInstance(instanceId)
       if (response.success) {
-        showMessage('✅ Instance deleted', 'success')
+        setSelectedIds((prev) => prev.filter((id) => id !== instanceId))
+        showToast('Instance deleted', 'success')
         refreshList()
       } else {
-        showMessage(`❌ Error: ${response.error}`, 'error')
+        showToast(response.error || 'Failed to delete instance', 'error')
       }
     } catch (error) {
-      showMessage(`❌ Error: ${error.message}`, 'error')
+      showToast(error.message, 'error')
+    }
+  }
+
+  const handleBulkDelete = async () => {
+    if (selectedIds.length === 0) return
+    const confirmed = window.confirm(`Delete ${selectedIds.length} selected instances?`)
+    if (!confirmed) return
+
+    try {
+      await Promise.all(selectedIds.map((instanceId) => api.deleteInstance(instanceId)))
+      showToast(`Deleted ${selectedIds.length} instance(s)`, 'success')
+      setSelectedIds([])
+      refreshList()
+    } catch (error) {
+      showToast(`Bulk delete failed: ${error.message}`, 'error')
     }
   }
 
   const assignInstance = async (instanceId) => {
-    const studentName = prompt(`Enter student name to assign instance ${instanceId}:`)
+    const studentName = window.prompt(`Enter student name for ${instanceId}:`)
     if (!studentName || !studentName.trim()) return
+
     try {
       const response = await api.assignInstance(instanceId, studentName.trim())
       if (response.success) {
-        showMessage(`✅ Instance assigned to ${studentName}`, 'success')
+        showToast(`Assigned to ${studentName}`, 'success')
         refreshList()
       } else {
-        showMessage(`❌ Error: ${response.error}`, 'error')
+        showToast(response.error || 'Failed to assign instance', 'error')
       }
     } catch (error) {
-      showMessage(`❌ Error: ${error.message}`, 'error')
+      showToast(error.message, 'error')
     }
   }
 
-  const handleSort = (key) => {
-    let direction = 'asc'
-    if (sortConfig.key === key && sortConfig.direction === 'asc') {
-      direction = 'desc'
+  const enableHttps = async (instanceId) => {
+    try {
+      await api.enableHttps(instanceId)
+      showToast('HTTPS enabled', 'success')
+      refreshList()
+    } catch (error) {
+      showToast(error.message, 'error')
     }
-    setSortConfig({ key, direction })
   }
-
-  const sortedInstances = [...instances].sort((a, b) => {
-    if (!sortConfig.key) return 0
-    let aVal = a[sortConfig.key] || ''
-    let bVal = b[sortConfig.key] || ''
-    
-    // Handle special cases
-    if (sortConfig.key === 'type') {
-      aVal = a.type || a.instance_type || ''
-      bVal = b.type || b.instance_type || ''
-    }
-    if (sortConfig.key === 'assigned') {
-      aVal = a.assigned || a.assigned_to || ''
-      bVal = b.assigned || b.assigned_to || ''
-    }
-    
-    // Convert to string for comparison
-    aVal = String(aVal).toLowerCase()
-    bVal = String(bVal).toLowerCase()
-    
-    if (sortConfig.direction === 'asc') {
-      return aVal > bVal ? 1 : aVal < bVal ? -1 : 0
-    }
-    return aVal < bVal ? 1 : aVal > bVal ? -1 : 0
-  })
 
   return (
-    <div className="page-container">
-      <Header 
+    <>
+      <Header
         title={workshopName}
+        subtitle="Workshop instance management"
         showBack={true}
         backPath="/"
         showSettings={true}
         settingsPath={`/workshop/${workshopName}/config`}
       />
-      <div className="dashboard-container">
 
-      {message.text && (
-        <div className={`message message-${message.type}`}>{message.text}</div>
-      )}
+      <Container maxWidth="xl" sx={{ py: 3 }}>
+        <Grid container spacing={2.5} sx={{ mb: 2.5 }}>
+          <Grid item xs={12} md={6} lg={3}>
+            <Card>
+              <CardContent>
+                <Typography variant="overline" color="text.secondary">Running</Typography>
+                <Typography variant="h4" fontWeight={700}>{instanceStats.running}</Typography>
+                <LinearProgress variant="determinate" value={instanceStats.runningPct} sx={{ mt: 1 }} />
+              </CardContent>
+            </Card>
+          </Grid>
+          <Grid item xs={12} md={6} lg={3}>
+            <Card>
+              <CardContent>
+                <Typography variant="overline" color="text.secondary">Stopped</Typography>
+                <Typography variant="h4" fontWeight={700}>{instanceStats.stopped}</Typography>
+                <LinearProgress color="warning" variant="determinate" value={instanceStats.stoppedPct} sx={{ mt: 1 }} />
+              </CardContent>
+            </Card>
+          </Grid>
+          <Grid item xs={12} md={6} lg={3}>
+            <Card>
+              <CardContent>
+                <Typography variant="overline" color="text.secondary">Pool / Admin</Typography>
+                <Typography variant="h4" fontWeight={700}>{instanceStats.pool} / {instanceStats.admin}</Typography>
+                <Typography variant="body2" color="text.secondary">Distribution by role</Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+          <Grid item xs={12} md={6} lg={3}>
+            <Card>
+              <CardContent>
+                <Typography variant="overline" color="text.secondary">Terminated</Typography>
+                <Typography variant="h4" fontWeight={700}>{instanceStats.terminated}</Typography>
+                <Typography variant="body2" color="text.secondary">Use toggle to include in table</Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+        </Grid>
 
-      {/* Settings Display */}
-      {settingsLoading ? (
-        <div className="card">
-          <div className="loading">Loading settings...</div>
-        </div>
-      ) : settings && (
-        <div className="card settings-display">
-          <h2>Workshop Timeout Settings</h2>
-          <div className="settings-grid">
-            <div className="setting-item">
-              <span className="setting-label">Stop Timeout:</span>
-              <span className="setting-value">{settings.stop_timeout} minutes</span>
-            </div>
-            <div className="setting-item">
-              <span className="setting-label">Terminate Timeout:</span>
-              <span className="setting-value">{settings.terminate_timeout} minutes</span>
-            </div>
-            <div className="setting-item">
-              <span className="setting-label">Hard Terminate Timeout:</span>
-              <span className="setting-value">{settings.hard_terminate_timeout} minutes</span>
-            </div>
-            <div className="setting-item">
-              <span className="setting-label">Admin Cleanup Days:</span>
-              <span className="setting-value">{settings.admin_cleanup_days} days</span>
-            </div>
-          </div>
-        </div>
-      )}
+        <Grid container spacing={2.5} sx={{ mb: 2.5 }}>
+          <Grid item xs={12} md={6} lg={4}>
+            <Card>
+              <CardContent>
+                <Typography variant="overline" color="text.secondary">Hourly Burn (Est.)</Typography>
+                <Typography variant="h5" fontWeight={700}>{formatUsd(costTotals.estimatedHourly)}</Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+          <Grid item xs={12} md={6} lg={4}>
+            <Card>
+              <CardContent>
+                <Typography variant="overline" color="text.secondary">Accrued (Est.)</Typography>
+                <Typography variant="h5" fontWeight={700}>{formatUsd(costTotals.estimatedAccrued)}</Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+          <Grid item xs={12} md={6} lg={4}>
+            <Card>
+              <CardContent>
+                <Typography variant="overline" color="text.secondary">Next 24h (Est.)</Typography>
+                <Typography variant="h5" fontWeight={700}>{formatUsd(costTotals.estimated24h)}</Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+          <Grid item xs={12} md={6} lg={4}>
+            <Card>
+              <CardContent>
+                <Typography variant="overline" color="text.secondary">Monthly (Est.)</Typography>
+                <Typography variant="h5" fontWeight={700}>{formatUsd(costTotals.estimatedMonthly)}</Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+          <Grid item xs={12} md={6} lg={4}>
+            <Card>
+              <CardContent>
+                <Typography variant="overline" color="text.secondary">
+                  Actual (Billing){costTotals.actualDataSource === 'cost-explorer' ? '' : ' - Unavailable'}
+                </Typography>
+                <Typography variant="h5" fontWeight={700}>{formatUsd(costTotals.actualTotal)}</Typography>
+              </CardContent>
+            </Card>
+          </Grid>
+        </Grid>
 
-      <div className="instances-section">
-        <div className="instances-header">
-          <h2>Instances</h2>
-          <div className="instances-controls">
-            <label>
-              <input
-                type="checkbox"
-                checked={showTerminated}
-                onChange={(e) => setShowTerminated(e.target.checked)}
+        <Card sx={{ mb: 2.5 }}>
+          <CardContent>
+            <Stack direction={{ xs: 'column', lg: 'row' }} spacing={2} alignItems={{ xs: 'stretch', lg: 'center' }}>
+              <TextField
+                label="Search instances"
+                placeholder="ID, IP, session, assignee"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                fullWidth
               />
-              Show terminated instances
-            </label>
-            <button className="refresh-btn" onClick={refreshList}>🔄 Refresh</button>
-          </div>
-        </div>
 
-        {loading ? (
-          <div className="loading">Loading instances...</div>
-        ) : (
-          <div className="instances-table">
-            <table>
-              <thead>
-                <tr>
-                  <th className="sortable" onClick={() => handleSort('instance_id')}>
-                    Instance ID
-                    {sortConfig.key === 'instance_id' && (
-                      <span className="sort-indicator">{sortConfig.direction === 'asc' ? ' ↑' : ' ↓'}</span>
-                    )}
-                  </th>
-                  <th className="sortable" onClick={() => handleSort('workshop')}>
-                    Workshop
-                    {sortConfig.key === 'workshop' && (
-                      <span className="sort-indicator">{sortConfig.direction === 'asc' ? ' ↑' : ' ↓'}</span>
-                    )}
-                  </th>
-                  <th className="sortable" onClick={() => handleSort('type')}>
-                    Type
-                    {sortConfig.key === 'type' && (
-                      <span className="sort-indicator">{sortConfig.direction === 'asc' ? ' ↑' : ' ↓'}</span>
-                    )}
-                  </th>
-                  <th className="sortable" onClick={() => handleSort('state')}>
-                    State
-                    {sortConfig.key === 'state' && (
-                      <span className="sort-indicator">{sortConfig.direction === 'asc' ? ' ↑' : ' ↓'}</span>
-                    )}
-                  </th>
-                  <th className="sortable" onClick={() => handleSort('public_ip')}>
-                    IP Address
-                    {sortConfig.key === 'public_ip' && (
-                      <span className="sort-indicator">{sortConfig.direction === 'asc' ? ' ↑' : ' ↓'}</span>
-                    )}
-                  </th>
-                  <th className="sortable" onClick={() => handleSort('assigned')}>
-                    Assigned To
-                    {sortConfig.key === 'assigned' && (
-                      <span className="sort-indicator">{sortConfig.direction === 'asc' ? ' ↑' : ' ↓'}</span>
-                    )}
-                  </th>
-                  <th className="sortable" onClick={() => handleSort('tutorial_session_id')}>
-                    Tutorial Session
-                    {sortConfig.key === 'tutorial_session_id' && (
-                      <span className="sort-indicator">{sortConfig.direction === 'asc' ? ' ↑' : ' ↓'}</span>
-                    )}
-                  </th>
-                  <th>Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedInstances.length === 0 ? (
-                  <tr>
-                    <td colSpan="8" style={{ textAlign: 'center', padding: '40px' }}>
-                      No instances found
-                    </td>
-                  </tr>
-                ) : (
-                  sortedInstances.map(instance => (
-                    <tr key={instance.instance_id}>
-                      <td>{instance.instance_id}</td>
-                      <td>{instance.workshop || 'N/A'}</td>
-                      <td>
-                        <span className={`badge badge-${instance.instance_type || 'pool'}`}>
-                          {instance.instance_type || 'pool'}
-                        </span>
-                      </td>
-                      <td>
-                        <span className={`badge badge-${instance.state}`}>
-                          {instance.state}
-                        </span>
-                      </td>
-                      <td>
-                        {instance.public_ip ? (
-                          <a 
-                            href={`http://${instance.public_ip}`}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="ip-link"
-                          >
-                            {instance.public_ip}
-                          </a>
-                        ) : (
-                          '-'
-                        )}
-                      </td>
-                      <td>{instance.assigned || '-'}</td>
-                      <td>
-                        {instance.tutorial_session_id ? (
-                          <a
-                            href={`/tutorial/${instance.workshop || workshopName}/${instance.tutorial_session_id}`}
-                            className="tutorial-session-link"
-                            onClick={(e) => {
-                              e.preventDefault()
-                              navigate(`/tutorial/${instance.workshop || workshopName}/${instance.tutorial_session_id}`)
-                            }}
-                          >
-                            <span className="badge badge-tutorial">
-                              {instance.tutorial_session_id}
-                            </span>
-                          </a>
-                        ) : (
-                          '-'
-                        )}
-                      </td>
-                      <td>
-                        <div className="action-buttons">
-                          {!instance.assigned && instance.instance_type === 'pool' && (
-                            <button
-                              className="small-btn"
-                              onClick={() => assignInstance(instance.instance_id)}
-                            >
-                              Assign
-                            </button>
-                          )}
-                          {instance.public_ip && !instance.https_url && (
-                            <button
-                              className="small-btn"
-                              onClick={async () => {
-                                try {
-                                  await api.enableHttps(instance.instance_id)
-                                  showMessage('✅ HTTPS enabled', 'success')
-                                  refreshList()
-                                } catch (error) {
-                                  showMessage(`❌ Error: ${error.message}`, 'error')
-                                }
-                              }}
-                            >
-                              Enable HTTPS
-                            </button>
-                          )}
-                          {instance.https_url && (
-                            <a
-                              href={instance.https_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="small-btn link-btn"
-                            >
-                              Open HTTPS
-                            </a>
-                          )}
-                          <button
-                            className="small-btn delete"
-                            onClick={() => deleteInstance(instance.instance_id)}
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
+              <FormControl sx={{ minWidth: 170 }}>
+                <InputLabel id="state-filter-label">State</InputLabel>
+                <Select
+                  labelId="state-filter-label"
+                  label="State"
+                  value={stateFilter}
+                  onChange={(event) => setStateFilter(event.target.value)}
+                >
+                  <MenuItem value="all">All</MenuItem>
+                  <MenuItem value="running">Running</MenuItem>
+                  <MenuItem value="stopped">Stopped</MenuItem>
+                  <MenuItem value="terminated">Terminated</MenuItem>
+                </Select>
+              </FormControl>
+
+              <FormControl sx={{ minWidth: 170 }}>
+                <InputLabel id="type-filter-label">Type</InputLabel>
+                <Select
+                  labelId="type-filter-label"
+                  label="Type"
+                  value={typeFilter}
+                  onChange={(event) => setTypeFilter(event.target.value)}
+                >
+                  <MenuItem value="all">All</MenuItem>
+                  <MenuItem value="pool">Pool</MenuItem>
+                  <MenuItem value="admin">Admin</MenuItem>
+                </Select>
+              </FormControl>
+
+              <Stack direction="row" spacing={1}>
+                <Button variant="outlined" startIcon={<RefreshRoundedIcon />} onClick={refreshList}>
+                  Refresh
+                </Button>
+                <Button
+                  variant={showTerminated ? 'contained' : 'outlined'}
+                  onClick={() => setShowTerminated((prev) => !prev)}
+                >
+                  {showTerminated ? 'Hide terminated' : 'Show terminated'}
+                </Button>
+              </Stack>
+            </Stack>
+          </CardContent>
+        </Card>
+
+        {settingsLoading ? (
+          <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}>
+            <CircularProgress size={24} />
+          </Box>
+        ) : settings && (
+          <Card sx={{ mb: 2.5 }}>
+            <CardContent>
+              <Typography variant="h6" gutterBottom>Timeout configuration</Typography>
+              <Stack direction={{ xs: 'column', md: 'row' }} spacing={2}>
+                <Chip label={`Stop: ${settings.stop_timeout} min`} />
+                <Chip label={`Terminate: ${settings.terminate_timeout} min`} />
+                <Chip label={`Hard terminate: ${settings.hard_terminate_timeout} min`} />
+                <Chip label={`Admin cleanup: ${settings.admin_cleanup_days} days`} />
+              </Stack>
+            </CardContent>
+          </Card>
         )}
-      </div>
-      </div>
-    </div>
+
+        <Card>
+          <CardContent sx={{ pb: 1.25 }}>
+            <Stack direction={{ xs: 'column', md: 'row' }} spacing={1.5} alignItems={{ xs: 'flex-start', md: 'center' }} justifyContent="space-between">
+              <Typography variant="h6" fontWeight={700}>
+                Instances ({filteredInstances.length})
+              </Typography>
+              <Stack direction="row" spacing={1}>
+                <Button onClick={toggleSelectAllFiltered} variant="outlined">
+                  Toggle Select Filtered
+                </Button>
+                <Button
+                  color="error"
+                  variant="contained"
+                  startIcon={<DeleteOutlineRoundedIcon />}
+                  disabled={selectedIds.length === 0}
+                  onClick={handleBulkDelete}
+                >
+                  Delete Selected ({selectedIds.length})
+                </Button>
+              </Stack>
+            </Stack>
+          </CardContent>
+
+          <TableContainer>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell padding="checkbox">
+                    <Checkbox
+                      indeterminate={selectedIds.length > 0 && selectedIds.length < filteredInstances.length}
+                      checked={filteredInstances.length > 0 && filteredInstances.every((item) => selectedSet.has(item.instance_id))}
+                      onChange={toggleSelectAllFiltered}
+                    />
+                  </TableCell>
+                  <TableCell>Instance ID</TableCell>
+                  <TableCell>Type</TableCell>
+                  <TableCell>State</TableCell>
+                  <TableCell>IP Address</TableCell>
+                  <TableCell>Assigned</TableCell>
+                  <TableCell>Session</TableCell>
+                  <TableCell>Hourly (Est.)</TableCell>
+                  <TableCell>Cost (Est./Actual)</TableCell>
+                  <TableCell align="right">Actions</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {loading ? (
+                  <TableRow>
+                    <TableCell colSpan={10} align="center" sx={{ py: 5 }}>
+                      <CircularProgress size={24} />
+                    </TableCell>
+                  </TableRow>
+                ) : filteredInstances.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={10} align="center" sx={{ py: 5 }}>
+                      No instances found
+                    </TableCell>
+                  </TableRow>
+                ) : (
+                  filteredInstances.map((instance) => {
+                    const instanceType = instance.instance_type || instance.type || 'pool'
+                    const sessionId = instance.tutorial_session_id
+                    const assignedTo = instance.assigned || instance.assigned_to || '-'
+                    const resolvedHttpsUrl = instance.https_url || instance.tags?.HttpsUrl
+                    const visitUrl = resolvedHttpsUrl || (instance.public_ip ? `http://${instance.public_ip}` : null)
+
+                    return (
+                      <TableRow hover key={instance.instance_id}>
+                        <TableCell padding="checkbox">
+                          <Checkbox
+                            checked={selectedSet.has(instance.instance_id)}
+                            onChange={() => toggleSelected(instance.instance_id)}
+                          />
+                        </TableCell>
+                        <TableCell>{instance.instance_id}</TableCell>
+                        <TableCell>
+                          <Chip
+                            size="small"
+                            color={instanceType === 'admin' ? 'secondary' : 'default'}
+                            label={instanceType}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <Chip
+                            size="small"
+                            color={instance.state === 'running' ? 'success' : instance.state === 'stopped' ? 'warning' : 'default'}
+                            label={instance.state}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          {visitUrl ? (
+                            <Link href={visitUrl} target="_blank" rel="noopener noreferrer">
+                              visit me
+                            </Link>
+                          ) : (
+                            '-'
+                          )}
+                        </TableCell>
+                        <TableCell>{assignedTo}</TableCell>
+                        <TableCell>
+                          {sessionId ? (
+                            <Button size="small" onClick={() => navigate(`/tutorial/${instance.workshop || workshopName}/${sessionId}`)}>
+                              {sessionId}
+                            </Button>
+                          ) : (
+                            '-'
+                          )}
+                        </TableCell>
+                        <TableCell>{formatUsd(instance.hourly_rate_estimate_usd)}</TableCell>
+                        <TableCell>
+                          <Typography variant="caption" display="block">
+                            Est: {formatUsd(instance.estimated_cost_usd)}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">
+                            Actual: {formatUsd(instance.actual_cost_usd)}
+                          </Typography>
+                        </TableCell>
+                        <TableCell align="right">
+                          <Stack direction="row" spacing={1} justifyContent="flex-end">
+                            {!instance.assigned && instanceType === 'pool' && (
+                              <Button size="small" variant="outlined" onClick={() => assignInstance(instance.instance_id)}>
+                                Assign
+                              </Button>
+                            )}
+
+                            {instance.public_ip && !resolvedHttpsUrl && (
+                              <Button
+                                size="small"
+                                variant="outlined"
+                                startIcon={<SecurityRoundedIcon />}
+                                onClick={() => enableHttps(instance.instance_id)}
+                              >
+                                HTTPS
+                              </Button>
+                            )}
+
+                            {resolvedHttpsUrl && (
+                              <Button
+                                size="small"
+                                variant="outlined"
+                                component="a"
+                                href={resolvedHttpsUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                              >
+                                Open
+                              </Button>
+                            )}
+
+                            <Button size="small" color="error" onClick={() => deleteInstance(instance.instance_id)}>
+                              Delete
+                            </Button>
+                          </Stack>
+                        </TableCell>
+                      </TableRow>
+                    )
+                  })
+                )}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </Card>
+      </Container>
+      <AppToast
+        toast={toast}
+        onClose={() => setToast((prev) => ({ ...prev, open: false }))}
+      />
+    </>
   )
 }
 

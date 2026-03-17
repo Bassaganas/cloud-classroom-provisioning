@@ -1,82 +1,103 @@
 #!/bin/bash
+# Minimal user_data.sh - Downloads and executes setup script from S3
+# This avoids SSM parameter size limits (8KB) and follows AWS best practices
 set -e
 
-# Function to wait for yum lock
-wait_for_yum() {
-    while sudo fuser /var/run/yum.pid >/dev/null 2>&1; do
-        echo "Waiting for other yum process to finish..."
-        sleep 5
-    done
+# Logging setup - redirect all output to log file
+LOG_FILE="/var/log/user-data.log"
+exec > >(tee -a "$LOG_FILE") 2>&1
+
+# Function to log with timestamp
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
 }
 
-# Wait for any existing yum processes to complete
-wait_for_yum
+IMDS_BASE_URL="http://169.254.169.254/latest"
+IMDS_TOKEN=""
 
-# Update and install dependencies
-yum update -y
-wait_for_yum
-yum install -y docker git
-systemctl start docker
-systemctl enable docker
-usermod -aG docker ec2-user
+get_imds_token() {
+    if [ -n "$IMDS_TOKEN" ]; then
+        echo "$IMDS_TOKEN"
+        return 0
+    fi
 
-# Install Docker Compose plugin
-mkdir -p /home/ec2-user/.docker/cli-plugins/
-curl -SL https://github.com/docker/compose/releases/download/v2.27.0/docker-compose-linux-x86_64 -o /home/ec2-user/.docker/cli-plugins/docker-compose
-chmod +x /home/ec2-user/.docker/cli-plugins/docker-compose
-chown -R ec2-user:ec2-user /home/ec2-user/.docker
+    IMDS_TOKEN=$(curl -s --max-time 5 --connect-timeout 2 -X PUT "${IMDS_BASE_URL}/api/token" \
+        -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null || echo "")
 
-# Clone and configure Dify as ec2-user with specific version
-su - ec2-user -c "git clone https://github.com/langgenius/dify.git ~/dify"
-su - ec2-user -c "cd ~/dify && git checkout 1.9.1"  # Pin to stable version 1.9.1
-su - ec2-user -c "cp ~/dify/docker/.env.example ~/dify/docker/.env"
+    if [ -n "$IMDS_TOKEN" ]; then
+        echo "$IMDS_TOKEN"
+        return 0
+    fi
 
-# Configure Dify with minimal, documented configuration
-cat >> /home/ec2-user/dify/docker/.env << 'EOF'
+    return 1
+}
 
-# ===== MINIMAL DIFY CONFIGURATION =====
+get_instance_metadata() {
+    local path="$1"
+    local token
+    token=$(get_imds_token 2>/dev/null || echo "")
 
-# System language (officially documented in .env.example)
-LANG=en_US.UTF-8
+    if [ -n "$token" ]; then
+        curl -s --max-time 5 --connect-timeout 2 -H "X-aws-ec2-metadata-token: ${token}" \
+            "${IMDS_BASE_URL}/meta-data/${path}" 2>/dev/null || echo ""
+    else
+        curl -s --max-time 5 --connect-timeout 2 "${IMDS_BASE_URL}/meta-data/${path}" 2>/dev/null || echo ""
+    fi
+}
 
-# Frontend configuration for nginx proxy
-NEXT_PUBLIC_API_PREFIX=/console/api
-NEXT_PUBLIC_PUBLIC_API_PREFIX=/v1
+log "=========================================="
+log "Starting EC2 instance user data script"
+INSTANCE_ID=$(get_instance_metadata "instance-id")
+log "Instance: ${INSTANCE_ID:-N/A}"
+log "=========================================="
 
-# ===== VERSION PINNING FOR STABILITY =====
-# Pin Docker image versions to avoid compatibility issues
-DIFY_API_VERSION=1.9.1
-DIFY_WEB_VERSION=1.9.1
-DIFY_WORKER_VERSION=1.9.1
-DIFY_WORKER_BEAT_VERSION=1.9.1
+# Get AWS region with retries and fallback
+AWS_REGION=""
+for i in {1..5}; do
+    AWS_REGION=$(get_instance_metadata "placement/region")
+    [ -n "$AWS_REGION" ] && break
+    [ $i -lt 5 ] && sleep 2
+done
+[ -z "$AWS_REGION" ] && AWS_REGION="eu-west-3" && log "Using default region: $AWS_REGION" || log "Region: $AWS_REGION"
 
-# Database and Redis versions (stable versions)
-POSTGRES_VERSION=15-alpine
-REDIS_VERSION=6-alpine
+# Get SUT bucket from SSM (contains setup script)
+log "Retrieving SUT bucket from SSM: /classroom/testus_patronus/sut-bucket"
+SUT_BUCKET=$(aws ssm get-parameter --name "/classroom/testus_patronus/sut-bucket" --query "Parameter.Value" --output text --region "${AWS_REGION}" 2>&1)
+if [ $? -ne 0 ] || [ -z "$SUT_BUCKET" ] || [ "$SUT_BUCKET" = "None" ]; then
+    log "ERROR: Failed to get SUT bucket from SSM"
+    log "Error: $SUT_BUCKET"
+    exit 1
+fi
+log "SUT bucket: $SUT_BUCKET"
 
-# Weaviate version (stable)
-WEAVIATE_VERSION=1.27.0
+# Download setup script from S3
+SETUP_SCRIPT="/tmp/setup_testus_patronus.sh"
+log "Downloading setup script from S3..."
+if ! aws s3 cp "s3://${SUT_BUCKET}/setup_testus_patronus.sh" "$SETUP_SCRIPT" --region "${AWS_REGION}" >/dev/null 2>&1; then
+    log "ERROR: Failed to download setup script from S3"
+    log "Expected location: s3://${SUT_BUCKET}/setup_testus_patronus.sh"
+    exit 1
+fi
 
-EOF
+# Make script executable
+chmod +x "$SETUP_SCRIPT"
+log "✓ Setup script downloaded and made executable"
 
-# Pre-pull specific Docker images to ensure version consistency
-echo "Pre-pulling Dify Docker images with specific versions..."
-su - ec2-user -c "cd ~/dify/docker && docker compose pull"
+# Pass environment variables to setup script (domain information from Lambda)
+# These are injected by Lambda into user_data before instance creation
+if [ -n "$CADDY_DOMAIN" ]; then
+    export CADDY_DOMAIN
+    log "Domain from user_data: $CADDY_DOMAIN"
+fi
+if [ -n "$MACHINE_NAME" ]; then
+    export MACHINE_NAME
+    log "Machine name from user_data: $MACHINE_NAME"
+fi
+if [ -n "$WORKSHOP_NAME" ]; then
+    export WORKSHOP_NAME
+    log "Workshop name from user_data: $WORKSHOP_NAME"
+fi
 
-# Start Dify services
-su - ec2-user -c "cd ~/dify/docker && docker compose up -d"
-
-# Wait for services to be ready
-echo "Waiting for Dify services to start..."
-sleep 120
-
-# Log the versions being used
-echo "Dify setup completed successfully"
-echo "Dify version: 1.9.1 (pinned for stability)"
-echo "Docker images pulled with specific versions"
-echo "Access Dify at: http://$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)"
-echo "Complete the setup through the web interface"
-
-# Show running containers and their versions
-echo "Running Dify containers:"
-su - ec2-user -c "docker ps --format 'table {{.Names}}\t{{.Image}}\t{{.Status}}'"
+# Execute setup script (preserves environment)
+log "Executing setup script..."
+exec "$SETUP_SCRIPT"

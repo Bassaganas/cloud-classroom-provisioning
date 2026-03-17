@@ -17,4 +17,4 @@ variable "storage_account_name" {
 variable "key_vault_name" {
   description = "Name of the key vault for storing sensitive values"
   type        = string
-} 
+}

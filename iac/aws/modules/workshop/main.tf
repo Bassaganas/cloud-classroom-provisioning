@@ -184,3 +184,65 @@ module "cloudfront_dify_jira" {
   # Logging is optional and only used for debugging
   enable_cloudwatch_logging = false
 }
+
+# S3 Module - Workshop setup script deployment (for fellowship and testus_patronus)
+module "s3_sut" {
+  count  = (var.workshop_name == "fellowship" || var.workshop_name == "fellowship-of-the-build" || var.workshop_name == "testus_patronus") ? 1 : 0
+  source = "../s3-sut"
+
+  environment   = var.environment
+  owner         = var.owner
+  workshop_name = var.workshop_name
+  region        = var.region
+}
+
+# SSM Parameter for SUT bucket name (for fellowship and testus_patronus)
+resource "aws_ssm_parameter" "sut_bucket_name" {
+  count = (var.workshop_name == "fellowship" || var.workshop_name == "fellowship-of-the-build" || var.workshop_name == "testus_patronus") ? 1 : 0
+
+  name        = var.workshop_name == "testus_patronus" ? "/classroom/testus_patronus/sut-bucket" : "/classroom/fellowship/sut-bucket"
+  description = "Name of the S3 bucket containing ${var.workshop_name} setup script files"
+  type        = "String"
+  value       = module.s3_sut[0].bucket_name
+  overwrite   = true
+
+  tags = {
+    Environment = var.environment
+    Owner       = var.owner
+    Project     = "classroom"
+    WorkshopID  = var.workshop_name
+    Company     = "TestingFantasy"
+  }
+}
+
+# IAM Policy for S3 access to workshop setup script bucket (attached to common EC2 IAM role)
+# Get the role name from the instance profile
+data "aws_iam_instance_profile" "common_profile" {
+  count = (var.workshop_name == "fellowship" || var.workshop_name == "fellowship-of-the-build" || var.workshop_name == "testus_patronus") && var.common_ec2_iam_instance_profile_name != "" ? 1 : 0
+  name  = var.common_ec2_iam_instance_profile_name
+}
+
+resource "aws_iam_role_policy" "ec2_sut_access" {
+  count = (var.workshop_name == "fellowship" || var.workshop_name == "fellowship-of-the-build" || var.workshop_name == "testus_patronus") && length(data.aws_iam_instance_profile.common_profile) > 0 ? 1 : 0
+  name  = "ec2-sut-s3-access-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
+  role  = data.aws_iam_instance_profile.common_profile[0].role_name
+
+  # Explicit dependency on S3 bucket to ensure it exists before policy is created
+  depends_on = [module.s3_sut]
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["s3:ListBucket"]
+        Resource = module.s3_sut[0].bucket_arn
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["s3:GetObject"]
+        Resource = "${module.s3_sut[0].bucket_arn}/*"
+      }
+    ]
+  })
+}
