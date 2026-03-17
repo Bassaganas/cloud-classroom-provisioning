@@ -147,6 +147,17 @@ export async function whenIGotoTutorialPage(page, workshopSlug, tutorialId) {
   await tutorialOverviewPage.expectTableVisible()
 }
 
+export async function whenIGotoTutorialDashboardAndCaptureExpectedCount(page, workshopSlug, tutorialId) {
+  const tutorialOverviewPage = new TutorialOverviewPage(page)
+  await tutorialOverviewPage.gotoTutorialPath(`/tutorial/${workshopSlug}/${tutorialId}`)
+  await tutorialOverviewPage.expectTableVisible()
+  
+  // Wait for the API response and extract instance count
+  const sessionResponse = await tutorialOverviewPage.waitForTutorialSessionResponse(tutorialId)
+  const instances = sessionResponse.instances || []
+  return instances.length
+}
+
 export async function thenAllTutorialLinksUseHttp(page) {
   const tutorialOverviewPage = new TutorialOverviewPage(page)
   const hrefs = await tutorialOverviewPage.getAllTableAnchorHrefs()
