@@ -61,19 +61,22 @@ class TestAtomicIndexReservation:
         self.session_id = 'sess-test-123'
         self.table_name = f'instance-assignments-{self.workshop_name}-{self.environment}'
         
-        # Create DynamoDB table
+        # Create DynamoDB table, ignore if already exists
         dynamodb = boto3.resource('dynamodb', region_name=self.region)
-        self.table = dynamodb.create_table(
-            TableName=self.table_name,
-            KeySchema=[
-                {'AttributeName': 'instance_id', 'KeyType': 'HASH'}
-            ],
-            AttributeDefinitions=[
-                {'AttributeName': 'instance_id', 'AttributeType': 'S'}
-            ],
-            BillingMode='PAY_PER_REQUEST'
-        )
-        self.table.wait_until_exists()
+        try:
+            self.table = dynamodb.create_table(
+                TableName=self.table_name,
+                KeySchema=[
+                    {'AttributeName': 'instance_id', 'KeyType': 'HASH'}
+                ],
+                AttributeDefinitions=[
+                    {'AttributeName': 'instance_id', 'AttributeType': 'S'}
+                ],
+                BillingMode='PAY_PER_REQUEST'
+            )
+            self.table.wait_until_exists()
+        except dynamodb.meta.client.exceptions.ResourceInUseException:
+            self.table = dynamodb.Table(self.table_name)
 
     def _get_counter_item(self, instance_type='pool'):
         """Helper to fetch counter item from DynamoDB"""
@@ -163,19 +166,22 @@ class TestIdempotentCreation:
         self.table_name = f'instance-assignments-{self.workshop_name}-{self.environment}'
         self.idempotency_key = 'idem-key-001'
         
-        # Create DynamoDB table
+        # Create DynamoDB table, ignore if already exists
         dynamodb = boto3.resource('dynamodb', region_name=self.region)
-        self.table = dynamodb.create_table(
-            TableName=self.table_name,
-            KeySchema=[
-                {'AttributeName': 'instance_id', 'KeyType': 'HASH'}
-            ],
-            AttributeDefinitions=[
-                {'AttributeName': 'instance_id', 'AttributeType': 'S'}
-            ],
-            BillingMode='PAY_PER_REQUEST'
-        )
-        self.table.wait_until_exists()
+        try:
+            self.table = dynamodb.create_table(
+                TableName=self.table_name,
+                KeySchema=[
+                    {'AttributeName': 'instance_id', 'KeyType': 'HASH'}
+                ],
+                AttributeDefinitions=[
+                    {'AttributeName': 'instance_id', 'AttributeType': 'S'}
+                ],
+                BillingMode='PAY_PER_REQUEST'
+            )
+            self.table.wait_until_exists()
+        except dynamodb.meta.client.exceptions.ResourceInUseException:
+            self.table = dynamodb.Table(self.table_name)
         
         # Create VPC for EC2
         ec2 = boto3.client('ec2', region_name=self.region)
