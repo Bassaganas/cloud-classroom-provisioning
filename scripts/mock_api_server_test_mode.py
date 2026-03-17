@@ -64,16 +64,22 @@ class TestModeAPIHandler(http.server.SimpleHTTPRequestHandler):
         self.wfile.write(json.dumps(data).encode('utf-8'))
     
     def do_GET(self):
-        """Handle GET requests - delegate to Lambda module"""
+        """Handle GET requests - delegate to Lambda module or serve /templates for readiness"""
         parsed_path = urllib.parse.urlparse(self.path)
         path = parsed_path.path
         query_params = urllib.parse.parse_qs(parsed_path.query)
-        
+
+        # Special case: /templates endpoint for test runner readiness check
+        if path == '/api/templates' or path == '/templates':
+            # Return a minimal valid template map (mocked)
+            self.send_json_response({"testus_patronus": {}, "fellowship": {}}, 200)
+            return
+
         # Remove /api prefix
         api_path = path.replace('/api', '', 1) if path.startswith('/api') else path
-        
+
         print(f"[TEST MODE] GET {api_path}")
-        
+
         # Construct event for Lambda handler
         event = {
             'requestContext': {'http': {'method': 'GET'}},
@@ -81,7 +87,7 @@ class TestModeAPIHandler(http.server.SimpleHTTPRequestHandler):
             'rawQueryString': parsed_path.query or '',
             'queryStringParameters': {k: v[0] for k, v in query_params.items()} if query_params else None,
         }
-        
+
         try:
             response = classroom_instance_manager.lambda_handler(event, None)
             status_code = response.get('statusCode', 500)
