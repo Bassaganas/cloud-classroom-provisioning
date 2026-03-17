@@ -5,7 +5,7 @@ set -e
 
 # Function to display usage
 usage() {
-  echo "Usage: $0 --name <classroom-name> --cloud [aws|azure] [--region <aws-region>] [--location <azure-location>] [--destroy] [--parallelism <number>] [--force-unlock] [--setup-rbac] [--workshop <name>] [--environment <dev|staging|prod>] [--skip-packaging] [--only-common|--only-workshop] [--validate-only]"
+  echo "Usage: $0 --name <classroom-name> --cloud [aws|azure] [--region <aws-region>] [--location <azure-location>] [--destroy] [--parallelism <number>] [--force-unlock] [--setup-rbac] [--workshop <name>] [--environment <dev|staging|prod>] [--skip-packaging] [--only-common|--only-workshop] [--validate-only] [--run-e2e] [--e2e-url <url>]"
   echo ""
   echo "Options:"
   echo "  --name         Name of the classroom (required)"
@@ -24,6 +24,8 @@ usage() {
   echo "  --only-common  Apply/destroy only the common stack (AWS only)"
   echo "  --only-workshop Apply/destroy only the workshop stack (AWS only)"
   echo "  --validate-only Validate deployment without making changes"
+  echo "  --run-e2e      Trigger Playwright E2E GitHub workflow after successful create"
+  echo "  --e2e-url      Base URL for deployed EC2 manager used by E2E workflow"
   exit 1
 }
 
@@ -44,6 +46,8 @@ ENVIRONMENT="dev"
 ONLY_COMMON=false
 ONLY_WORKSHOP=false
 VALIDATE_ONLY=false
+RUN_E2E=false
+E2E_URL="https://ec2-management-dev.testingfantasy.com"
 
 # Parse command line arguments
 while [[ $# -gt 0 ]]; do
@@ -112,6 +116,14 @@ while [[ $# -gt 0 ]]; do
       VALIDATE_ONLY=true
       shift
       ;;
+    --run-e2e)
+      RUN_E2E=true
+      shift
+      ;;
+    --e2e-url)
+      E2E_URL="$2"
+      shift 2
+      ;;
     --help)
       usage
       ;;
@@ -135,6 +147,11 @@ fi
 
 if [ "$ONLY_COMMON" = true ] && [ "$ONLY_WORKSHOP" = true ]; then
   echo "Error: --only-common and --only-workshop cannot be used together"
+  usage
+fi
+
+if [[ ! "$E2E_URL" =~ ^https?:// ]]; then
+  echo "Error: --e2e-url must start with http:// or https://"
   usage
 fi
 
@@ -206,6 +223,22 @@ if [ "$ACTION" = "create" ]; then
     echo "Function URL will be available in the Terraform outputs"
   fi
   echo "Use this URL to create student accounts on demand"
+
+  if [ "$RUN_E2E" = true ]; then
+    echo ""
+    echo "Triggering Playwright E2E workflow against: $E2E_URL"
+    if command -v gh >/dev/null 2>&1; then
+      if gh workflow run playwright-e2e.yml -f test_url="$E2E_URL"; then
+        echo "Playwright workflow triggered successfully."
+      else
+        echo "Warning: Failed to trigger Playwright workflow via gh CLI."
+        echo "You can run it manually from GitHub Actions with test_url=$E2E_URL"
+      fi
+    else
+      echo "Warning: gh CLI is not installed."
+      echo "Run manually: gh workflow run playwright-e2e.yml -f test_url='$E2E_URL'"
+    fi
+  fi
 else
   echo "Classroom '$CLASSROOM_NAME' has been destroyed successfully!"
 fi 
