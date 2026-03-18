@@ -2,7 +2,7 @@ resource "aws_ssm_parameter" "tutorial_always_on_links" {
   name        = "/cloud-classroom/tutorial-always-on-links"
   description = "Always-on environment links for tutorials (used by EC2 Manager frontend)"
   type        = "String"
-  value       = jsonencode({
+  value = jsonencode({
     fellowship = [
       {
         label = "LOTR SUT"
@@ -10,7 +10,7 @@ resource "aws_ssm_parameter" "tutorial_always_on_links" {
       }
     ]
   })
-  tier        = "Standard"
+  tier = "Standard"
 }
 # Root module that includes all infrastructure
 # This consolidates common, fellowship, and testus_patronus into a single state
