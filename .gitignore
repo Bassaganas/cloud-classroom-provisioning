@@ -72,3 +72,4 @@ users_e2e_qs_2025.txt
 
 # Lambda packages (generated files)
 functions/packages/*.zip
+test-results/*
