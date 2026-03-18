@@ -1,3 +1,12 @@
+output "tutorial_always_on_links_parameter_arn" {
+  description = "ARN of the always-on tutorial links SSM parameter"
+  value       = aws_ssm_parameter.tutorial_always_on_links.arn
+}
+
+output "tutorial_always_on_links_parameter_name" {
+  description = "Name of the always-on tutorial links SSM parameter"
+  value       = aws_ssm_parameter.tutorial_always_on_links.name
+}
 # Aggregate outputs from all modules
 
 # Common infrastructure outputs

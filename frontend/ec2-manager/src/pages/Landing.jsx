@@ -34,6 +34,7 @@ import OpenInNewRoundedIcon from '@mui/icons-material/OpenInNewRounded'
 import ScienceRoundedIcon from '@mui/icons-material/ScienceRounded'
 import CheckCircleRoundedIcon from '@mui/icons-material/CheckCircleRounded'
 import { api } from '../services/api'
+import { alwaysOnLinks } from '../config/alwaysOnLinks'
 import OpenInBrowserRoundedIcon from '@mui/icons-material/OpenInBrowserRounded'
 import AppToast from '../components/AppToast'
 import TutorialSessionForm from './TutorialSessionForm'
@@ -42,7 +43,7 @@ import Header from '../components/Header'
 function Landing() {
   const [workshops, setWorkshops] = useState([])
   const [tutorialSessions, setTutorialSessions] = useState({}) // { workshopName: [sessions] }
-  const [alwaysOnTutorials, setAlwaysOnTutorials] = useState([]) // [{tutorial, url}]
+  // Remove alwaysOnTutorials state, use alwaysOnLinks config
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [showSessionForm, setShowSessionForm] = useState(null) // workshopName or null
@@ -56,21 +57,9 @@ function Landing() {
 
   useEffect(() => {
     loadWorkshops()
-    loadAlwaysOnTutorials()
   }, [])
 
-  const loadAlwaysOnTutorials = async () => {
-    try {
-      const response = await api.alwaysOnTutorials()
-      if (response.success && Array.isArray(response.tutorials)) {
-        setAlwaysOnTutorials(response.tutorials)
-      } else {
-        setAlwaysOnTutorials([])
-      }
-    } catch (err) {
-      setAlwaysOnTutorials([])
-    }
-  }
+  // Removed loadAlwaysOnTutorials, alwaysOnLinks is static/local for now
 
   useEffect(() => {
     // Load tutorial sessions for each workshop
@@ -261,8 +250,8 @@ function Landing() {
           ) : (
             filteredWorkshops.map((workshop) => {
             const sessions = tutorialSessions[workshop.name] || []
-            // Find always-on tutorial for this workshop
-            const alwaysOn = alwaysOnTutorials.find(t => t.tutorial === workshop.name)
+            // Find always-on links for this workshop
+            const links = alwaysOnLinks[workshop.name] || [];
             return (
               <Grid item xs={12} md={6} lg={4} key={workshop.name}>
                 <Card sx={{ height: '100%', display: 'flex', flexDirection: 'column' }}>
@@ -275,20 +264,28 @@ function Landing() {
                         <Typography variant="body2" color="text.secondary">
                           {sessions.length} active session{sessions.length !== 1 ? 's' : ''}
                         </Typography>
-                        {alwaysOn && (
+                        {links.length > 0 && (
                           <Box sx={{ mt: 1 }}>
-                            <Button
-                              variant="contained"
-                              color="info"
-                              size="small"
-                              href={alwaysOn.url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              startIcon={<OpenInBrowserRoundedIcon />}
-                              sx={{ mt: 0.5, fontWeight: 600, borderRadius: 2, textTransform: 'none', boxShadow: 2 }}
-                            >
-                              Always-On Tutorial
-                            </Button>
+                            <Typography variant="subtitle2" color="text.secondary" sx={{ mb: 0.5 }}>
+                              Always-On Environments
+                            </Typography>
+                            <Stack direction="column" spacing={0.5}>
+                              {links.slice(0, 3).map((linkObj, idx) => (
+                                <Button
+                                  key={idx}
+                                  variant="contained"
+                                  color="info"
+                                  size="small"
+                                  href={linkObj.link}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  startIcon={<OpenInBrowserRoundedIcon />}
+                                  sx={{ fontWeight: 600, borderRadius: 2, textTransform: 'none', boxShadow: 2 }}
+                                >
+                                  {linkObj.label}
+                                </Button>
+                              ))}
+                            </Stack>
                           </Box>
                         )}
                       </Box>

@@ -1,12 +1,15 @@
 import { defineConfig, devices } from '@playwright/test'
 
+const usingDeployedFrontend = !!process.env.E2E_BASE_URL
 // Check if VITE_API_URL is set (used when running tests via run_e2e_tests.sh with Python mock server)
 const usingExternalAPI = !!process.env.VITE_API_URL
 
 // Conditionally configure webServers:
 // - If VITE_API_URL is set, only start Vite dev server (Python mock API server is already running)
 // - If not set, start both mock Node.js server and Vite dev server (local dev mode)
-const webServer = usingExternalAPI
+const webServer = usingDeployedFrontend
+  ? undefined
+  : usingExternalAPI
   ? [
       {
         command: 'npm run dev -- --host 127.0.0.1 --port 5173',
@@ -40,7 +43,7 @@ export default defineConfig({
     timeout: 12_000
   },
   use: {
-    baseURL: 'http://127.0.0.1:5173',
+    baseURL: process.env.E2E_BASE_URL || 'http://127.0.0.1:5173',
     trace: 'on-first-retry',
     screenshot: 'only-on-failure',
     video: 'retain-on-failure'
