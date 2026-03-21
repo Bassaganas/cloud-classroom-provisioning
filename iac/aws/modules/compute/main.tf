@@ -143,7 +143,7 @@ resource "aws_security_group" "classroom_sg" {
     protocol    = "tcp"
     cidr_blocks = ["0.0.0.0/0"]
   }
-  
+
   # Jenkins (port 8080) access
   ingress {
     description = "Jenkins"
