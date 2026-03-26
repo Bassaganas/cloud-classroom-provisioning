@@ -917,27 +917,33 @@ def setup_caddy_domain(instance_id, workshop_name, machine_name=None, domain=Non
             if attempt < 5:
                 time.sleep(2)
         
-        # Create/update Route53 A record
+        # Create/update Route53 A records for main, jenkins, and ide subdomains
         route53 = boto3.client('route53')
+        domains_to_create = [final_domain]
+        if final_domain.endswith('.fellowship.testingfantasy.com'):
+            domains_to_create.append(f"jenkins-{final_domain}")
+            domains_to_create.append(f"ide-{final_domain}")
+
         if public_ip:
+            changes = []
+            for d in domains_to_create:
+                changes.append({
+                    'Action': 'UPSERT',
+                    'ResourceRecordSet': {
+                        'Name': d,
+                        'Type': 'A',
+                        'TTL': 300,
+                        'ResourceRecords': [{'Value': public_ip}]
+                    }
+                })
             route53.change_resource_record_sets(
                 HostedZoneId=HTTPS_HOSTED_ZONE_ID,
-                ChangeBatch={
-                    'Changes': [{
-                        'Action': 'UPSERT',
-                        'ResourceRecordSet': {
-                            'Name': final_domain,
-                            'Type': 'A',
-                            'TTL': 300,
-                            'ResourceRecords': [{'Value': public_ip}]
-                        }
-                    }]
-                }
+                ChangeBatch={'Changes': changes}
             )
-            logger.info(f"Created Route53 A record: {final_domain} -> {public_ip}")
+            logger.info(f"Created Route53 A records: {domains_to_create} -> {public_ip}")
         else:
-            logger.warning(f"Instance {instance_id} has no public IP yet, Route53 record will be created when IP is available")
-            logger.info(f"  Domain: {final_domain} (will be updated when instance gets public IP)")
+            logger.warning(f"Instance {instance_id} has no public IP yet, Route53 records will be created when IP is available")
+            logger.info(f"  Domains: {domains_to_create} (will be updated when instance gets public IP)")
             # Note: Route53 record will be created/updated when IP becomes available
             # The tags are already set, so setup script can use the domain immediately
         
@@ -2229,13 +2235,20 @@ def delete_instances(instance_ids=None, delete_type='individual'):
                 except Exception as e:
                     logger.warning(f"Error getting instance details for {instance_id}: {str(e)}")
                 
-                # Clean up Route53 record before termination (non-blocking - failure doesn't prevent deletion)
-                dns_cleanup = _delete_route53_a_record(domain_to_delete, strict=False, max_retries=3)
-                if not dns_cleanup.get('success'):
-                    logger.warning(
-                        f"Route53 cleanup incomplete for {instance_id} (domain={domain_to_delete}), "
-                        f"but proceeding with instance termination: reason={dns_cleanup.get('reason')}, attempts={dns_cleanup.get('attempts')}"
-                    )
+
+                # Clean up Route53 records: main, jenkins, and ide subdomains
+                domains_to_delete = [domain_to_delete]
+                if domain_to_delete and domain_to_delete.endswith('.fellowship.testingfantasy.com'):
+                    domains_to_delete.append(f"jenkins-{domain_to_delete}")
+                    domains_to_delete.append(f"ide-{domain_to_delete}")
+
+                for d in domains_to_delete:
+                    dns_cleanup = _delete_route53_a_record(d, strict=False, max_retries=3)
+                    if not dns_cleanup.get('success'):
+                        logger.warning(
+                            f"Route53 cleanup incomplete for {instance_id} (domain={d}), "
+                            f"but proceeding with instance termination: reason={dns_cleanup.get('reason')}, attempts={dns_cleanup.get('attempts')}"
+                        )
 
                 # Clean up DynamoDB assignment (non-blocking)
                 try:
