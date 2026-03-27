@@ -11,6 +11,7 @@ import pytest
 import os
 import sys
 import json
+from botocore.exceptions import ClientError
 from datetime import datetime, timezone, timedelta
 from unittest.mock import patch, MagicMock
 
@@ -26,7 +27,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-@mock_aws
 class TestSpotInstanceTagging:
     """Test that spot instances receive proper naming and tagging."""
 
@@ -36,6 +36,9 @@ class TestSpotInstanceTagging:
         self.region = 'eu-west-3'
         self.workshop_name = 'fellowship'
         self.environment = 'dev'
+
+        self._mock = mock_aws()
+        self._mock.start()
         
         # Initialize EC2 client first
         self.ec2 = boto3.client('ec2', region_name=self.region)
@@ -47,27 +50,20 @@ class TestSpotInstanceTagging:
         os.environ['EC2_SUBNET_ID'] = self._create_subnet()
         os.environ['EC2_INSTANCE_TYPE'] = 't3.medium'
         os.environ['EC2_IAM_INSTANCE_PROFILE'] = f'ec2-ssm-profile-{self.workshop_name}-{self.environment}'
-        os.environ['INSTANCE_MANAGER_HOSTED_ZONE_ID'] = self._create_hosted_zone()
-        os.environ['INSTANCE_MANAGER_BASE_DOMAIN'] = 'testingfantasy.com'
+        os.environ['INSTANCE_MANAGER_HOSTED_ZONE_ID'] = ''
+        os.environ['INSTANCE_MANAGER_BASE_DOMAIN'] = ''
+        self._create_instance_profile(os.environ['EC2_IAM_INSTANCE_PROFILE'])
         
         # Create DynamoDB table for template map and request tracking
         dynamodb = boto3.resource('dynamodb', region_name=self.region)
         table_name = f'instance-assignments-{self.workshop_name}-{self.environment}'
-        
-        try:
-            table = dynamodb.Table(table_name)
-            table.delete()
-            table.wait_until_not_exists()
-        except Exception:
-            pass
-        
+
         self.table = dynamodb.create_table(
             TableName=table_name,
             KeySchema=[{'AttributeName': 'instance_id', 'KeyType': 'HASH'}],
             AttributeDefinitions=[{'AttributeName': 'instance_id', 'AttributeType': 'S'}],
             BillingMode='PAY_PER_REQUEST'
         )
-        self.table.wait_until_exists()
         
         # Use moto's built-in default AMI
         test_ami = 'ami-12c6146b'  # Default moto AMI
@@ -77,8 +73,7 @@ class TestSpotInstanceTagging:
         template_config = {
             'ami_id': test_ami,
             'instance_type': 't3.medium',
-            'app_port': 5000,
-            'user_data_base64': ''
+            'app_port': 5000
         }
         ssm.put_parameter(
             Name=f'/classroom/templates/{self.environment}/{self.workshop_name}',
@@ -93,12 +88,37 @@ class TestSpotInstanceTagging:
         ssm.put_parameter(Name=f'{param_prefix}/instance_terminate_timeout_minutes', Value='60', Type='String', Overwrite=True)
         ssm.put_parameter(Name=f'{param_prefix}/instance_hard_terminate_timeout_minutes', Value='240', Type='String', Overwrite=True)
 
+        sys.modules.pop('classroom_instance_manager', None)
+
+        yield
+
+        self._mock.stop()
+
     def _create_subnet(self):
         """Create VPC and subnet, return subnet ID."""
         ec2 = boto3.client('ec2', region_name=self.region)
-        vpc_response = ec2.create_vpc(CidrBlock='10.0.0.0/16')
-        vpc_id = vpc_response['Vpc']['VpcId']
-        
+        vpcs = ec2.describe_vpcs(Filters=[{'Name': 'isDefault', 'Values': ['true']}]).get('Vpcs', [])
+        if not vpcs:
+            vpcs = ec2.describe_vpcs().get('Vpcs', [])
+        if vpcs:
+            vpc_id = vpcs[0]['VpcId']
+        else:
+            try:
+                vpc_id = ec2.create_vpc(CidrBlock='10.0.0.0/16')['Vpc']['VpcId']
+            except ClientError as error:
+                if error.response.get('Error', {}).get('Code') != 'VpcLimitExceeded':
+                    raise
+                existing_vpcs = ec2.describe_vpcs().get('Vpcs', [])
+                if not existing_vpcs:
+                    raise
+                vpc_id = existing_vpcs[0]['VpcId']
+
+        existing_subnets = ec2.describe_subnets(
+            Filters=[{'Name': 'vpc-id', 'Values': [vpc_id]}]
+        ).get('Subnets', [])
+        if existing_subnets:
+            return existing_subnets[0]['SubnetId']
+
         subnet_response = ec2.create_subnet(VpcId=vpc_id, CidrBlock='10.0.1.0/24')
         return subnet_response['Subnet']['SubnetId']
 
@@ -110,6 +130,22 @@ class TestSpotInstanceTagging:
             CallerReference=str(datetime.now(timezone.utc).timestamp())
         )
         return response['HostedZone']['Id'].split('/')[-1]
+
+    def _create_instance_profile(self, profile_name):
+        """Create a mock IAM role + instance profile for EC2 launches."""
+        iam = boto3.client('iam', region_name=self.region)
+        role_name = f'{profile_name}-role'
+        assume_role_policy = json.dumps({
+            'Version': '2012-10-17',
+            'Statement': [{
+                'Effect': 'Allow',
+                'Principal': {'Service': 'ec2.amazonaws.com'},
+                'Action': 'sts:AssumeRole'
+            }]
+        })
+        iam.create_role(RoleName=role_name, AssumeRolePolicyDocument=assume_role_policy)
+        iam.create_instance_profile(InstanceProfileName=profile_name)
+        iam.add_role_to_instance_profile(InstanceProfileName=profile_name, RoleName=role_name)
 
     def _get_instance_tags(self, instance_id):
         """Retrieve tags from an instance."""
