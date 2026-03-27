@@ -140,12 +140,17 @@ class TestGoldenAmiLaunchContract:
 
         assert first_user_data.count('export CADDY_DOMAIN=') == 1
         assert second_user_data.count('export CADDY_DOMAIN=') == 1
-        assert 'cd /opt/fellowship-sut' in first_user_data
+        assert 'SUT_DIR="/opt/fellowship-sut"' in first_user_data
+        assert 'cd "$SUT_DIR"' in first_user_data
         assert 'docker compose up -d' in first_user_data
-        assert 'grep -v -E' in first_user_data
-        assert 'mv .env.tmp .env' in first_user_data
-        assert 'CADDY_DOMAIN=${CADDY_DOMAIN:-}' in first_user_data
+        assert 'cat > "${SUT_DIR}/.env" <<EOF' in first_user_data
+        assert 'CADDY_DOMAIN=${CADDY_DOMAIN:-localhost}' in first_user_data
         assert 'WORKSHOP_NAME=${WORKSHOP_NAME:-fellowship}' in first_user_data
+        assert 'CADDYFILE_PATH=./caddy/Caddyfile.fellowship' in first_user_data
+        assert 'if [ -n "${JENKINS_DOMAIN:-}" ] && [ -d "$ESCAPE_ROOM_DIR" ]; then' in first_user_data
+        assert 'ESCAPE_ROOM_DIR="/opt/fellowship-sut/devops-escape-room"' in first_user_data
+        assert 'cd "$ESCAPE_ROOM_DIR"' in first_user_data
+        assert 'export JENKINS_URL="https://${JENKINS_DOMAIN}/"' in first_user_data
         assert 'setup_fellowship.sh' not in first_user_data
         assert 'aws s3 cp' not in first_user_data
         assert f'export CADDY_DOMAIN={first_domain}' in first_user_data
@@ -179,12 +184,17 @@ class TestGoldenAmiLaunchContract:
         )
 
         assert user_data.startswith('#!/bin/bash')
-        assert 'cd /opt/fellowship-sut' in user_data
+        assert 'SUT_DIR="/opt/fellowship-sut"' in user_data
+        assert 'cd "$SUT_DIR"' in user_data
         assert 'docker compose up -d' in user_data
-        assert 'grep -v -E' in user_data
-        assert 'mv .env.tmp .env' in user_data
-        assert 'CADDY_DOMAIN=${CADDY_DOMAIN:-}' in user_data
+        assert 'cat > "${SUT_DIR}/.env" <<EOF' in user_data
+        assert 'CADDY_DOMAIN=${CADDY_DOMAIN:-localhost}' in user_data
         assert 'WORKSHOP_NAME=${WORKSHOP_NAME:-fellowship}' in user_data
+        assert 'CADDYFILE_PATH=./caddy/Caddyfile.fellowship' in user_data
+        assert 'if [ -n "${JENKINS_DOMAIN:-}" ] && [ -d "$ESCAPE_ROOM_DIR" ]; then' in user_data
+        assert 'ESCAPE_ROOM_DIR="/opt/fellowship-sut/devops-escape-room"' in user_data
+        assert 'cd "$ESCAPE_ROOM_DIR"' in user_data
+        assert 'export JENKINS_URL="https://${JENKINS_DOMAIN}/"' in user_data
         assert 'export WORKSHOP_NAME=' not in user_data
         assert 'setup_fellowship.sh' not in user_data
         assert 'aws s3 cp' not in user_data
