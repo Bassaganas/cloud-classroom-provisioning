@@ -672,7 +672,7 @@ def sanitize_domain_name(domain):
     """
     # Replace underscores with hyphens (most common invalid character)
     # Also ensure no double hyphens are created
-    sanitized = domain.replace('_', '-')
+    sanitized = str(domain).replace('_', '-').lower()
     # Remove any double hyphens that might result
     while '--' in sanitized:
         sanitized = sanitized.replace('--', '-')
@@ -774,6 +774,9 @@ def _reserve_instance_indices(workshop_name, tutorial_session_id, instance_type,
 def _normalize_route53_record_name(record_name):
     if not record_name:
         return ''
+    # Always lowercase for DNS
+    record_name = record_name.lower()
+    return record_name if record_name.endswith('.') else f"{record_name}."
     return record_name if record_name.endswith('.') else f"{record_name}."
 
 
@@ -882,6 +885,90 @@ def setup_caddy_domain(instance_id, workshop_name, machine_name=None, domain=Non
     if not HTTPS_BASE_DOMAIN or not HTTPS_HOSTED_ZONE_ID:
         logger.warning("HTTPS_BASE_DOMAIN or HTTPS_HOSTED_ZONE_ID not configured, skipping Caddy domain setup")
         return None
+
+    try:
+        # Use provided domain or construct from machine_name, fallback to instance_id
+        if domain:
+            final_domain = sanitize_domain_name(domain)
+        elif machine_name:
+            # Sanitize machine_name before using it in domain
+            sanitized_machine_name = sanitize_domain_name(machine_name)
+            final_domain = f"{sanitized_machine_name}.{workshop_name}.{HTTPS_BASE_DOMAIN}"
+        else:
+            # Fallback to instance ID (backward compatibility)
+            final_domain = f"{instance_id}.{workshop_name}.{HTTPS_BASE_DOMAIN}"
+        
+        # Ensure the final domain is sanitized (in case workshop_name or HTTPS_BASE_DOMAIN has issues)
+        final_domain = sanitize_domain_name(final_domain)
+        
+        https_url = f"https://{final_domain}"
+        
+        # Get instance public IP (with retries - instance may not have IP immediately)
+        public_ip = None
+        for attempt in range(1, 6):
+            try:
+                response = ec2.describe_instances(InstanceIds=[instance_id])
+                if response.get('Reservations') and response['Reservations'][0].get('Instances'):
+                    instance = response['Reservations'][0]['Instances'][0]
+                    public_ip = instance.get('PublicIpAddress')
+                    if public_ip:
+                        logger.info(f"Got public IP for {instance_id}: {public_ip} (attempt {attempt})")
+                        break
+            except Exception as e:
+                logger.warning(f"Error getting instance info (attempt {attempt}): {str(e)}")
+            
+            if attempt < 5:
+                time.sleep(2)
+        
+        # Create/update Route53 A records for main, jenkins, and ide subdomains
+        route53 = boto3.client('route53')
+        domains_to_create = [final_domain]
+        if str(workshop_name or '').strip().lower() == 'fellowship':
+            domains_to_create.append(f"jenkins-{final_domain}")
+            domains_to_create.append(f"ide-{final_domain}")
+
+        if public_ip:
+            changes = []
+            for d in domains_to_create:
+                changes.append({
+                    'Action': 'UPSERT',
+                    'ResourceRecordSet': {
+                        'Name': d,
+                        'Type': 'A',
+                        'TTL': 300,
+                        'ResourceRecords': [{'Value': public_ip}]
+                    }
+                })
+            route53.change_resource_record_sets(
+                HostedZoneId=HTTPS_HOSTED_ZONE_ID,
+                ChangeBatch={'Changes': changes}
+            )
+            logger.info(f"Created Route53 A records: {domains_to_create} -> {public_ip}")
+        else:
+            logger.warning(f"Instance {instance_id} has no public IP yet, Route53 records will be created when IP is available")
+            logger.info(f"  Domains: {domains_to_create} (will be updated when instance gets public IP)")
+            # Note: Route53 record will be created/updated when IP becomes available
+            # The tags are already set, so setup script can use the domain immediately
+        
+        # Update instance tags (may already be set, but ensure they're correct)
+        ec2.create_tags(
+            Resources=[instance_id],
+            Tags=[
+                {'Key': 'HttpsDomain', 'Value': final_domain},
+                {'Key': 'HttpsUrl', 'Value': https_url},
+                {'Key': 'HttpsEnabled', 'Value': 'true'}
+            ]
+        )
+        logger.info(f"Updated instance tags with HTTPS domain: {final_domain}")
+        
+        return {
+            'domain': final_domain,
+            'https_url': https_url,
+            'public_ip': public_ip
+        }
+    except Exception as e:
+        logger.error(f"Error setting up Caddy domain for {instance_id}: {str(e)}", exc_info=True)
+        return None
     
     try:
         # Use provided domain or construct from machine_name, fallback to instance_id
@@ -920,7 +1007,7 @@ def setup_caddy_domain(instance_id, workshop_name, machine_name=None, domain=Non
         # Create/update Route53 A records for main, jenkins, and ide subdomains
         route53 = boto3.client('route53')
         domains_to_create = [final_domain]
-        if final_domain.endswith('.fellowship.testingfantasy.com'):
+        if str(workshop_name or '').strip().lower() == 'fellowship':
             domains_to_create.append(f"jenkins-{final_domain}")
             domains_to_create.append(f"ide-{final_domain}")
 
@@ -1050,7 +1137,7 @@ def enable_https_for_instance(instance_id, workshop_name, app_port):
             if e.response['Error']['Code'] != 'InvalidPermission.Duplicate':
                 raise
 
-    record_name = f"{instance_id}.{workshop_name}.{HTTPS_BASE_DOMAIN}"
+    record_name = f"{instance_id}.{workshop_name}.{HTTPS_BASE_DOMAIN}".lower()
     rule_priority = get_next_rule_priority(listener['ListenerArn'])
     rule = elbv2.create_rule(
         ListenerArn=listener['ListenerArn'],
@@ -1088,7 +1175,7 @@ def enable_https_for_instance(instance_id, workshop_name, app_port):
 
 def disable_https_for_instance(instance_id, workshop_name, tags):
     lb = ensure_https_alb()
-    record_name = tags.get('HttpsDomain') or f"{instance_id}.{workshop_name}.{HTTPS_BASE_DOMAIN}"
+    record_name = (tags.get('HttpsDomain') or f"{instance_id}.{workshop_name}.{HTTPS_BASE_DOMAIN}").lower()
     target_group_arn = tags.get('HttpsTargetGroupArn')
     rule_arn = tags.get('HttpsListenerRuleArn')
 
@@ -1134,8 +1221,91 @@ def check_password_auth(body, query_params):
     # Simple password comparison
     return provided_password == password
 
-def get_user_data_script(template_config=None):
+INLINE_GOLDEN_AMI_BOOTSTRAP_WORKSHOPS = {'fellowship', 'fellowship-of-the-build'}
+
+
+def _uses_inline_golden_ami_bootstrap(workshop_name, template_config=None):
+    """Return True when a workshop should use the inline golden AMI bootstrap."""
+    normalized_workshop = str(workshop_name or WORKSHOP_NAME).strip().lower()
+    if normalized_workshop not in INLINE_GOLDEN_AMI_BOOTSTRAP_WORKSHOPS:
+        return False
+    return bool(template_config and template_config.get('ami_id'))
+
+
+def _get_inline_golden_ami_bootstrap_script(workshop_name):
+    """Return the minimal bootstrap used for golden AMI-based workshops."""
+    normalized_workshop = str(workshop_name or WORKSHOP_NAME).strip().lower()
+    if normalized_workshop == 'fellowship-of-the-build':
+        normalized_workshop = 'fellowship'
+
+    if normalized_workshop != 'fellowship':
+        raise ValueError(f"Unsupported inline golden AMI bootstrap workshop: {workshop_name}")
+
+    return """#!/bin/bash
+set -euo pipefail
+
+LOG_FILE="/var/log/user-data.log"
+exec > >(tee -a "$LOG_FILE") 2>&1
+
+echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] Starting golden AMI bootstrap for ${WORKSHOP_NAME:-fellowship}"
+
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl enable docker || true
+    systemctl start docker
+fi
+
+for attempt in $(seq 1 30); do
+    if docker info >/dev/null 2>&1; then
+        break
+    fi
+    echo "Waiting for Docker daemon to become ready (${attempt}/30)..."
+    sleep 2
+done
+
+docker info >/dev/null 2>&1
+
+cd /opt/fellowship-sut
+
+touch .env
+if [ -f .env ]; then
+    grep -v -E '^(CADDY_DOMAIN|JENKINS_DOMAIN|IDE_DOMAIN|MACHINE_NAME|WORKSHOP_NAME|ROUTE53_ZONE_ID)=' .env > .env.tmp || true
+else
+    : > .env.tmp
+fi
+cat >> .env.tmp <<EOF
+CADDY_DOMAIN=${CADDY_DOMAIN:-}
+JENKINS_DOMAIN=${JENKINS_DOMAIN:-}
+IDE_DOMAIN=${IDE_DOMAIN:-}
+MACHINE_NAME=${MACHINE_NAME:-}
+WORKSHOP_NAME=${WORKSHOP_NAME:-fellowship}
+ROUTE53_ZONE_ID=${ROUTE53_ZONE_ID:-}
+EOF
+mv .env.tmp .env
+
+echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] Wrote runtime domain variables to /opt/fellowship-sut/.env"
+
+if [ -f docker-compose.overrides.yml ]; then
+    docker compose -f docker-compose.yml -f docker-compose.overrides.yml up -d
+else
+    docker compose up -d
+fi
+
+echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] Golden AMI bootstrap completed"
+"""
+
+
+def get_user_data_script(template_config=None, workshop_name=None):
     """Get the user_data script content"""
+    workshop_name = workshop_name or WORKSHOP_NAME
+
+    if _uses_inline_golden_ami_bootstrap(workshop_name, template_config):
+        logger.info(
+            "Using inline golden AMI bootstrap for workshop %s (AMI: %s)",
+            workshop_name,
+            template_config.get('ami_id')
+        )
+        return _get_inline_golden_ami_bootstrap_script(workshop_name)
+
     if template_config:
         user_data_base64 = template_config.get('user_data_base64')
         if user_data_base64:
@@ -1363,9 +1533,16 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
         
         instance_type_override = template_config.get('instance_type') if template_config else None
         selected_instance_type = instance_type_override or INSTANCE_TYPE
+        if workshop_name == 'fellowship' and instance_type == 'admin' and selected_instance_type == 't3.small':
+            logger.info("Upgrading fellowship admin instance type from t3.small to t3.medium for bootstrap reliability")
+            selected_instance_type = 't3.medium'
         logger.info(f"Selected instance type: {selected_instance_type} (override: {instance_type_override}, default: {INSTANCE_TYPE})")
         
-        user_data = get_user_data_script(template_config)
+        # Save the base user_data BEFORE the loop so each iteration gets a fresh copy.
+        # Mutating user_data inside the loop without resetting causes domain exports
+        # from iteration N to accumulate into the user_data of iteration N+1.
+        base_user_data = get_user_data_script(template_config, workshop_name=workshop_name)
+        user_data = base_user_data  # will be reset at the start of each loop iteration
         
         # Log user_data details for debugging
         logger.info("=" * 80)
@@ -1384,7 +1561,8 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
             'setup_fellowship.sh': 'setup_fellowship.sh' in user_data,
             'exec setup script': 'exec "$SETUP_SCRIPT"' in user_data or "exec '$SETUP_SCRIPT'" in user_data,
             'devops-escape-room': 'devops-escape-room' in user_data.lower(),
-            'dify': 'dify' in user_data.lower()
+            'dify': 'dify' in user_data.lower(),
+            'golden-ami-bootstrap': '/opt/fellowship-sut' in user_data and 'docker compose' in user_data
         }
         
         logger.info("  Script markers:")
@@ -1393,7 +1571,9 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
             logger.info(f"    {status} {marker}: {found}")
         
         if workshop_name in ['fellowship', 'fellowship-of-the-build']:
-            if markers['fellowship-sut']:
+            if markers['golden-ami-bootstrap']:
+                logger.info("  ✓ Fellowship golden AMI bootstrap DETECTED in user_data")
+            elif markers['fellowship-sut']:
                 logger.info("  ✓ Fellowship SUT deployment code DETECTED in user_data")
             elif markers['setup_fellowship.sh'] and markers['exec setup script'] and markers['S3 download']:
                 logger.info("  ✓ Fellowship deployment is delegated to setup_fellowship.sh from S3")
@@ -1422,6 +1602,10 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
         )
 
         for i, instance_index in enumerate(reserved_indices):
+            # Reset user_data to the base template for each iteration.
+            # Without this, domain exports injected for instance N accumulate
+            # into the user_data string passed to instance N+1.
+            user_data = base_user_data
             
             # Determine naming and tags based on type
             if instance_type == 'admin':
@@ -1497,6 +1681,14 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
                 tags.append({'Key': 'HttpsUrl', 'Value': https_url})
                 tags.append({'Key': 'HttpsEnabled', 'Value': 'true'})
                 tags.append({'Key': 'MachineName', 'Value': machine_name})  # Keep original for reference
+                if HTTPS_HOSTED_ZONE_ID:
+                    tags.append({'Key': 'Route53ZoneId', 'Value': HTTPS_HOSTED_ZONE_ID})
+                
+                # Derive jenkins/ide subdomains (mirrors what setup_fellowship.sh does at boot)
+                jenkins_domain = f"jenkins-{domain}"
+                ide_domain = f"ide-{domain}"
+                tags.append({'Key': 'JenkinsDomain', 'Value': jenkins_domain})
+                tags.append({'Key': 'IdeDomain', 'Value': ide_domain})
                 
                 logger.info(f"Generated domain name BEFORE instance creation: {domain} (sanitized from machine_name: {machine_name})")
                 
@@ -1504,8 +1696,11 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
                 # This ensures the domain is available immediately without needing EC2 metadata service
                 domain_exports = f"""# Domain information injected by Lambda (available immediately)
 export CADDY_DOMAIN={domain}
+export JENKINS_DOMAIN={jenkins_domain}
+export IDE_DOMAIN={ide_domain}
 export MACHINE_NAME={machine_name}
 export WORKSHOP_NAME={workshop_name}
+export ROUTE53_ZONE_ID={HTTPS_HOSTED_ZONE_ID}
 """
                 
                 # Inject after shebang and set -e, but before any other code
@@ -1529,11 +1724,11 @@ export WORKSHOP_NAME={workshop_name}
                     # Insert domain exports
                     lines.insert(insert_pos, domain_exports.rstrip())
                     user_data = '\n'.join(lines)
-                    logger.info(f"Injected domain information into user_data: CADDY_DOMAIN={domain}, MACHINE_NAME={machine_name}")
+                    logger.info(f"Injected domain information into user_data: CADDY_DOMAIN={domain}, JENKINS_DOMAIN={jenkins_domain}, IDE_DOMAIN={ide_domain}, MACHINE_NAME={machine_name}")
                 else:
                     # No shebang, prepend
                     user_data = domain_exports + user_data
-                    logger.info(f"Prepended domain information to user_data: CADDY_DOMAIN={domain}, MACHINE_NAME={machine_name}")
+                    logger.info(f"Prepended domain information to user_data: CADDY_DOMAIN={domain}, JENKINS_DOMAIN={jenkins_domain}, IDE_DOMAIN={ide_domain}, MACHINE_NAME={machine_name}")
             else:
                 domain = None
                 machine_name = None
@@ -1559,8 +1754,6 @@ export WORKSHOP_NAME={workshop_name}
                 'MaxCount': 1,
                 'UserData': user_data,
                 'IamInstanceProfile': {'Name': IAM_INSTANCE_PROFILE},
-                'SubnetId': SUBNET_ID if SUBNET_ID else None,
-                'SecurityGroupIds': SECURITY_GROUP_IDS if SECURITY_GROUP_IDS else None,
                 'TagSpecifications': [
                     {
                         'ResourceType': 'instance',
@@ -1582,6 +1775,11 @@ export WORKSHOP_NAME={workshop_name}
                     }
                 ]
             }
+
+            if SUBNET_ID:
+                run_instances_params['SubnetId'] = SUBNET_ID
+            if SECURITY_GROUP_IDS:
+                run_instances_params['SecurityGroupIds'] = SECURITY_GROUP_IDS
             
             # Add spot instance options if using spot market
             if purchase_type == 'spot':
@@ -1710,7 +1908,13 @@ export WORKSHOP_NAME={workshop_name}
             logger.info(f"  Purchase Type: {purchase_type.upper()}")
             logger.info(f"  Type: {instance_type}")
             logger.info(f"  Template Source: {ssm_param_path if template_config else 'FALLBACK (no template)'}")
-            logger.info(f"  User Data Source: {'SSM Template' if template_config and template_config.get('user_data_base64') else 'Fallback Script'}")
+            if _uses_inline_golden_ami_bootstrap(workshop_name, template_config):
+                user_data_source = 'Inline Golden AMI Bootstrap'
+            elif template_config and template_config.get('user_data_base64'):
+                user_data_source = 'SSM Template'
+            else:
+                user_data_source = 'Fallback Script'
+            logger.info(f"  User Data Source: {user_data_source}")
             logger.info(f"  Tutorial Session: {tutorial_session_id or 'N/A'}")
             logger.info("=" * 80)
             
@@ -2238,7 +2442,8 @@ def delete_instances(instance_ids=None, delete_type='individual'):
 
                 # Clean up Route53 records: main, jenkins, and ide subdomains
                 domains_to_delete = [domain_to_delete]
-                if domain_to_delete and domain_to_delete.endswith('.fellowship.testingfantasy.com'):
+                workshop_for_instance = str(instance_tags.get('WorkshopID', '')).strip().lower()
+                if domain_to_delete and workshop_for_instance == 'fellowship':
                     domains_to_delete.append(f"jenkins-{domain_to_delete}")
                     domains_to_delete.append(f"ide-{domain_to_delete}")
 
