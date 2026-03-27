@@ -1247,7 +1247,14 @@ set -euo pipefail
 LOG_FILE="/var/log/user-data.log"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
-echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] Starting golden AMI bootstrap for ${WORKSHOP_NAME:-fellowship}"
+log() {
+    echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] $*"
+}
+
+log "Starting golden AMI bootstrap for ${WORKSHOP_NAME:-fellowship}"
+
+SUT_DIR="/opt/fellowship-sut"
+ESCAPE_ROOM_DIR="/opt/fellowship-sut/devops-escape-room"
 
 if command -v systemctl >/dev/null 2>&1; then
     systemctl enable docker || true
@@ -1264,33 +1271,36 @@ done
 
 docker info >/dev/null 2>&1
 
-cd /opt/fellowship-sut
-
-touch .env
-if [ -f .env ]; then
-    grep -v -E '^(CADDY_DOMAIN|JENKINS_DOMAIN|IDE_DOMAIN|MACHINE_NAME|WORKSHOP_NAME|ROUTE53_ZONE_ID)=' .env > .env.tmp || true
-else
-    : > .env.tmp
-fi
-cat >> .env.tmp <<EOF
-CADDY_DOMAIN=${CADDY_DOMAIN:-}
+log "Writing .env (CADDY_DOMAIN=${CADDY_DOMAIN:-localhost})"
+cat > "${SUT_DIR}/.env" <<EOF
+CADDY_DOMAIN=${CADDY_DOMAIN:-localhost}
 JENKINS_DOMAIN=${JENKINS_DOMAIN:-}
 IDE_DOMAIN=${IDE_DOMAIN:-}
-MACHINE_NAME=${MACHINE_NAME:-}
+MACHINE_NAME=${MACHINE_NAME:-fellowship}
 WORKSHOP_NAME=${WORKSHOP_NAME:-fellowship}
 ROUTE53_ZONE_ID=${ROUTE53_ZONE_ID:-}
+CADDYFILE_PATH=./caddy/Caddyfile.fellowship
 EOF
-mv .env.tmp .env
 
-echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] Wrote runtime domain variables to /opt/fellowship-sut/.env"
+log "Starting SUT stack..."
+cd "$SUT_DIR"
+docker compose up -d
 
-if [ -f docker-compose.overrides.yml ]; then
-    docker compose -f docker-compose.yml -f docker-compose.overrides.yml up -d
-else
+if [ -n "${JENKINS_DOMAIN:-}" ] && [ -d "$ESCAPE_ROOM_DIR" ]; then
+    log "Starting DevOps Escape Room stack..."
+    cd "$ESCAPE_ROOM_DIR"
+    export JENKINS_URL="https://${JENKINS_DOMAIN}/"
     docker compose up -d
+    log "Started devops-escape-room stack for ${JENKINS_DOMAIN}"
+elif [ -n "${JENKINS_DOMAIN:-}" ]; then
+    log "WARNING: JENKINS_DOMAIN set but ${ESCAPE_ROOM_DIR} not found"
 fi
 
-echo "[$(date -u '+%Y-%m-%dT%H:%M:%SZ')] Golden AMI bootstrap completed"
+if [ -n "${JENKINS_DOMAIN:-}" ] && [ -d "$ESCAPE_ROOM_DIR" ] && [ ! -f "$ESCAPE_ROOM_DIR/.env" ]; then
+    log "WARNING: ${ESCAPE_ROOM_DIR}/.env not found (using exported env vars for compose substitution)"
+fi
+
+log "Golden AMI bootstrap completed"
 """
 
 
