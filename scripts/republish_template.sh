@@ -92,10 +92,30 @@ fi
 templates_param="/classroom/templates/${ENVIRONMENT}"
 
 echo ""
-echo "Publishing template map with $template_count workshop(s) to SSM..."
-echo "Parameter: $templates_param"
+echo "Publishing $template_count individual workshop parameter(s) and combined map to SSM..."
+echo "Base path: $templates_param"
 
-# Use Advanced tier to support larger parameter values
+# Publish individual per-workshop parameters (preferred by Lambda over the combined map)
+# This mirrors what publish_template_map() does in setup_aws.sh
+workshop_names=$(echo "$templates_json" | jq -r 'keys[]')
+for workshop_name in $workshop_names; do
+  workshop_template=$(echo "$templates_json" | jq --arg name "$workshop_name" '.[$name]')
+  individual_param="${templates_param}/${workshop_name}"
+  if aws ssm put-parameter \
+    --name "$individual_param" \
+    --type "String" \
+    --value "$workshop_template" \
+    --tier "Standard" \
+    --overwrite \
+    --region "$REGION" >/dev/null 2>&1; then
+    echo "✓ Published individual parameter: $individual_param"
+  else
+    echo "✗ Failed to publish individual parameter: $individual_param"
+    exit 1
+  fi
+done
+
+# Also publish the combined map as a fallback (Advanced tier for size)
 if aws ssm put-parameter \
   --name "$templates_param" \
   --type "String" \
@@ -103,11 +123,11 @@ if aws ssm put-parameter \
   --tier "Advanced" \
   --overwrite \
   --region "$REGION" >/dev/null 2>&1; then
-  echo "✓ Successfully published template map to SSM (Advanced tier)"
+  echo "✓ Published combined fallback map to SSM (Advanced tier)"
   echo "  Workshops in map: $(echo "$templates_json" | jq -r 'keys | join(", ")')"
   echo ""
   echo "New instances created via EC2 Manager will now use the updated user_data.sh"
 else
-  echo "✗ Failed to publish template map to SSM"
+  echo "✗ Failed to publish combined template map to SSM"
   exit 1
 fi
