@@ -147,6 +147,7 @@ class TestGoldenAmiLaunchContract:
         assert 'CADDY_DOMAIN=${CADDY_DOMAIN:-localhost}' in first_user_data
         assert 'WORKSHOP_NAME=${WORKSHOP_NAME:-fellowship}' in first_user_data
         assert 'CADDYFILE_PATH=./caddy/Caddyfile.fellowship' in first_user_data
+        assert 'WDS_SOCKET_PROTOCOL=wss' in first_user_data
         assert 'if [ -n "${JENKINS_DOMAIN:-}" ] && [ -d "$ESCAPE_ROOM_DIR" ]; then' in first_user_data
         assert 'ESCAPE_ROOM_DIR="/opt/fellowship-sut/devops-escape-room"' in first_user_data
         assert 'cd "$ESCAPE_ROOM_DIR"' in first_user_data
@@ -191,6 +192,7 @@ class TestGoldenAmiLaunchContract:
         assert 'CADDY_DOMAIN=${CADDY_DOMAIN:-localhost}' in user_data
         assert 'WORKSHOP_NAME=${WORKSHOP_NAME:-fellowship}' in user_data
         assert 'CADDYFILE_PATH=./caddy/Caddyfile.fellowship' in user_data
+        assert 'WDS_SOCKET_PROTOCOL=wss' in user_data
         assert 'if [ -n "${JENKINS_DOMAIN:-}" ] && [ -d "$ESCAPE_ROOM_DIR" ]; then' in user_data
         assert 'ESCAPE_ROOM_DIR="/opt/fellowship-sut/devops-escape-room"' in user_data
         assert 'cd "$ESCAPE_ROOM_DIR"' in user_data
