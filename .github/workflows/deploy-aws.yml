@@ -129,6 +129,7 @@ jobs:
         env:
           CLASSROOM_NAME: ${{ vars.CLASSROOM_NAME || 'fellowship-dev' }}
           WORKSHOP: ${{ vars.WORKSHOP || 'fellowship' }}
+          SKIP_TEMPLATE_PUBLISH: 'true'
         run: |
           ./scripts/setup_classroom.sh \
             --name "$CLASSROOM_NAME" \
@@ -183,6 +184,7 @@ jobs:
       - name: Run deployment action
         env:
           CLASSROOM_NAME: ${{ inputs.classroom_name != '' && inputs.classroom_name || vars.CLASSROOM_NAME || 'fellowship-manual' }}
+          SKIP_TEMPLATE_PUBLISH: 'true'
         run: |
           EXTRA_FLAGS=""
           if [ "${{ inputs.action }}" = "destroy" ]; then

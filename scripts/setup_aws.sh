@@ -353,6 +353,16 @@ ENVIRONMENT="dev"
 ONLY_COMMON=false
 ONLY_WORKSHOP=false
 VALIDATE_ONLY=false
+SKIP_TEMPLATE_PUBLISH=false
+
+case "${SKIP_TEMPLATE_PUBLISH:-false}" in
+  true|TRUE|1|yes|YES|on|ON)
+    SKIP_TEMPLATE_PUBLISH=true
+    ;;
+  *)
+    SKIP_TEMPLATE_PUBLISH=false
+    ;;
+esac
 
 # Shift past the required arguments
 shift 3 2>/dev/null || true
@@ -718,9 +728,13 @@ else
       echo "  ./scripts/build_frontend.sh --environment $ENVIRONMENT --region $REGION"
     fi
 
-  # Publish template map (only if not --only-common)
+  # Publish template map (only if not --only-common and not explicitly disabled)
   if [ "$ONLY_COMMON" = false ]; then
-    publish_template_map
+    if [ "$SKIP_TEMPLATE_PUBLISH" = true ]; then
+      echo "Skipping workshop template publish to SSM (SKIP_TEMPLATE_PUBLISH=true)"
+    else
+      publish_template_map
+    fi
   fi
     
   # Print the Lambda function URLs
