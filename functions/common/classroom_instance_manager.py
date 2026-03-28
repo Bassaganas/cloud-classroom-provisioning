@@ -926,6 +926,7 @@ def setup_caddy_domain(instance_id, workshop_name, machine_name=None, domain=Non
         if str(workshop_name or '').strip().lower() == 'fellowship':
             domains_to_create.append(f"jenkins-{final_domain}")
             domains_to_create.append(f"ide-{final_domain}")
+            domains_to_create.append(f"gitea-{final_domain}")
 
         if public_ip:
             changes = []
@@ -1276,6 +1277,7 @@ cat > "${SUT_DIR}/.env" <<EOF
 CADDY_DOMAIN=${CADDY_DOMAIN:-localhost}
 JENKINS_DOMAIN=${JENKINS_DOMAIN:-}
 IDE_DOMAIN=${IDE_DOMAIN:-}
+GITEA_DOMAIN=${GITEA_DOMAIN:-}
 MACHINE_NAME=${MACHINE_NAME:-fellowship}
 WORKSHOP_NAME=${WORKSHOP_NAME:-fellowship}
 ROUTE53_ZONE_ID=${ROUTE53_ZONE_ID:-}
@@ -1301,6 +1303,15 @@ fi
 if [ -n "${JENKINS_DOMAIN:-}" ] && [ -d "$ESCAPE_ROOM_DIR" ] && [ ! -f "$ESCAPE_ROOM_DIR/.env" ]; then
     log "WARNING: ${ESCAPE_ROOM_DIR}/.env not found (using exported env vars for compose substitution)"
 fi
+
+log "==========================="
+
+log "Find Jenkins at https://${JENKINS_DOMAIN:-<no-jenkins-domain-configured>}/"
+log "Find IDE at https://${IDE_DOMAIN:-<no-ide-domain-configured>}/"
+log "Find Gitea at https://${GITEA_DOMAIN:-<no-gitea-domain-configured>}/"
+log "Find SUT frontend at https://${CADDY_DOMAIN:-<no-caddy-domain-configured>}/"
+
+log "==========================="
 
 log "Golden AMI bootstrap completed"
 """
@@ -1699,6 +1710,8 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
                 # Derive jenkins/ide subdomains (mirrors what setup_fellowship.sh does at boot)
                 jenkins_domain = f"jenkins-{domain}"
                 ide_domain = f"ide-{domain}"
+                gitea_domain = f"gitea-{domain}"
+                tags.append({'Key': 'GiteaDomain', 'Value': gitea_domain})
                 tags.append({'Key': 'JenkinsDomain', 'Value': jenkins_domain})
                 tags.append({'Key': 'IdeDomain', 'Value': ide_domain})
                 
@@ -1709,6 +1722,7 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
                 domain_exports = f"""# Domain information injected by Lambda (available immediately)
 export CADDY_DOMAIN={domain}
 export JENKINS_DOMAIN={jenkins_domain}
+export GITEA_DOMAIN={gitea_domain}
 export IDE_DOMAIN={ide_domain}
 export MACHINE_NAME={machine_name}
 export WORKSHOP_NAME={workshop_name}
@@ -1736,11 +1750,11 @@ export ROUTE53_ZONE_ID={HTTPS_HOSTED_ZONE_ID}
                     # Insert domain exports
                     lines.insert(insert_pos, domain_exports.rstrip())
                     user_data = '\n'.join(lines)
-                    logger.info(f"Injected domain information into user_data: CADDY_DOMAIN={domain}, JENKINS_DOMAIN={jenkins_domain}, IDE_DOMAIN={ide_domain}, MACHINE_NAME={machine_name}")
+                    logger.info(f"Injected domain information into user_data: CADDY_DOMAIN={domain}, JENKINS_DOMAIN={jenkins_domain}, IDE_DOMAIN={ide_domain}, MACHINE_NAME={machine_name}, GITEA_DOMAIN={gitea_domain}")
                 else:
                     # No shebang, prepend
                     user_data = domain_exports + user_data
-                    logger.info(f"Prepended domain information to user_data: CADDY_DOMAIN={domain}, JENKINS_DOMAIN={jenkins_domain}, IDE_DOMAIN={ide_domain}, MACHINE_NAME={machine_name}")
+                    logger.info(f"Prepended domain information to user_data: CADDY_DOMAIN={domain}, JENKINS_DOMAIN={jenkins_domain}, IDE_DOMAIN={ide_domain}, MACHINE_NAME={machine_name}, GITEA_DOMAIN={gitea_domain}")
             else:
                 domain = None
                 machine_name = None
@@ -2458,7 +2472,7 @@ def delete_instances(instance_ids=None, delete_type='individual'):
                 if domain_to_delete and workshop_for_instance == 'fellowship':
                     domains_to_delete.append(f"jenkins-{domain_to_delete}")
                     domains_to_delete.append(f"ide-{domain_to_delete}")
-
+                    domains_to_delete.append(f"gitea-{domain_to_delete}")
                 for d in domains_to_delete:
                     dns_cleanup = _delete_route53_a_record(d, strict=False, max_retries=3)
                     if not dns_cleanup.get('success'):
