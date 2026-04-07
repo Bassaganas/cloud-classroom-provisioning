@@ -1338,7 +1338,7 @@ GITEA_DOMAIN=${GITEA_DOMAIN:-}
 MACHINE_NAME=${MACHINE_NAME:-fellowship}
 WORKSHOP_NAME=${WORKSHOP_NAME:-fellowship}
 ROUTE53_ZONE_ID=${ROUTE53_ZONE_ID:-}
-CADDYFILE_PATH=./caddy/Caddyfile.fellowship
+CADDYFILE_PATH=./caddy/Caddyfile
 FRONTEND_MODE=prod
 WDS_SOCKET_PROTOCOL=wss
 # AWS credentials for Route 53 DNS-01 ACME challenges (for Caddy wildcard certificates)
@@ -1348,6 +1348,25 @@ AWS_REGION=${AWS_REGION:-eu-west-1}
 AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
 AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
 EOF
+
+# Determine which Caddyfile to use based on deployment type
+if [ -n "${JENKINS_DOMAIN:-}" ]; then
+    # Full tutorial stack with Jenkins/IDE/Gitea
+    CADDYFILE_SOURCE="./caddy/Caddyfile.fellowship"
+    log "Setting up Caddyfile.fellowship (full stack: SUT + Jenkins + IDE + Gitea)"
+else
+    # SUT-only production deployment
+    CADDYFILE_SOURCE="./caddy/Caddyfile.prod"
+    log "Setting up Caddyfile.prod (production SUT only)"
+fi
+
+# Copy the appropriate Caddyfile to the active location (what docker-compose will use)
+if [ -f "${SUT_DIR}${CADDYFILE_SOURCE}" ]; then
+    cp "${SUT_DIR}${CADDYFILE_SOURCE}" "${SUT_DIR}/caddy/Caddyfile"
+    log "✓ Copied ${CADDYFILE_SOURCE} → caddy/Caddyfile"
+else
+    log "WARNING: ${CADDYFILE_SOURCE} not found, docker-compose will use mount default"
+fi
 
 log "Starting SUT stack..."
 cd "$SUT_DIR"
