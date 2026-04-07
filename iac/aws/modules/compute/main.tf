@@ -98,6 +98,26 @@ resource "aws_iam_role_policy" "ec2_secrets_access" {
   })
 }
 
+# IAM policy for Route 53 access - required for Caddy DNS-01 ACME challenges
+# Allows Caddy to create temporary DNS records for Let's Encrypt wildcard certificate validation
+resource "aws_iam_role_policy" "ec2_route53_access" {
+  name = "ec2-route53-access-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
+  role = aws_iam_role.ec2_ssm_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "route53:ListHostedZonesByName",
+        "route53:ChangeResourceRecordSets",
+        "route53:ListResourceRecordSets"
+      ]
+      Resource = "*"
+    }]
+  })
+}
+
 # Create instance profile
 resource "aws_iam_instance_profile" "ec2_ssm_profile" {
   name = "iam-ec2-ssm-profile-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"

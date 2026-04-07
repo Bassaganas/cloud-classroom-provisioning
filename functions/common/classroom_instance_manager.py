@@ -1341,10 +1341,25 @@ ROUTE53_ZONE_ID=${ROUTE53_ZONE_ID:-}
 CADDYFILE_PATH=./caddy/Caddyfile.fellowship
 FRONTEND_MODE=prod
 WDS_SOCKET_PROTOCOL=wss
+# AWS credentials for Route 53 DNS-01 ACME challenges (for Caddy wildcard certificates)
+# Caddy will access Route 53 via EC2 IAM role credentials (IMDS). 
+# Explicit credentials below are optional; if set, they take precedence over IMDS.
+AWS_REGION=${AWS_REGION:-eu-west-1}
+AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
+AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
 EOF
 
 log "Starting SUT stack..."
 cd "$SUT_DIR"
+
+# Log AWS credential setup for debugging Route 53 issues
+if [ -n "${AWS_ACCESS_KEY_ID:-}" ] && [ -n "${AWS_SECRET_ACCESS_KEY:-}" ]; then
+    log "✓ Explicit AWS credentials provided in .env for Route 53 DNS-01 challenge"
+else
+    log "ℹ Using EC2 IAM role (IMDS) for Route 53 credentials"
+    log "    Ensure EC2 instance profile has Route 53 permissions (route53:ChangeResourceRecordSets, etc.)"
+fi
+
 docker compose up -d
 
 if [ -n "${JENKINS_DOMAIN:-}" ] && [ -d "$ESCAPE_ROOM_DIR" ]; then
