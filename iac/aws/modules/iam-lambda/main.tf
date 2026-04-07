@@ -161,7 +161,8 @@ resource "aws_iam_role_policy" "lambda_iam_policy" {
         Action = [
           "route53:ChangeResourceRecordSets",
           "route53:ListHostedZonesByName",
-          "route53:ListResourceRecordSets"
+          "route53:ListResourceRecordSets",
+          "route53:GetChange"
         ]
         Resource = "*"
       },

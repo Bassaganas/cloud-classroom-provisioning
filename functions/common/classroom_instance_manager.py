@@ -1347,7 +1347,7 @@ GITEA_DOMAIN=${GITEA_DOMAIN:-}
 MACHINE_NAME=${MACHINE_NAME:-fellowship}
 WORKSHOP_NAME=${WORKSHOP_NAME:-fellowship}
 ROUTE53_ZONE_ID=${ROUTE53_ZONE_ID:-}
-CADDYFILE_PATH=./caddy/Caddyfile
+CADDYFILE_PATH=./caddy/Caddyfile.fellowship
 FRONTEND_MODE=prod
 WDS_SOCKET_PROTOCOL=wss
 # AWS credentials NOT stored in .env — Caddy will retrieve fresh credentials
@@ -1357,35 +1357,27 @@ WDS_SOCKET_PROTOCOL=wss
 AWS_REGION=${AWS_REGION:-eu-west-1}
 EOF
 
-# Determine which Caddyfile to use based on deployment type
-if [ -n "${JENKINS_DOMAIN:-}" ]; then
-    # Full tutorial stack with Jenkins/IDE/Gitea
-    # Use Route53-backed wildcard certificates via IMDS (Caddyfile.fellowship)
-    CADDYFILE_SOURCE="./caddy/Caddyfile.fellowship"
-    log "Setting up Caddyfile.fellowship (full stack with Route53 wildcard certs via IMDS)"
-else
-    # SUT-only production deployment
-    CADDYFILE_SOURCE="./caddy/Caddyfile.prod"
-    log "Setting up Caddyfile.prod (production SUT only)"
-fi
-
-# Copy the appropriate Caddyfile to the active location (what docker-compose will use)
-if [ -f "${SUT_DIR}${CADDYFILE_SOURCE}" ]; then
-    cp "${SUT_DIR}${CADDYFILE_SOURCE}" "${SUT_DIR}/caddy/Caddyfile"
-    log "✓ Copied ${CADDYFILE_SOURCE} → caddy/Caddyfile"
-else
-    log "WARNING: ${CADDYFILE_SOURCE} not found, docker-compose will use mount default"
-fi
+log "Using Caddyfile.fellowship (Route53 wildcard certs via IMDS)"
+log "  IMPORTANT: ONE certificate will be issued covering all 4 SANs:"
+log "    SUT:     ${CADDY_DOMAIN:-<unset>}"
+log "    Jenkins: ${JENKINS_DOMAIN:-<unset>}"
+log "    IDE:     ${IDE_DOMAIN:-<unset>}"
+log "    Gitea:   ${GITEA_DOMAIN:-<unset>}"
+log "  This counts as 1 cert against the Let's Encrypt rate limit (50/week per domain)."
+log "  Previous approach (4 site blocks) used 4 certs per instance — now fixed."
 
 log "Starting SUT stack..."
 cd "$SUT_DIR"
 
-log "✓ Caddy will use IMDS for Route53 DNS-01 wildcard certificate challenges"
+log "✓ Caddy will use IMDS for Route53 DNS-01 certificate challenge"
 log "  - Credentials are retrieved on-demand from EC2 IAM role"
 log "  - Credentials automatically refresh before expiration"
 log "  - ACME certificate renewals will work indefinitely"
+log "  - Monitor cert acquisition: sudo docker logs fellowship-sut-caddy-1"
 
 docker compose up -d
+log "SUT stack started. Certificate acquisition is running in the background."
+log "  To check cert status: sudo docker logs fellowship-sut-caddy-1 2>&1 | grep -i 'certificate\|tls\|acme\|error'"
 
 if [ -n "${JENKINS_DOMAIN:-}" ] && [ -d "$ESCAPE_ROOM_DIR" ]; then
     log "Starting DevOps Escape Room stack..."
