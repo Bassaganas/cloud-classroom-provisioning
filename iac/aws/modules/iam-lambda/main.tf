@@ -126,7 +126,8 @@ resource "aws_iam_role_policy" "lambda_iam_policy" {
           # Template parameters (for all workshops)
           [
             "arn:aws:ssm:${var.region}:${var.account_id}:parameter/classroom/templates/${var.environment}",
-            "arn:aws:ssm:${var.region}:${var.account_id}:parameter/classroom/templates/${var.environment}/*"
+            "arn:aws:ssm:${var.region}:${var.account_id}:parameter/classroom/templates/${var.environment}/*",
+            "arn:aws:ssm:${var.region}:${var.account_id}:parameter/classroom/*"
           ],
           # For common/shared Lambda: allow access to all workshop parameters
           # This is needed because the common Lambda manages instances for all workshops
