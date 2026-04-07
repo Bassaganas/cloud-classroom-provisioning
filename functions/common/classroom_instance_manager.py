@@ -1329,6 +1329,38 @@ done
 
 docker info >/dev/null 2>&1
 
+# ── Retrieve AWS credentials from EC2 IAM instance profile via IMDS ───────
+# This allows Caddy to use Route53 DNS-01 for wildcard certificate challenges
+log "Attempting to retrieve AWS credentials from EC2 IAM instance metadata..."
+AWS_ACCESS_KEY_ID=""
+AWS_SECRET_ACCESS_KEY=""
+AWS_SESSION_TOKEN=""
+
+for attempt in 1 2 3; do
+    if IMDS_TOKEN=$(curl -s -m 5 -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null); then
+        if [ -n "$IMDS_TOKEN" ]; then
+            log "  ✓ IMDS token obtained (attempt $attempt/3)"
+            ROLE_NAME=$(curl -s -m 5 "http://169.254.169.254/latest/meta-data/iam/security-credentials/" -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" 2>/dev/null | head -1)
+            if [ -n "$ROLE_NAME" ]; then
+                log "  ✓ Found IAM role: $ROLE_NAME"
+                CREDS_JSON=$(curl -s -m 5 "http://169.254.169.254/latest/meta-data/iam/security-credentials/$ROLE_NAME" -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" 2>/dev/null)
+                AWS_ACCESS_KEY_ID=$(echo "$CREDS_JSON" | grep -o '"AccessKeyId" : "[^"]*' | head -1 | cut -d'"' -f4)
+                AWS_SECRET_ACCESS_KEY=$(echo "$CREDS_JSON" | grep -o '"SecretAccessKey" : "[^"]*' | head -1 | cut -d'"' -f4)
+                AWS_SESSION_TOKEN=$(echo "$CREDS_JSON" | grep -o '"Token" : "[^"]*' | head -1 | cut -d'"' -f4)
+                if [ -n "$AWS_ACCESS_KEY_ID" ]; then
+                    log "  ✓ Successfully retrieved AWS credentials from IAM role"
+                    break
+                fi
+            fi
+            break
+        fi
+    fi
+    if [ $attempt -lt 3 ]; then
+        log "  ⚠ Retrying IMDS credential retrieval (attempt $attempt/3)..."
+        sleep 1
+    fi
+done
+
 log "Writing .env (CADDY_DOMAIN=${CADDY_DOMAIN:-localhost})"
 cat > "${SUT_DIR}/.env" <<EOF
 CADDY_DOMAIN=${CADDY_DOMAIN:-localhost}
@@ -1342,18 +1374,26 @@ CADDYFILE_PATH=./caddy/Caddyfile
 FRONTEND_MODE=prod
 WDS_SOCKET_PROTOCOL=wss
 # AWS credentials for Route 53 DNS-01 ACME challenges (for Caddy wildcard certificates)
-# Caddy will access Route 53 via EC2 IAM role credentials (IMDS). 
-# Explicit credentials below are optional; if set, they take precedence over IMDS.
+# Credentials are retrieved from EC2 IAM instance profile via IMDS
 AWS_REGION=${AWS_REGION:-eu-west-1}
 AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID:-}
 AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY:-}
+AWS_SESSION_TOKEN=${AWS_SESSION_TOKEN:-}
 EOF
 
 # Determine which Caddyfile to use based on deployment type
 if [ -n "${JENKINS_DOMAIN:-}" ]; then
     # Full tutorial stack with Jenkins/IDE/Gitea
-    CADDYFILE_SOURCE="./caddy/Caddyfile.fellowship"
-    log "Setting up Caddyfile.fellowship (full stack: SUT + Jenkins + IDE + Gitea)"
+    if [ -n "$AWS_ACCESS_KEY_ID" ] && [ -n "$AWS_SECRET_ACCESS_KEY" ]; then
+        # Use Route53-backed wildcard certificates (Caddyfile.fellowship)
+        CADDYFILE_SOURCE="./caddy/Caddyfile.fellowship"
+        log "Setting up Caddyfile.fellowship (full stack with Route53 wildcard certs)"
+    else
+        # Fallback to self-signed certificates (credentials unavailable)
+        CADDYFILE_SOURCE="./caddy/Caddyfile.fellowship-fallback"
+        log "⚠ Setting up Caddyfile.fellowship-fallback (full stack with self-signed certs)"
+        log "   Reason: AWS credentials not available (service will use self-signed HTTPS)"
+    fi
 else
     # SUT-only production deployment
     CADDYFILE_SOURCE="./caddy/Caddyfile.prod"
@@ -1371,12 +1411,11 @@ fi
 log "Starting SUT stack..."
 cd "$SUT_DIR"
 
-# Log AWS credential setup for debugging Route 53 issues
-if [ -n "${AWS_ACCESS_KEY_ID:-}" ] && [ -n "${AWS_SECRET_ACCESS_KEY:-}" ]; then
-    log "✓ Explicit AWS credentials provided in .env for Route 53 DNS-01 challenge"
+if [ -n "$AWS_ACCESS_KEY_ID" ] && [ -n "$AWS_SECRET_ACCESS_KEY" ]; then
+    log "✓ AWS credentials available for Route53 DNS-01 wildcard certificate challenge"
 else
-    log "ℹ Using EC2 IAM role (IMDS) for Route 53 credentials"
-    log "    Ensure EC2 instance profile has Route 53 permissions (route53:ChangeResourceRecordSets, etc.)"
+    log "ℹ AWS credentials not available - Caddy will use self-signed certificates or retry IMDS from container"
+    log "   Note: Services will be accessible via HTTPS but with self-signed certificate warnings"
 fi
 
 docker compose up -d
