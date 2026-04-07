@@ -1366,6 +1366,29 @@ log "    Gitea:   ${GITEA_DOMAIN:-<unset>}"
 log "  This counts as 1 cert against the Let's Encrypt rate limit (50/week per domain)."
 log "  Previous approach (4 site blocks) used 4 certs per instance — now fixed."
 
+log "Expanding Caddyfile variables with envsubst..."
+if command -v envsubst >/dev/null 2>&1; then
+    # Pre-expand {$VAR} placeholders in Caddyfile before docker compose starts
+    # Export variables to env so envsubst can pick them up
+    export CADDY_DOMAIN
+    export JENKINS_DOMAIN
+    export IDE_DOMAIN
+    export GITEA_DOMAIN
+    export AWS_REGION
+    
+    # Create expanded Caddyfile for docker compose to mount
+    envsubst < "${SUT_DIR}/caddy/Caddyfile.fellowship" > "${SUT_DIR}/caddy/Caddyfile.expanded"
+    log "✓ Created expanded Caddyfile at caddy/Caddyfile.expanded"
+    
+    # Point docker-compose to the expanded version
+    CADDYFILE_PATH="./caddy/Caddyfile.expanded"
+    sed -i "s|CADDYFILE_PATH=./caddy/Caddyfile.fellowship|CADDYFILE_PATH=./caddy/Caddyfile.expanded|" "${SUT_DIR}/.env"
+    log "✓ Updated .env to use expanded Caddyfile"
+else
+    log "WARNING: envsubst not found, using raw Caddyfile with {$VAR} placeholders"
+    log "Caddy will need to expand variables from its environment at startup"
+fi
+
 log "Starting SUT stack..."
 cd "$SUT_DIR"
 
@@ -1373,11 +1396,13 @@ log "✓ Caddy will use IMDS for Route53 DNS-01 certificate challenge"
 log "  - Credentials are retrieved on-demand from EC2 IAM role"
 log "  - Credentials automatically refresh before expiration"
 log "  - ACME certificate renewals will work indefinitely"
+log "  - One ACME order will be placed covering all 4 domain SANs"
 log "  - Monitor cert acquisition: sudo docker logs fellowship-sut-caddy-1"
 
 docker compose up -d
 log "SUT stack started. Certificate acquisition is running in the background."
-log "  To check cert status: sudo docker logs fellowship-sut-caddy-1 2>&1 | grep -i 'certificate\|tls\|acme\|error'"
+log "  Single cert request (4 SANs) in progress. Rate limit impact:"
+log "  = 1 cert order toward the 50/week LE limit, not 4 separate orders"
 
 if [ -n "${JENKINS_DOMAIN:-}" ] && [ -d "$ESCAPE_ROOM_DIR" ]; then
     log "Starting DevOps Escape Room stack..."
