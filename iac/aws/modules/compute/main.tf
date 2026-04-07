@@ -78,7 +78,7 @@ resource "aws_iam_role_policy" "ec2_sut_access" {
   })
 }
 
-# IAM policy for Secrets Manager access to Azure OpenAI credentials
+# IAM policy for Secrets Manager access to Azure OpenAI credentials and wildcard TLS certificates
 resource "aws_iam_role_policy" "ec2_secrets_access" {
   name = "ec2-secrets-access-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   role = aws_iam_role.ec2_ssm_role.id
@@ -92,7 +92,8 @@ resource "aws_iam_role_policy" "ec2_secrets_access" {
       ]
       Resource = [
         "arn:aws:secretsmanager:*:*:secret:classroom/shared/${var.environment}/*",
-        "arn:aws:secretsmanager:*:*:secret:classroom/${var.workshop_name}/${var.environment}/*"
+        "arn:aws:secretsmanager:*:*:secret:classroom/${var.workshop_name}/${var.environment}/*",
+        "arn:aws:secretsmanager:*:*:secret:classroom/wildcard-cert/*"
       ]
     }]
   })
