@@ -213,8 +213,9 @@ resource "aws_instance" "classroom_pool" {
   }
 
   metadata_options {
-    http_tokens   = "required"
-    http_endpoint = "enabled"
+    http_tokens                 = "required"
+    http_endpoint               = "enabled"
+    http_put_response_hop_limit = 2
   }
 
   tags = {

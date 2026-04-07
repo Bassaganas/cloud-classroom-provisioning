@@ -1919,7 +1919,8 @@ export ROUTE53_ZONE_ID={HTTPS_HOSTED_ZONE_ID}
                 ],
                 'MetadataOptions': {
                     'HttpTokens': 'required',
-                    'HttpEndpoint': 'enabled'
+                    'HttpEndpoint': 'enabled',
+                    'HttpPutResponseHopLimit': 2
                 },
                 'BlockDeviceMappings': [
                     {
