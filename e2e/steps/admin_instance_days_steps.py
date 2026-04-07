@@ -104,6 +104,11 @@ def step_admin_instance_with_zero_days_created(page):
         ImageId='ami-12345678',
         MinCount=1,
         MaxCount=1,
+        MetadataOptions={
+            'HttpTokens': 'required',
+            'HttpEndpoint': 'enabled',
+            'HttpPutResponseHopLimit': 2
+        },
         TagSpecifications=[{
             'ResourceType': 'instance',
             'Tags': [
