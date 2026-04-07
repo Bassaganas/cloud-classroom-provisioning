@@ -1357,52 +1357,73 @@ WDS_SOCKET_PROTOCOL=wss
 AWS_REGION=${AWS_REGION:-eu-west-1}
 EOF
 
-log "Using Caddyfile.fellowship (Route53 wildcard certs via IMDS)"
-log "  IMPORTANT: ONE certificate will be issued covering all 4 SANs:"
-log "    SUT:     ${CADDY_DOMAIN:-<unset>}"
-log "    Jenkins: ${JENKINS_DOMAIN:-<unset>}"
-log "    IDE:     ${IDE_DOMAIN:-<unset>}"
-log "    Gitea:   ${GITEA_DOMAIN:-<unset>}"
-log "  This counts as 1 cert against the Let's Encrypt rate limit (50/week per domain)."
-log "  Previous approach (4 site blocks) used 4 certs per instance — now fixed."
+# ── Wildcard cert: try Secrets Manager first, fall back to per-instance ACME ──
+# The issue-wildcard-cert GitHub Actions workflow stores a shared
+# *.fellowship.testingfantasy.com certificate in Secrets Manager at
+# /classroom/wildcard-cert/fellowship.  Fetching it here means this instance
+# never needs to call Let's Encrypt, eliminating the 50-certs/week rate limit
+# regardless of how many instances are provisioned simultaneously.
+CERT_DIR="${SUT_DIR}/caddy/certs"
+WILDCARD_SECRET="/classroom/wildcard-cert/fellowship"
 
-log "Expanding Caddyfile variables with envsubst..."
-if command -v envsubst >/dev/null 2>&1; then
-    # Pre-expand {$VAR} placeholders in Caddyfile before docker compose starts
-    # Export variables to env so envsubst can pick them up
-    export CADDY_DOMAIN
-    export JENKINS_DOMAIN
-    export IDE_DOMAIN
-    export GITEA_DOMAIN
-    export AWS_REGION
-    
-    # Create expanded Caddyfile for docker compose to mount
-    envsubst < "${SUT_DIR}/caddy/Caddyfile.fellowship" > "${SUT_DIR}/caddy/Caddyfile.expanded"
-    log "✓ Created expanded Caddyfile at caddy/Caddyfile.expanded"
-    
-    # Point docker-compose to the expanded version
-    CADDYFILE_PATH="./caddy/Caddyfile.expanded"
-    sed -i "s|CADDYFILE_PATH=./caddy/Caddyfile.fellowship|CADDYFILE_PATH=./caddy/Caddyfile.expanded|" "${SUT_DIR}/.env"
-    log "✓ Updated .env to use expanded Caddyfile"
+log "Attempting to fetch shared wildcard cert from Secrets Manager (${WILDCARD_SECRET})..."
+
+mkdir -p "$CERT_DIR"
+export AWS_REGION="${AWS_REGION:-eu-west-1}"
+
+if python3 - <<'PYEOF'
+import sys, json, subprocess, os
+
+region = os.environ.get("AWS_REGION", "eu-west-1")
+secret_id = "/classroom/wildcard-cert/fellowship"
+cert_dir = "/opt/fellowship-sut/caddy/certs"
+
+result = subprocess.run(
+    ["aws", "secretsmanager", "get-secret-value",
+     "--secret-id", secret_id,
+     "--region", region,
+     "--query", "SecretString",
+     "--output", "text"],
+    capture_output=True, text=True
+)
+if result.returncode != 0:
+    print(f"aws secretsmanager error: {result.stderr.strip()}", file=sys.stderr)
+    sys.exit(1)
+
+data = json.loads(result.stdout.strip())
+if "cert" not in data or "key" not in data:
+    print("Secret exists but is missing 'cert' or 'key' fields", file=sys.stderr)
+    sys.exit(1)
+
+with open(os.path.join(cert_dir, "wildcard.crt"), "w") as f:
+    f.write(data["cert"])
+with open(os.path.join(cert_dir, "wildcard.key"), "w") as f:
+    f.write(data["key"])
+
+# Restrict key permissions
+os.chmod(os.path.join(cert_dir, "wildcard.key"), 0o600)
+
+expires = data.get("expires", "unknown")
+print(f"Wildcard cert written (expires: {expires})")
+PYEOF
+then
+    log "✓ Shared wildcard cert fetched from Secrets Manager — zero ACME calls needed"
+    log "  Rate limit impact: 0 new cert orders (cert was issued once by CI)"
+    # Switch to the pre-loaded cert Caddyfile
+    sed -i 's|CADDYFILE_PATH=.*|CADDYFILE_PATH=./caddy/Caddyfile.fellowship-wildcard|' "${SUT_DIR}/.env"
+    log "  Using Caddyfile.fellowship-wildcard (pre-issued wildcard cert)"
 else
-    log "WARNING: envsubst not found, using raw Caddyfile with {$VAR} placeholders"
-    log "Caddy will need to expand variables from its environment at startup"
+    log "WARNING: Could not fetch wildcard cert from Secrets Manager"
+    log "  Falling back to Caddyfile.fellowship (per-instance ACME via Route53)"
+    log "  This will consume 1 cert from the LE 50/week limit for this instance."
+    log "  To fix: run the issue-wildcard-cert workflow in the lotr_sut repo and re-provision."
 fi
 
 log "Starting SUT stack..."
 cd "$SUT_DIR"
 
-log "✓ Caddy will use IMDS for Route53 DNS-01 certificate challenge"
-log "  - Credentials are retrieved on-demand from EC2 IAM role"
-log "  - Credentials automatically refresh before expiration"
-log "  - ACME certificate renewals will work indefinitely"
-log "  - One ACME order will be placed covering all 4 domain SANs"
-log "  - Monitor cert acquisition: sudo docker logs fellowship-sut-caddy-1"
-
 docker compose up -d
-log "SUT stack started. Certificate acquisition is running in the background."
-log "  Single cert request (4 SANs) in progress. Rate limit impact:"
-log "  = 1 cert order toward the 50/week LE limit, not 4 separate orders"
+log "SUT stack started."
 
 if [ -n "${JENKINS_DOMAIN:-}" ] && [ -d "$ESCAPE_ROOM_DIR" ]; then
     log "Starting DevOps Escape Room stack..."
