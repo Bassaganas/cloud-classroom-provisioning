@@ -353,7 +353,6 @@ ENVIRONMENT="dev"
 ONLY_COMMON=false
 ONLY_WORKSHOP=false
 VALIDATE_ONLY=false
-SKIP_TEMPLATE_PUBLISH=false
 
 case "${SKIP_TEMPLATE_PUBLISH:-false}" in
   true|TRUE|1|yes|YES|on|ON)
