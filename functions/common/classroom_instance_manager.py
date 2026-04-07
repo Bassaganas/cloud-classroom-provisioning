@@ -436,6 +436,63 @@ def update_timeout_parameters(workshop_name, stop_timeout=None, terminate_timeou
         logger.error(f"Error updating timeout parameters: {str(e)}")
         return {'success': False, 'error': str(e)}
 
+def get_latest_sut_artifact_key(bucket_name, prefix="fellowship-sut-", suffix=".tar.gz"):
+    """Get the most recent SUT artifact key from S3 by LastModified timestamp
+    
+    Args:
+        bucket_name: S3 bucket name
+        prefix: Prefix to filter objects (default: "fellowship-sut-")
+        suffix: Suffix to filter objects (default: ".tar.gz")
+    
+    Returns:
+        dict with keys: artifact_key (str), last_modified (datetime), or None if no artifacts found
+    """
+    if not bucket_name:
+        logger.warning("S3 bucket name is empty, cannot list artifacts")
+        return None
+    
+    try:
+        s3 = boto3.client('s3', region_name=REGION)
+        logger.info(f"Listing S3 objects: bucket={bucket_name}, prefix={prefix}, suffix={suffix}")
+        
+        paginator = s3.get_paginator('list_objects_v2')
+        latest_obj = None
+        latest_modified = None
+        
+        try:
+            for page in paginator.paginate(Bucket=bucket_name, Prefix=prefix):
+                for obj in page.get('Contents', []):
+                    key = obj['Key']
+                    # Filter by suffix
+                    if not key.endswith(suffix):
+                        continue
+                    
+                    last_modified = obj['LastModified']
+                    
+                    # Track the most recently modified object
+                    if latest_modified is None or last_modified > latest_modified:
+                        latest_obj = obj
+                        latest_modified = last_modified
+                        logger.debug(f"Found newer artifact: {key} (modified: {last_modified.isoformat()})")
+        except s3.exceptions.NoSuchBucket:
+            logger.error(f"S3 bucket does not exist: {bucket_name}")
+            return None
+        
+        if latest_obj:
+            artifact_key = latest_obj['Key']
+            logger.info(f"✓ Found latest SUT artifact: {artifact_key} (modified: {latest_modified.isoformat()})")
+            return {
+                'artifact_key': artifact_key,
+                'last_modified': latest_modified  
+            }
+        else:
+            logger.warning(f"No SUT artifacts found in bucket {bucket_name} with prefix={prefix} and suffix={suffix}")
+            return None
+    
+    except Exception as e:
+        logger.error(f"Error listing S3 artifacts from {bucket_name}: {str(e)}")
+        return None
+
 def get_template_map():
     """Load workshop template map from SSM Parameter Store
     
@@ -1717,8 +1774,33 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
                 
                 logger.info(f"Generated domain name BEFORE instance creation: {domain} (sanitized from machine_name: {machine_name})")
                 
-                # Inject domain information into user_data as environment variables
-                # This ensures the domain is available immediately without needing EC2 metadata service
+                # Get S3 bucket and latest artifact for instance setup
+                s3_bucket_name = None
+                latest_artifact_key = None
+                try:
+                    # Retrieve S3 bucket name from SSM parameter
+                    sut_bucket_param = f"/classroom/{workshop_name}/sut-bucket"
+                    response = ssm.get_parameter(Name=sut_bucket_param)
+                    s3_bucket_name = response['Parameter']['Value']
+                    logger.info(f"Retrieved S3 bucket from SSM ({sut_bucket_param}): {s3_bucket_name}")
+                    
+                    # Get the latest artifact by LastModified timestamp
+                    artifact_info = get_latest_sut_artifact_key(s3_bucket_name)
+                    if artifact_info:
+                        latest_artifact_key = artifact_info['artifact_key']
+                        logger.info(f"✓ Latest artifact: {latest_artifact_key} (modified: {artifact_info['last_modified'].isoformat()})")
+                    else:
+                        logger.warning(f"No artifacts found in S3 bucket {s3_bucket_name} - using market default")
+                except ClientError as e:
+                    if e.response['Error']['Code'] == 'ParameterNotFound':
+                        logger.info(f"S3 bucket parameter not found ({sut_bucket_param}) - S3 artifact injection skipped")
+                    else:
+                        logger.warning(f"Error retrieving S3 bucket from SSM: {str(e)}")
+                except Exception as e:
+                    logger.warning(f"Error getting latest S3 artifact: {str(e)}")
+                
+                # Inject domain and S3 artifact information into user_data as environment variables
+                # This ensures the domain and artifact are available immediately without needing EC2 metadata service
                 domain_exports = f"""# Domain information injected by Lambda (available immediately)
 export CADDY_DOMAIN={domain}
 export JENKINS_DOMAIN={jenkins_domain}
@@ -1728,6 +1810,15 @@ export MACHINE_NAME={machine_name}
 export WORKSHOP_NAME={workshop_name}
 export ROUTE53_ZONE_ID={HTTPS_HOSTED_ZONE_ID}
 """
+                
+                # Add S3 artifact information if available
+                if s3_bucket_name:
+                    domain_exports += f"export SUT_BUCKET={s3_bucket_name}\n"
+                    logger.info(f"Injected S3 bucket: SUT_BUCKET={s3_bucket_name}")
+                
+                if latest_artifact_key:
+                    domain_exports += f"export LATEST_TAR={latest_artifact_key}\n"
+                    logger.info(f"Injected latest artifact: LATEST_TAR={latest_artifact_key}")
                 
                 # Inject after shebang and set -e, but before any other code
                 if user_data.startswith('#!/bin/bash'):
