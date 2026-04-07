@@ -1366,30 +1366,8 @@ log "    Gitea:   ${GITEA_DOMAIN:-<unset>}"
 log "  This counts as 1 cert against the Let's Encrypt rate limit (50/week per domain)."
 log "  Previous approach (4 site blocks) used 4 certs per instance — now fixed."
 
-log "Expanding Caddyfile variables with envsubst..."
-if command -v envsubst >/dev/null 2>&1; then
-    # Pre-expand {$VAR} placeholders in Caddyfile before docker compose starts
-    # Export variables to env so envsubst can pick them up
-    export CADDY_DOMAIN
-    export JENKINS_DOMAIN
-    export IDE_DOMAIN
-    export GITEA_DOMAIN
-    export AWS_REGION
-    
-    # Create expanded Caddyfile for docker compose to mount
-    envsubst < "${SUT_DIR}/caddy/Caddyfile.fellowship" > "${SUT_DIR}/caddy/Caddyfile.expanded"
-    log "✓ Created expanded Caddyfile at caddy/Caddyfile.expanded"
-    
-    # Point docker-compose to the expanded version
-    CADDYFILE_PATH="./caddy/Caddyfile.expanded"
-    sed -i "s|CADDYFILE_PATH=./caddy/Caddyfile.fellowship|CADDYFILE_PATH=./caddy/Caddyfile.expanded|" "${SUT_DIR}/.env"
-    log "✓ Updated .env to use expanded Caddyfile"
-else
-    log "WARNING: envsubst not found, using raw Caddyfile with {$VAR} placeholders"
-    log "Caddy will need to expand variables from its environment at startup"
-fi
-
 log "Starting SUT stack..."
+log "  Caddy will expand {\$CADDY_DOMAIN} and friends natively from its container environment"
 cd "$SUT_DIR"
 
 log "✓ Caddy will use IMDS for Route53 DNS-01 certificate challenge"
