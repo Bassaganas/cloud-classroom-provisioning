@@ -70,4 +70,13 @@ export class TutorialOverviewPage {
     const hrefs = await visitLinks.evaluateAll((links) => links.map((link) => link.getAttribute('href') || ''))
     return hrefs
   }
+
+  async expectEndpointLinkForInstance(instanceId, expectedLabel, expectedHref) {
+    const row = this.page.locator('tbody tr').filter({ hasText: instanceId }).first()
+    await expect(row).toBeVisible()
+
+    const link = row.locator('td a').first()
+    await expect(link).toHaveText(expectedLabel)
+    await expect(link).toHaveAttribute('href', expectedHref)
+  }
 }

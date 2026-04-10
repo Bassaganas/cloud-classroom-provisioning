@@ -54,12 +54,37 @@ os.environ['TEST_MODE'] = 'true'
 os.environ['AWS_DEFAULT_REGION'] = 'eu-west-3'
 os.environ['AWS_ACCESS_KEY_ID'] = 'testing'
 os.environ['AWS_SECRET_ACCESS_KEY'] = 'testing'
+os.environ['WORKSHOP_NAME'] = 'fellowship'
+os.environ['ENVIRONMENT'] = 'dev'
+os.environ['CLASSROOM_REGION'] = 'eu-west-3'
+os.environ['INSTANCE_MANAGER_BASE_DOMAIN'] = 'example.com'
 
 # Add path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../common'))
 
 from moto import mock_aws
 import boto3
+
+
+def _create_assignments_table(dynamodb, table_name):
+    """Create a clean assignments table for each test run."""
+    table = dynamodb.Table(table_name)
+    try:
+        table.load()
+        table.delete()
+        table.wait_until_not_exists()
+    except ClientError as exc:
+        if exc.response.get('Error', {}).get('Code') != 'ResourceNotFoundException':
+            raise
+
+    table = dynamodb.create_table(
+        TableName=table_name,
+        KeySchema=[{'AttributeName': 'instance_id', 'KeyType': 'HASH'}],
+        AttributeDefinitions=[{'AttributeName': 'instance_id', 'AttributeType': 'S'}],
+        BillingMode='PAY_PER_REQUEST'
+    )
+    table.wait_until_exists()
+    return table
 
 
 # ============================================================================
@@ -130,13 +155,7 @@ class TestAtomicIndexReservationFR1_FR5:
         # Create DynamoDB table
         dynamodb = boto3.resource('dynamodb', region_name=region)
         table_name = f'instance-assignments-{workshop_name}-{environment}'
-        table = dynamodb.create_table(
-            TableName=table_name,
-            KeySchema=[{'AttributeName': 'instance_id', 'KeyType': 'HASH'}],
-            AttributeDefinitions=[{'AttributeName': 'instance_id', 'AttributeType': 'S'}],
-            BillingMode='PAY_PER_REQUEST'
-        )
-        table.wait_until_exists()
+        table = _create_assignments_table(dynamodb, table_name)
         
         # Test
         from classroom_instance_manager import _reserve_instance_indices
@@ -160,13 +179,7 @@ class TestAtomicIndexReservationFR1_FR5:
         # Create DynamoDB table
         dynamodb = boto3.resource('dynamodb', region_name=region)
         table_name = f'instance-assignments-{workshop_name}-{environment}'
-        table = dynamodb.create_table(
-            TableName=table_name,
-            KeySchema=[{'AttributeName': 'instance_id', 'KeyType': 'HASH'}],
-            AttributeDefinitions=[{'AttributeName': 'instance_id', 'AttributeType': 'S'}],
-            BillingMode='PAY_PER_REQUEST'
-        )
-        table.wait_until_exists()
+        table = _create_assignments_table(dynamodb, table_name)
         
         # Test
         from classroom_instance_manager import _reserve_instance_indices
@@ -196,13 +209,7 @@ class TestAtomicIndexReservationFR1_FR5:
         # Create DynamoDB table
         dynamodb = boto3.resource('dynamodb', region_name=region)
         table_name = f'instance-assignments-{workshop_name}-{environment}'
-        table = dynamodb.create_table(
-            TableName=table_name,
-            KeySchema=[{'AttributeName': 'instance_id', 'KeyType': 'HASH'}],
-            AttributeDefinitions=[{'AttributeName': 'instance_id', 'AttributeType': 'S'}],
-            BillingMode='PAY_PER_REQUEST'
-        )
-        table.wait_until_exists()
+        table = _create_assignments_table(dynamodb, table_name)
         
         # Test
         from classroom_instance_manager import _reserve_instance_indices
@@ -231,13 +238,7 @@ class TestAtomicIndexReservationFR1_FR5:
         # Create DynamoDB table
         dynamodb = boto3.resource('dynamodb', region_name=region)
         table_name = f'instance-assignments-{workshop_name}-{environment}'
-        table = dynamodb.create_table(
-            TableName=table_name,
-            KeySchema=[{'AttributeName': 'instance_id', 'KeyType': 'HASH'}],
-            AttributeDefinitions=[{'AttributeName': 'instance_id', 'AttributeType': 'S'}],
-            BillingMode='PAY_PER_REQUEST'
-        )
-        table.wait_until_exists()
+        table = _create_assignments_table(dynamodb, table_name)
         
         # Test
         from classroom_instance_manager import _reserve_instance_indices, _build_counter_item_key
@@ -266,13 +267,7 @@ class TestAtomicIndexReservationFR1_FR5:
         # Create DynamoDB table
         dynamodb = boto3.resource('dynamodb', region_name=region)
         table_name = f'instance-assignments-{workshop_name}-{environment}'
-        table = dynamodb.create_table(
-            TableName=table_name,
-            KeySchema=[{'AttributeName': 'instance_id', 'KeyType': 'HASH'}],
-            AttributeDefinitions=[{'AttributeName': 'instance_id', 'AttributeType': 'S'}],
-            BillingMode='PAY_PER_REQUEST'
-        )
-        table.wait_until_exists()
+        table = _create_assignments_table(dynamodb, table_name)
         
         # Test
         from classroom_instance_manager import _reserve_instance_indices
@@ -324,13 +319,7 @@ class TestIdempotentCreationFR6:
         # Create DynamoDB table
         dynamodb = boto3.resource('dynamodb', region_name=region)
         table_name = f'instance-assignments-{workshop_name}-{environment}'
-        table = dynamodb.create_table(
-            TableName=table_name,
-            KeySchema=[{'AttributeName': 'instance_id', 'KeyType': 'HASH'}],
-            AttributeDefinitions=[{'AttributeName': 'instance_id', 'AttributeType': 'S'}],
-            BillingMode='PAY_PER_REQUEST'
-        )
-        table.wait_until_exists()
+        table = _create_assignments_table(dynamodb, table_name)
         
         # Test
         from classroom_instance_manager import _build_create_request_item_key
@@ -396,6 +385,10 @@ class TestStrictDNSCleanupFR8_FR11:
         )
         hosted_zone_id = response['HostedZone']['Id'].split('/')[-1]
         os.environ['INSTANCE_MANAGER_HOSTED_ZONE_ID'] = hosted_zone_id
+
+        import classroom_instance_manager as cim
+        cim.HTTPS_HOSTED_ZONE_ID = hosted_zone_id
+        cim.HTTPS_BASE_DOMAIN = 'example.com'
         
         # Create Route53 record
         route53.change_resource_record_sets(
@@ -436,6 +429,10 @@ class TestStrictDNSCleanupFR8_FR11:
         )
         hosted_zone_id = response['HostedZone']['Id'].split('/')[-1]
         os.environ['INSTANCE_MANAGER_HOSTED_ZONE_ID'] = hosted_zone_id
+
+        import classroom_instance_manager as cim
+        cim.HTTPS_HOSTED_ZONE_ID = hosted_zone_id
+        cim.HTTPS_BASE_DOMAIN = 'example.com'
         
         # Test
         from classroom_instance_manager import _delete_route53_a_record
@@ -521,13 +518,7 @@ class TestIntegrationMultipleFeatures:
         # Create DynamoDB table
         dynamodb = boto3.resource('dynamodb', region_name=region)
         table_name = f'instance-assignments-{workshop_name}-{environment}'
-        table = dynamodb.create_table(
-            TableName=table_name,
-            KeySchema=[{'AttributeName': 'instance_id', 'KeyType': 'HASH'}],
-            AttributeDefinitions=[{'AttributeName': 'instance_id', 'AttributeType': 'S'}],
-            BillingMode='PAY_PER_REQUEST'
-        )
-        table.wait_until_exists()
+        table = _create_assignments_table(dynamodb, table_name)
         
         # Test
         from classroom_instance_manager import _reserve_instance_indices
@@ -558,13 +549,7 @@ class TestIntegrationMultipleFeatures:
         # Create DynamoDB table
         dynamodb = boto3.resource('dynamodb', region_name=region)
         table_name = f'instance-assignments-{workshop_name}-{environment}'
-        table = dynamodb.create_table(
-            TableName=table_name,
-            KeySchema=[{'AttributeName': 'instance_id', 'KeyType': 'HASH'}],
-            AttributeDefinitions=[{'AttributeName': 'instance_id', 'AttributeType': 'S'}],
-            BillingMode='PAY_PER_REQUEST'
-        )
-        table.wait_until_exists()
+        table = _create_assignments_table(dynamodb, table_name)
         
         # Test
         from classroom_instance_manager import _reserve_instance_indices

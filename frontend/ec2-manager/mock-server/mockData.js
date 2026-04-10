@@ -60,7 +60,8 @@ export function initializeMockData() {
       tutorial_session_id: 'tut1',
       assigned_to: null,
       created_at: new Date(Date.now() - 86400000).toISOString(),
-      https_url: null,
+      https_url: 'https://fellowship-pool-0.fellowship.testingfantasy.com',
+      https_domain: 'fellowship-pool-0.fellowship.testingfantasy.com',
       cleanup_days: null
     },
     {

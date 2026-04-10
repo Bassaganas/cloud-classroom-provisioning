@@ -16,5 +16,6 @@ jira>=3.5.1,<4.0.0
 pydantic>=1.8.0,<2.0.0
 python-multipart>=0.0.5,<0.1.0
 urllib3>=1.26.0,<2.0.0
+moto[ec2,dynamodb,secretsmanager,ssm]>=5.0.0;python_version>="3.8"
 
 mangum>=0.17.0 

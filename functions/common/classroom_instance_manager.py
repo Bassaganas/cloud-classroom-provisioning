@@ -225,6 +225,15 @@ def _fetch_actual_costs_for_instances(instance_ids):
 
 # Get configuration from environment variables
 INSTANCE_TYPE = os.environ.get('EC2_INSTANCE_TYPE', 't3.medium')
+DEFAULT_POOL_INSTANCE_TYPE = 't3.medium'
+ALLOWED_EC2_INSTANCE_TYPES = {
+    't2.small',
+    't2.medium',
+    't2.large',
+    't3.small',
+    't3.medium',
+    't3.large',
+}
 SUBNET_ID = os.environ.get('EC2_SUBNET_ID')
 SECURITY_GROUP_IDS = os.environ.get('EC2_SECURITY_GROUP_IDS', '').split(',') if os.environ.get('EC2_SECURITY_GROUP_IDS') else []
 IAM_INSTANCE_PROFILE = os.environ.get('EC2_IAM_INSTANCE_PROFILE', f'ec2-ssm-profile-{WORKSHOP_NAME}-{ENVIRONMENT}')
@@ -1329,6 +1338,66 @@ done
 
 docker info >/dev/null 2>&1
 
+wait_for_escape_room_init() {
+    local max_attempts=90
+    local attempt=1
+    local restart_attempted=false
+
+    while [ $attempt -le $max_attempts ]; do
+        local init_container_id
+        local init_status
+        local init_exit
+
+        init_container_id=$(docker compose ps -q gitea-init 2>/dev/null || true)
+        if [ -z "$init_container_id" ]; then
+            [ $((attempt % 6)) -eq 0 ] && log "Waiting for gitea-init container to appear (${attempt}/${max_attempts})..."
+            sleep 10
+            attempt=$((attempt + 1))
+            continue
+        fi
+
+        init_status=$(docker inspect --format '{{.State.Status}}' "$init_container_id" 2>/dev/null || echo "unknown")
+        init_exit=$(docker inspect --format '{{.State.ExitCode}}' "$init_container_id" 2>/dev/null || echo "999")
+
+        case "$init_status" in
+            exited)
+                if [ "$init_exit" = "0" ]; then
+                    log "gitea-init completed successfully; reconciling dependent services..."
+                    docker compose up -d
+                    return 0
+                fi
+
+                log "WARNING: gitea-init exited with code ${init_exit}"
+                docker compose logs --tail 80 gitea-init || true
+
+                if [ "$restart_attempted" = false ]; then
+                    restart_attempted=true
+                    log "Retrying gitea-init one additional time..."
+                    docker compose up -d gitea-init || true
+                    sleep 10
+                    attempt=$((attempt + 1))
+                    continue
+                fi
+
+                return 1
+                ;;
+            running|restarting)
+                [ $((attempt % 6)) -eq 0 ] && log "Waiting for gitea-init to finish (${attempt}/${max_attempts})..."
+                ;;
+            *)
+                [ $((attempt % 6)) -eq 0 ] && log "gitea-init status is ${init_status} (${attempt}/${max_attempts})"
+                ;;
+        esac
+
+        sleep 10
+        attempt=$((attempt + 1))
+    done
+
+    log "WARNING: Timed out waiting for gitea-init to finish"
+    docker compose logs --tail 80 gitea-init || true
+    return 1
+}
+
 # ── IMDS Credential Retrieval for Caddy ───────
 # Caddy's Route53 DNS plugin automatically retrieves fresh AWS credentials
 # from EC2 Instance Metadata Service (IMDS) at 169.254.169.254 when needed.
@@ -1429,7 +1498,18 @@ if [ -n "${JENKINS_DOMAIN:-}" ] && [ -d "$ESCAPE_ROOM_DIR" ]; then
     log "Starting DevOps Escape Room stack..."
     cd "$ESCAPE_ROOM_DIR"
     export JENKINS_URL="https://${JENKINS_DOMAIN}/"
-    docker compose up -d
+    if docker compose up -d; then
+        log "Initial devops-escape-room compose run completed"
+    else
+        log "WARNING: Initial devops-escape-room compose run reported a failure"
+    fi
+
+    if wait_for_escape_room_init; then
+        log "DevOps escape-room services reconciled after gitea-init"
+    else
+        log "WARNING: DevOps escape-room stack did not fully converge during bootstrap"
+    fi
+
     log "Started devops-escape-room stack for ${JENKINS_DOMAIN}"
 elif [ -n "${JENKINS_DOMAIN:-}" ]; then
     log "WARNING: JENKINS_DOMAIN set but ${ESCAPE_ROOM_DIR} not found"
@@ -1691,8 +1771,11 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
             }
         
         template_instance_type = template_config.get('instance_type') if template_config else None
-        requested_instance_type = str(ec2_instance_type or '').strip() or None
+        requested_instance_type = str(ec2_instance_type or '').strip().lower() or None
         selected_instance_type = requested_instance_type or template_instance_type or INSTANCE_TYPE
+        if instance_type == 'pool' and requested_instance_type is None:
+            # Keep pool defaults predictable across workshops and templates.
+            selected_instance_type = DEFAULT_POOL_INSTANCE_TYPE
         if workshop_name == 'fellowship' and instance_type == 'admin' and selected_instance_type == 't3.small':
             logger.info("Upgrading fellowship admin instance type from t3.small to t3.medium for bootstrap reliability")
             selected_instance_type = 't3.medium'
@@ -3353,16 +3436,15 @@ def lambda_handler(event, context):
 
             if ec2_instance_type is not None:
                 ec2_instance_type = str(ec2_instance_type).strip()
-                # Keep validation simple but strict enough to avoid malformed values.
-                # Examples: t3.small, t3.medium, c6i.large
-                import re
-                if not re.match(r'^[a-z][a-z0-9]*\.[a-z0-9]+$', ec2_instance_type):
+                if ec2_instance_type:
+                    ec2_instance_type = ec2_instance_type.lower()
+                if ec2_instance_type and ec2_instance_type not in ALLOWED_EC2_INSTANCE_TYPES:
                     return {
                         'statusCode': 400,
                         'headers': get_cors_headers(),
                         'body': json.dumps({
                             'success': False,
-                            'error': 'ec2_instance_type must look like "t3.medium"'
+                            'error': 'ec2_instance_type must be one of: ' + ', '.join(sorted(ALLOWED_EC2_INSTANCE_TYPES))
                         })
                     }
 

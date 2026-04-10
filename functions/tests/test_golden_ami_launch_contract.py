@@ -39,13 +39,16 @@ class TestGoldenAmiLaunchContract:
 
         dynamodb = boto3.resource('dynamodb', region_name=self.region)
         table_name = f'instance-assignments-{self.workshop_name}-{self.environment}'
-        self.table = dynamodb.create_table(
-            TableName=table_name,
-            KeySchema=[{'AttributeName': 'instance_id', 'KeyType': 'HASH'}],
-            AttributeDefinitions=[{'AttributeName': 'instance_id', 'AttributeType': 'S'}],
-            BillingMode='PAY_PER_REQUEST'
-        )
-        self.table.wait_until_exists()
+        try:
+            self.table = dynamodb.create_table(
+                TableName=table_name,
+                KeySchema=[{'AttributeName': 'instance_id', 'KeyType': 'HASH'}],
+                AttributeDefinitions=[{'AttributeName': 'instance_id', 'AttributeType': 'S'}],
+                BillingMode='PAY_PER_REQUEST'
+            )
+            self.table.wait_until_exists()
+        except Exception:
+            self.table = dynamodb.Table(table_name)
 
         ssm = boto3.client('ssm', region_name=self.region)
         template_config = {
@@ -71,6 +74,9 @@ class TestGoldenAmiLaunchContract:
             Name=f'/classroom/{self.workshop_name}/{self.environment}/instance_hard_terminate_timeout_minutes',
             Value='240', Type='String', Overwrite=True
         )
+
+        # Force module to reload with this fixture's environment and moto resources.
+        sys.modules.pop('classroom_instance_manager', None)
 
         yield
 

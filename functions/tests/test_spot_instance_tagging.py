@@ -58,12 +58,18 @@ class TestSpotInstanceTagging:
         dynamodb = boto3.resource('dynamodb', region_name=self.region)
         table_name = f'instance-assignments-{self.workshop_name}-{self.environment}'
 
-        self.table = dynamodb.create_table(
-            TableName=table_name,
-            KeySchema=[{'AttributeName': 'instance_id', 'KeyType': 'HASH'}],
-            AttributeDefinitions=[{'AttributeName': 'instance_id', 'AttributeType': 'S'}],
-            BillingMode='PAY_PER_REQUEST'
-        )
+        try:
+            self.table = dynamodb.create_table(
+                TableName=table_name,
+                KeySchema=[{'AttributeName': 'instance_id', 'KeyType': 'HASH'}],
+                AttributeDefinitions=[{'AttributeName': 'instance_id', 'AttributeType': 'S'}],
+                BillingMode='PAY_PER_REQUEST'
+            )
+            self.table.wait_until_exists()
+        except ClientError as e:
+            if e.response.get('Error', {}).get('Code') != 'ResourceInUseException':
+                raise
+            self.table = dynamodb.Table(table_name)
         
         # Use moto's built-in default AMI
         test_ami = 'ami-12c6146b'  # Default moto AMI
@@ -143,9 +149,24 @@ class TestSpotInstanceTagging:
                 'Action': 'sts:AssumeRole'
             }]
         })
-        iam.create_role(RoleName=role_name, AssumeRolePolicyDocument=assume_role_policy)
-        iam.create_instance_profile(InstanceProfileName=profile_name)
-        iam.add_role_to_instance_profile(InstanceProfileName=profile_name, RoleName=role_name)
+        try:
+            iam.create_role(RoleName=role_name, AssumeRolePolicyDocument=assume_role_policy)
+        except ClientError as e:
+            if e.response.get('Error', {}).get('Code') != 'EntityAlreadyExists':
+                raise
+
+        try:
+            iam.create_instance_profile(InstanceProfileName=profile_name)
+        except ClientError as e:
+            if e.response.get('Error', {}).get('Code') != 'EntityAlreadyExists':
+                raise
+
+        try:
+            iam.add_role_to_instance_profile(InstanceProfileName=profile_name, RoleName=role_name)
+        except ClientError as e:
+            code = e.response.get('Error', {}).get('Code')
+            if code not in ('LimitExceeded', 'EntityAlreadyExists'):
+                raise
 
     def _get_instance_tags(self, instance_id):
         """Retrieve tags from an instance."""

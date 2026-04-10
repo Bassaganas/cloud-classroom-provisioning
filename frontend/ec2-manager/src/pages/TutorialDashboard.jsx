@@ -43,12 +43,14 @@ import SecurityRoundedIcon from '@mui/icons-material/SecurityRounded'
 import AppToast from '../components/AppToast'
 import Header from '../components/Header'
 import { api } from '../services/api'
+import {
+  DEFAULT_EC2_INSTANCE_TYPE,
+  EC2_INSTANCE_TYPE_OPTIONS,
+  EC2_ON_DEMAND_RATES,
+  formatEc2OptionLabel
+} from '../config/ec2InstanceTypes'
 
-const APPROX_RATES_USD = {
-  't3.small': { onDemand: 0.0208, spot: 0.0062 },
-  't3.medium': { onDemand: 0.0416, spot: 0.0125 },
-  't3.large': { onDemand: 0.0832, spot: 0.0250 }
-}
+const APPROX_RATES_USD = EC2_ON_DEMAND_RATES
 
 const FALLBACK_RATES_USD = { onDemand: 0.0416, spot: 0.0125 }
 
@@ -134,6 +136,7 @@ function TutorialDashboard() {
     type: 'pool',
     count: 1,
     cleanup_days: 7,
+    ec2_instance_type: DEFAULT_EC2_INSTANCE_TYPE,
     spot_max_price: ''
   })
 
@@ -249,6 +252,7 @@ function TutorialDashboard() {
         type: createFormData.type,
         workshop,
         tutorial_session_id: sessionId,
+        ec2_instance_type: createFormData.ec2_instance_type || DEFAULT_EC2_INSTANCE_TYPE,
         purchase_type: enforcedPurchaseType,
         spot_max_price: enforcedPurchaseType === 'spot' ? effectiveSpotMaxPrice : null
       }
@@ -461,6 +465,7 @@ function TutorialDashboard() {
 
       const readValue = (instance) => {
         if (sortConfig.key === 'type') return instance.type || instance.instance_type || 'pool'
+        if (sortConfig.key === 'ec2_instance_type') return instance.instance_type || DEFAULT_EC2_INSTANCE_TYPE
         if (sortConfig.key === 'launch_time') return new Date(instance.launch_time || 0).getTime()
         if (sortConfig.key === 'health_status') return instance.health_status || ''
         if (sortConfig.key === 'endpoint') return instance.https_domain || instance.public_ip || ''
@@ -682,6 +687,7 @@ function TutorialDashboard() {
                   </TableCell>
                   <HeaderSort label="Instance ID" sortKey="instance_id" sortConfig={sortConfig} onSort={toggleSort} />
                   <HeaderSort label="Type" sortKey="type" sortConfig={sortConfig} onSort={toggleSort} />
+                  <HeaderSort label="EC2 Size" sortKey="ec2_instance_type" sortConfig={sortConfig} onSort={toggleSort} />
                   <HeaderSort label="Created" sortKey="launch_time" sortConfig={sortConfig} onSort={toggleSort} />
                   <HeaderSort label="State" sortKey="state" sortConfig={sortConfig} onSort={toggleSort} />
                   <HeaderSort label="Endpoint" sortKey="endpoint" sortConfig={sortConfig} onSort={toggleSort} />
@@ -696,13 +702,13 @@ function TutorialDashboard() {
               <TableBody>
                 {loading ? (
                   <TableRow>
-                    <TableCell colSpan={showHealthColumn ? 12 : 11} align="center" sx={{ py: 6 }}>
+                    <TableCell colSpan={showHealthColumn ? 13 : 12} align="center" sx={{ py: 6 }}>
                       <CircularProgress size={24} />
                     </TableCell>
                   </TableRow>
                 ) : sortedInstances.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={showHealthColumn ? 12 : 11} align="center" sx={{ py: 6 }}>
+                    <TableCell colSpan={showHealthColumn ? 13 : 12} align="center" sx={{ py: 6 }}>
                       No instances found
                     </TableCell>
                   </TableRow>
@@ -710,6 +716,7 @@ function TutorialDashboard() {
                   sortedInstances.map((instance) => {
                     const costMeta = costByInstanceId.get(instance.instance_id) || getCostMeta(instance, session)
                     const type = instance.type || instance.instance_type || 'pool'
+                    const ec2Size = instance.instance_type || DEFAULT_EC2_INSTANCE_TYPE
                     const launchTime = instance.launch_time ? new Date(instance.launch_time).toLocaleString() : '-'
                     const resolvedHttpsDomain = instance.https_domain || instance.tags?.HttpsDomain
                     const resolvedHttpsUrl = resolvedHttpsDomain ? `https://${resolvedHttpsDomain}` : (instance.https_url || instance.tags?.HttpsUrl)
@@ -725,6 +732,7 @@ function TutorialDashboard() {
                         </TableCell>
                         <TableCell>{instance.instance_id}</TableCell>
                         <TableCell><Chip size="small" label={type} color={type === 'admin' ? 'secondary' : 'default'} /></TableCell>
+                        <TableCell><Chip size="small" label={ec2Size} variant="outlined" /></TableCell>
                         <TableCell><Typography variant="caption">{launchTime}</Typography></TableCell>
                         <TableCell>
                           <Chip
@@ -863,6 +871,22 @@ function TutorialDashboard() {
                 onChange={(event) => setCreateFormData({ ...createFormData, count: event.target.value })}
                 required
               />
+
+              <FormControl fullWidth>
+                <InputLabel id="ec2-instance-size-label">EC2 Instance Size</InputLabel>
+                <Select
+                  labelId="ec2-instance-size-label"
+                  value={createFormData.ec2_instance_type}
+                  label="EC2 Instance Size"
+                  onChange={(event) => setCreateFormData({ ...createFormData, ec2_instance_type: event.target.value })}
+                >
+                  {EC2_INSTANCE_TYPE_OPTIONS.map((option) => (
+                    <MenuItem key={option.value} value={option.value}>
+                      {formatEc2OptionLabel(option)}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
 
               {createFormData.type === 'admin' && (
                 <TextField
