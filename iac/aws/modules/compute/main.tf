@@ -91,9 +91,9 @@ resource "aws_iam_role_policy" "ec2_secrets_access" {
         "secretsmanager:GetSecretValue"
       ]
       Resource = [
-        "arn:aws:secretsmanager:*:*:secret:classroom/shared/${var.environment}/*",
-        "arn:aws:secretsmanager:*:*:secret:classroom/${var.workshop_name}/${var.environment}/*",
-        "arn:aws:secretsmanager:*:*:secret:classroom/wildcard-cert/*"
+        "arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:classroom/shared/${var.environment}/*",
+        "arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:classroom/${var.workshop_name}/${var.environment}/*",
+        "arn:aws:secretsmanager:${var.region}:${data.aws_caller_identity.current.account_id}:secret:/classroom/wildcard-cert/*"
       ]
     }]
   })
