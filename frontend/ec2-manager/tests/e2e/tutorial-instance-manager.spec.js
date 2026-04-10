@@ -5,12 +5,14 @@ import {
   thenAllTutorialLinksUseHttp,
   thenEndpointColumnContainsHttpOrHttpsLinks,
   thenIAmBackOnLandingWithoutSession,
+  thenISeeEc2SizeDropdownOptions,
   thenISeeInstancesCount,
   thenISeeProductiveTutorialOnDemandMessage,
   thenISeeTableRowCount,
   thenISeeTestTutorialSpotEnforcementMessage,
   thenISeeTutorialOverviewTableWithCount,
   whenICreateAdminInstanceWithCleanupDays,
+  whenICreateInstanceWithEc2Size,
   whenICreateInstancesFromDialog,
   whenICreateSessionFromSessionDialog,
   whenICreateSpotInstanceWithMaxPrice,
@@ -164,6 +166,22 @@ test.describe('Tutorial Instance Manager critical workflows', () => {
     await whenIOpenCreateInstanceDialog(page)
     await thenISeeProductiveTutorialOnDemandMessage(page)
     await whenICreateInstancesFromDialog(page, 1)
+
+    await thenISeeInstancesCount(page, /Instances \(2\)/, 20000)
+  })
+
+  test('12) create dialog exposes EC2 size options and sends selected size', async ({ page }) => {
+    test.skip(isDeployedRun, 'Provisioning latency is variable on deployed environments')
+
+    await givenIAmLoggedIn(page)
+
+    const sessionId = `pw-size-${Date.now()}`
+    await whenICreateTutorialSession(page, sessionId, { poolCount: 1, adminCount: 0 })
+    await whenIOpenSessionDashboard(page, sessionId)
+
+    await whenIOpenCreateInstanceDialog(page)
+    await thenISeeEc2SizeDropdownOptions(page)
+    await whenICreateInstanceWithEc2Size(page, 1, 't3.large')
 
     await thenISeeInstancesCount(page, /Instances \(2\)/, 20000)
   })

@@ -93,6 +93,20 @@ export async function whenICreateInstancesFromDialog(page, count) {
   await createInstanceDialogPage.submitCreate()
 }
 
+export async function thenISeeEc2SizeDropdownOptions(page) {
+  const createInstanceDialogPage = new CreateInstanceDialogPage(page)
+  await createInstanceDialogPage.expectEc2SizeOptionsVisible()
+}
+
+export async function whenICreateInstanceWithEc2Size(page, count, instanceSize) {
+  const createInstanceDialogPage = new CreateInstanceDialogPage(page)
+  await createInstanceDialogPage.fillCount(count)
+  await createInstanceDialogPage.selectEc2InstanceSize(instanceSize)
+  const createRequest = createInstanceDialogPage.waitForCreateRequestWithEc2Size(instanceSize)
+  await createInstanceDialogPage.submitCreate()
+  await createRequest
+}
+
 export async function whenICreateAdminInstanceWithCleanupDays(page, cleanupDays) {
   const createInstanceDialogPage = new CreateInstanceDialogPage(page)
   await createInstanceDialogPage.selectInstanceTypeAdmin()
@@ -118,6 +132,11 @@ export async function thenEndpointColumnContainsHttpOrHttpsLinks(page) {
   const hasHttps = hrefs.some((href) => href.startsWith('https://'))
   const hasHttp = hrefs.some((href) => href.startsWith('http://'))
   expect(hasHttps || hasHttp).toBeTruthy()
+}
+
+export async function thenISeeEndpointLinkForInstance(page, instanceId, expectedLabel, expectedHref) {
+  const tutorialOverviewPage = new TutorialOverviewPage(page)
+  await tutorialOverviewPage.expectEndpointLinkForInstance(instanceId, expectedLabel, expectedHref)
 }
 
 export async function whenIOpenWorkshopSelectorDialogFromLandingFab(page) {
