@@ -56,6 +56,28 @@ output "fellowship_dify_jira_custom_url" {
   value       = module.workshop_fellowship.dify_jira_custom_url
 }
 
+# Fellowship messaging outputs
+output "fellowship_sqs_queue_url" {
+  description = "SQS queue URL for fellowship student progress events"
+  value       = module.workshop_fellowship.sqs_queue_url
+}
+
+output "fellowship_sqs_ssm_param" {
+  description = "SSM Parameter name storing the fellowship SQS queue URL"
+  value       = module.workshop_fellowship.sqs_ssm_queue_url_param_name
+}
+
+# Testus Patronus messaging outputs
+output "testus_patronus_sqs_queue_url" {
+  description = "SQS queue URL for testus_patronus student progress events"
+  value       = module.workshop_testus_patronus.sqs_queue_url
+}
+
+output "testus_patronus_sqs_ssm_param" {
+  description = "SSM Parameter name storing the testus_patronus SQS queue URL"
+  value       = module.workshop_testus_patronus.sqs_ssm_queue_url_param_name
+}
+
 # Testus Patronus workshop outputs
 output "testus_patronus_lambda_function_url" {
   description = "URL of the testus_patronus Lambda function"

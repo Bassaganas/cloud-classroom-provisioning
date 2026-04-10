@@ -206,3 +206,15 @@ variable "spot_max_price_multiplier" {
     error_message = "Spot max price multiplier must be between 0.01 and 1.0."
   }
 }
+
+# Messaging / event sourcing
+variable "lambda_artifact_bucket" {
+  description = "S3 bucket where the palantir leaderboard Lambda artifact is stored"
+  type        = string
+}
+
+variable "lambda_artifact_key" {
+  description = "S3 key of the leaderboard Lambda zip artifact"
+  type        = string
+  default     = "palantir/leaderboard_lambda.zip"
+}

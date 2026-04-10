@@ -97,6 +97,10 @@ module "workshop_fellowship" {
   dify_jira_domain                        = var.fellowship_dify_jira_domain
   wait_for_certificate_validation         = var.fellowship_wait_for_certificate_validation
 
+  # Palantir event-sourcing artifact
+  lambda_artifact_bucket = var.lambda_artifact_bucket
+  lambda_artifact_key    = var.lambda_artifact_key
+
   # Security group rules for Jenkins (8080) and MailHog (8025)
   security_group_rules = {
     jenkins = {
@@ -158,6 +162,10 @@ module "workshop_testus_patronus" {
   user_management_domain                  = var.testus_patronus_user_management_domain
   dify_jira_domain                        = var.testus_patronus_dify_jira_domain
   wait_for_certificate_validation         = var.testus_patronus_wait_for_certificate_validation
+
+  # Palantir event-sourcing artifact
+  lambda_artifact_bucket = var.lambda_artifact_bucket
+  lambda_artifact_key    = var.lambda_artifact_key
 
   # No additional security group rules for testus_patronus
   security_group_rules = {}

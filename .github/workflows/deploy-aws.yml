@@ -130,6 +130,7 @@ jobs:
           CLASSROOM_NAME: ${{ vars.CLASSROOM_NAME || 'fellowship-dev' }}
           WORKSHOP: ${{ vars.WORKSHOP || 'fellowship' }}
           SKIP_TEMPLATE_PUBLISH: 'true'
+          TF_VAR_lambda_artifact_bucket: ${{ vars.LAMBDA_ARTIFACT_BUCKET }}
         run: |
           ./scripts/setup_classroom.sh \
             --name "$CLASSROOM_NAME" \
@@ -185,6 +186,7 @@ jobs:
         env:
           CLASSROOM_NAME: ${{ inputs.classroom_name != '' && inputs.classroom_name || vars.CLASSROOM_NAME || 'fellowship-manual' }}
           SKIP_TEMPLATE_PUBLISH: 'true'
+          TF_VAR_lambda_artifact_bucket: ${{ vars.LAMBDA_ARTIFACT_BUCKET }}
         run: |
           EXTRA_FLAGS=""
           if [ "${{ inputs.action }}" = "destroy" ]; then

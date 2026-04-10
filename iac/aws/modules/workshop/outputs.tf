@@ -1,3 +1,24 @@
+# Messaging Outputs
+output "sqs_queue_url" {
+  description = "SQS queue URL for student progress events"
+  value       = module.messaging.queue_url
+}
+
+output "sqs_queue_arn" {
+  description = "SQS queue ARN for student progress events"
+  value       = module.messaging.queue_arn
+}
+
+output "sqs_producer_policy_arn" {
+  description = "ARN of the IAM policy granting SQS SendMessage to EC2 producers"
+  value       = module.messaging.producer_policy_arn
+}
+
+output "sqs_ssm_queue_url_param_name" {
+  description = "SSM Parameter name where the queue URL is published"
+  value       = module.messaging.ssm_queue_url_param_name
+}
+
 # Lambda Outputs
 output "lambda_function_arn" {
   description = "ARN of the Lambda function"

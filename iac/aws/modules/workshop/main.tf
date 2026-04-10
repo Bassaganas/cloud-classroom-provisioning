@@ -185,6 +185,26 @@ module "cloudfront_dify_jira" {
   enable_cloudwatch_logging = false
 }
 
+# Messaging Module — SQS queue for student progress events (per workshop)
+module "messaging" {
+  source = "../messaging"
+
+  environment            = var.environment
+  owner                  = var.owner
+  workshop_name          = var.workshop_name
+  region                 = var.region
+  ec2_iam_role_arn       = var.common_ec2_iam_role_arn
+  lambda_artifact_bucket = var.lambda_artifact_bucket
+  lambda_artifact_key    = var.lambda_artifact_key
+}
+
+# Attach SQS producer policy to the shared EC2 IAM role so student instances can publish events.
+# Role name is extracted from the ARN (arn:aws:iam::account:role/role-name → role-name).
+resource "aws_iam_role_policy_attachment" "sqs_producer" {
+  role       = element(split("/", var.common_ec2_iam_role_arn), length(split("/", var.common_ec2_iam_role_arn)) - 1)
+  policy_arn = module.messaging.producer_policy_arn
+}
+
 # S3 Module - Workshop setup script deployment (for fellowship and testus_patronus)
 module "s3_sut" {
   count  = (var.workshop_name == "fellowship" || var.workshop_name == "fellowship-of-the-build" || var.workshop_name == "testus_patronus") ? 1 : 0
