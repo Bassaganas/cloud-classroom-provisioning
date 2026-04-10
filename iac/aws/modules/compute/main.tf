@@ -14,6 +14,9 @@ data "aws_ami" "amazon_linux_2" {
   }
 }
 
+# Account context for policy ARN construction
+data "aws_caller_identity" "current" {}
+
 # Locals for normalized naming
 locals {
   # Normalize tutorial names: testus_patronus -> testus-patronus, fellowship-of-the-build -> fellowship, shared -> common
