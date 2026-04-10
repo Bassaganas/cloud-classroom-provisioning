@@ -1555,7 +1555,8 @@ def get_latest_ami():
 def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_name=None,
                     stop_timeout=None, terminate_timeout=None, hard_terminate_timeout=None,
                     tutorial_session_id=None, purchase_type='on-demand', spot_duration_hours=2,
-                    spot_max_price=None, idempotency_key=None, fallback_to_on_demand=False):
+                    spot_max_price=None, idempotency_key=None, fallback_to_on_demand=False,
+                    ec2_instance_type=None):
     """Create EC2 instance(s) for a workshop template
     
     Args:
@@ -1689,12 +1690,19 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
                 'error': error_msg
             }
         
-        instance_type_override = template_config.get('instance_type') if template_config else None
-        selected_instance_type = instance_type_override or INSTANCE_TYPE
+        template_instance_type = template_config.get('instance_type') if template_config else None
+        requested_instance_type = str(ec2_instance_type or '').strip() or None
+        selected_instance_type = requested_instance_type or template_instance_type or INSTANCE_TYPE
         if workshop_name == 'fellowship' and instance_type == 'admin' and selected_instance_type == 't3.small':
             logger.info("Upgrading fellowship admin instance type from t3.small to t3.medium for bootstrap reliability")
             selected_instance_type = 't3.medium'
-        logger.info(f"Selected instance type: {selected_instance_type} (override: {instance_type_override}, default: {INSTANCE_TYPE})")
+        logger.info(
+            "Selected instance type: %s (requested=%s, template=%s, default=%s)",
+            selected_instance_type,
+            requested_instance_type,
+            template_instance_type,
+            INSTANCE_TYPE
+        )
         
         # Save the base user_data BEFORE the loop so each iteration gets a fresh copy.
         # Mutating user_data inside the loop without resetting causes domain exports
@@ -3269,6 +3277,15 @@ def lambda_handler(event, context):
         if api_path == '/create' and http_method == 'POST':
             count = int(body.get('count', query_params.get('count', 1)))
             instance_type = body.get('type', query_params.get('type', 'pool'))
+            ec2_instance_type = (
+                body.get('ec2_instance_type')
+                or query_params.get('ec2_instance_type')
+                or body.get('ec3_instance_type')
+                or query_params.get('ec3_instance_type')
+                or body.get('instance_size')
+                or query_params.get('instance_size')
+                or None
+            )
             cleanup_days = body.get('cleanup_days') or query_params.get('cleanup_days')
             workshop_name = body.get('workshop') or query_params.get('workshop') or WORKSHOP_NAME
             purchase_type = body.get('purchase_type') or query_params.get('purchase_type', 'on-demand')
@@ -3333,6 +3350,21 @@ def lambda_handler(event, context):
                         'error': 'purchase_type must be "on-demand" or "spot"'
                     })
                 }
+
+            if ec2_instance_type is not None:
+                ec2_instance_type = str(ec2_instance_type).strip()
+                # Keep validation simple but strict enough to avoid malformed values.
+                # Examples: t3.small, t3.medium, c6i.large
+                import re
+                if not re.match(r'^[a-z][a-z0-9]*\.[a-z0-9]+$', ec2_instance_type):
+                    return {
+                        'statusCode': 400,
+                        'headers': get_cors_headers(),
+                        'body': json.dumps({
+                            'success': False,
+                            'error': 'ec2_instance_type must look like "t3.medium"'
+                        })
+                    }
 
             if instance_type == 'admin' and cleanup_days is not None:
                 if cleanup_days < 1 or cleanup_days > 365:
@@ -3419,7 +3451,8 @@ def lambda_handler(event, context):
                 tutorial_session_id=tutorial_session_id,
                 purchase_type=purchase_type,
                 spot_max_price=spot_max_price,
-                idempotency_key=idempotency_key
+                idempotency_key=idempotency_key,
+                ec2_instance_type=ec2_instance_type
             )
             # Add a message indicating the operation is async
             if result['success']:
