@@ -24,6 +24,130 @@ variable "base_domain" {
   default     = "testingfantasy.com"
 }
 
+variable "github_actions_oidc_thumbprint" {
+  description = "Thumbprint for the GitHub Actions OIDC provider"
+  type        = string
+  default     = "6938fd4d98bab03faadb97b34396831e3780aea1"
+}
+
+variable "shared_core_environment" {
+  description = "Environment key used for shared-core SSM and Secrets Manager paths"
+  type        = string
+  default     = "prod"
+}
+
+variable "shared_core_github_owner" {
+  description = "GitHub organisation or user that owns the repository running the shared-core deploy workflow"
+  type        = string
+  default     = "Bassaganas"
+}
+
+variable "shared_core_github_repo" {
+  description = "GitHub repository name running the shared-core deploy workflow"
+  type        = string
+  default     = "lotr_sut"
+}
+
+variable "shared_core_github_environment" {
+  description = "GitHub Actions environment name allowed to assume the shared-core OIDC role"
+  type        = string
+  default     = "sut-production"
+}
+
+variable "shared_core_ami_id" {
+  description = "AMI ID for the shared-core EC2 host. If empty, latest Amazon Linux 2 AMI is used"
+  type        = string
+  default     = ""
+}
+
+variable "shared_core_instance_type" {
+  description = "EC2 instance type for the shared-core Jenkins and Gitea host"
+  type        = string
+  default     = "t3.medium"
+}
+
+variable "shared_core_subnet_id" {
+  description = "Subnet ID for the shared-core EC2 host. If empty, common module subnet is used"
+  type        = string
+  default     = ""
+}
+
+variable "shared_core_key_name" {
+  description = "EC2 key pair name used for SSH access to the shared-core host"
+  type        = string
+  default     = ""
+}
+
+variable "shared_core_ssh_host" {
+  description = "Optional override for shared-core SSH host. If empty, Terraform uses Jenkins domain when set, otherwise shared-core host public DNS/IP"
+  type        = string
+  default     = ""
+}
+
+variable "shared_core_jenkins_domain" {
+  description = "Public Jenkins domain for shared core"
+  type        = string
+  default     = ""
+}
+
+variable "shared_core_gitea_domain" {
+  description = "Public Gitea domain for shared core"
+  type        = string
+  default     = ""
+}
+
+variable "shared_core_security_group_id" {
+  description = "Security group ID of the shared core instance"
+  type        = string
+  default     = ""
+}
+
+variable "shared_core_gitea_admin_user" {
+  description = "Gitea admin username for shared core"
+  type        = string
+  default     = "fellowship"
+}
+
+variable "shared_core_gitea_admin_email" {
+  description = "Gitea admin email for shared core"
+  type        = string
+  default     = "gandalf@fellowship.local"
+}
+
+variable "shared_core_gitea_org_name" {
+  description = "Gitea organisation name for shared core"
+  type        = string
+  default     = "fellowship-org"
+}
+
+variable "shared_core_ssh_private_key" {
+  description = "SSH private key used by the shared-core deploy workflow"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "shared_core_gh_repo_token" {
+  description = "GitHub token used by the shared-core deploy workflow to clone the repository"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "shared_core_jenkins_admin_password" {
+  description = "Jenkins admin password for the shared core stack"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
+variable "shared_core_gitea_admin_password" {
+  description = "Gitea admin password for the shared core stack"
+  type        = string
+  default     = ""
+  sensitive   = true
+}
+
 # Common infrastructure variables
 variable "common_workshop_name" {
   description = "Workshop identifier for shared EC2 manager resources"

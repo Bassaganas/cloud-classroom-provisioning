@@ -12,6 +12,7 @@ resource "aws_ssm_parameter" "tutorial_always_on_links" {
   })
   tier = "Standard"
 }
+
 # Root module that includes all infrastructure
 # This consolidates common, fellowship, and testus_patronus into a single state
 
@@ -52,6 +53,68 @@ module "common" {
   instance_manager_password          = var.common_instance_manager_password
   instance_manager_memory_size       = var.common_instance_manager_memory_size
   instance_manager_timeout           = var.common_instance_manager_timeout
+}
+
+module "shared_core_compute" {
+  source = "./modules/shared-core-compute"
+
+  depends_on = [module.common]
+
+  owner                                = var.owner
+  base_domain                          = var.base_domain
+  shared_core_environment              = var.shared_core_environment
+  shared_core_ami_id                   = var.shared_core_ami_id
+  shared_core_instance_type            = var.shared_core_instance_type
+  shared_core_subnet_id                = var.shared_core_subnet_id
+  shared_core_key_name                 = var.shared_core_key_name
+  shared_core_ssh_host                 = var.shared_core_ssh_host
+  shared_core_jenkins_domain           = var.shared_core_jenkins_domain
+  shared_core_gitea_domain             = var.shared_core_gitea_domain
+  shared_core_security_group_id        = var.shared_core_security_group_id
+  common_subnet_id                     = module.common.subnet_id
+  common_shared_core_security_group_id = module.common.shared_core_security_group_id
+  common_ec2_iam_instance_profile_name = module.common.ec2_iam_instance_profile_name
+}
+
+module "shared_core_secrets" {
+  source = "./modules/shared-core-secrets"
+
+  owner                              = var.owner
+  shared_core_environment            = var.shared_core_environment
+  shared_core_ssh_private_key        = var.shared_core_ssh_private_key
+  shared_core_gh_repo_token          = var.shared_core_gh_repo_token
+  shared_core_jenkins_admin_password = var.shared_core_jenkins_admin_password
+  shared_core_gitea_admin_password   = var.shared_core_gitea_admin_password
+}
+
+module "shared_core_iam" {
+  source = "./modules/shared-core-iam"
+
+  environment                    = var.environment
+  owner                          = var.owner
+  region                         = var.region
+  github_actions_oidc_thumbprint = var.github_actions_oidc_thumbprint
+  shared_core_environment        = var.shared_core_environment
+  shared_core_github_owner       = var.shared_core_github_owner
+  shared_core_github_repo        = var.shared_core_github_repo
+  shared_core_github_environment = var.shared_core_github_environment
+  shared_core_deploy_secret_arn  = module.shared_core_secrets.deploy_secret_arn
+}
+
+module "shared_core_config" {
+  source = "./modules/shared-core-config"
+
+  owner                         = var.owner
+  shared_core_environment       = var.shared_core_environment
+  shared_core_instance_id       = module.shared_core_compute.instance_id
+  shared_core_ssh_host          = module.shared_core_compute.ssh_host
+  shared_core_jenkins_domain    = var.shared_core_jenkins_domain
+  shared_core_gitea_domain      = var.shared_core_gitea_domain
+  shared_core_security_group_id = module.shared_core_compute.security_group_id
+  shared_core_hosted_zone_id    = module.shared_core_compute.hosted_zone_id
+  shared_core_gitea_admin_user  = var.shared_core_gitea_admin_user
+  shared_core_gitea_admin_email = var.shared_core_gitea_admin_email
+  shared_core_gitea_org_name    = var.shared_core_gitea_org_name
 }
 
 # Fellowship Workshop Module

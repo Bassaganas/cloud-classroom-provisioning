@@ -7,6 +7,22 @@ output "tutorial_always_on_links_parameter_name" {
   description = "Name of the always-on tutorial links SSM parameter"
   value       = aws_ssm_parameter.tutorial_always_on_links.name
 }
+
+output "shared_core_github_actions_role_arn" {
+  description = "IAM role ARN for the shared-core GitHub Actions deploy workflow"
+  value       = module.shared_core_iam.github_actions_role_arn
+}
+
+output "shared_core_deploy_secret_name" {
+  description = "Secrets Manager secret name for shared-core deploy credentials"
+  value       = module.shared_core_secrets.deploy_secret_name
+}
+
+output "shared_core_config_parameter_names" {
+  description = "SSM parameter names used by the shared-core deploy workflow"
+  value       = module.shared_core_config.config_parameter_names
+}
+
 # Aggregate outputs from all modules
 
 # Common infrastructure outputs
@@ -33,6 +49,21 @@ output "instance_manager_cloudfront_distribution_id" {
 output "security_group_id" {
   description = "ID of the classroom security group"
   value       = module.common.security_group_id
+}
+
+output "shared_core_security_group_id" {
+  description = "ID of the shared-core Jenkins and Gitea security group"
+  value       = module.shared_core_compute.security_group_id
+}
+
+output "shared_core_instance_id" {
+  description = "EC2 instance ID of the Terraform-managed shared-core host"
+  value       = module.shared_core_compute.instance_id
+}
+
+output "shared_core_ssh_host" {
+  description = "SSH host used by the shared-core deployment workflow"
+  value       = module.shared_core_compute.ssh_host
 }
 
 output "subnet_id" {

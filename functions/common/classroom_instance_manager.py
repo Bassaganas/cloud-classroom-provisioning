@@ -1563,6 +1563,10 @@ fi
 # Fetch the latest exercises-*.tar.gz from S3 and extract to /opt/exercises.
 # This provides students with exercise content immediately upon instance launch.
 # The exercises are mounted read-only into the Gitea container.
+#
+# NOTE: Documentation is deployed separately to https://docs.fellowship.testingfantasy.com/
+#       All students access the same shared documentation URL (via S3 + CloudFront).
+#       Exercises artifact contains only code, READMEs, and shared dependencies.
 
 log "Fetching latest exercises artifact from S3..."
 
