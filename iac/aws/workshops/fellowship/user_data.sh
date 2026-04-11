@@ -98,6 +98,20 @@ if [ -n "$WORKSHOP_NAME" ]; then
     log "Workshop name from user_data: $WORKSHOP_NAME"
 fi
 
+# Fetch the SQS queue URL for student progress event publishing.
+# The messaging module publishes this value to SSM at deploy time.
+# The student exercises discover Amazon SQS through this env var.
+SSM_SQS_KEY="/classroom/fellowship/${ENVIRONMENT:-dev}/messaging/student_progress_queue_url"
+log "Fetching SQS queue URL from SSM: $SSM_SQS_KEY"
+SQS_QUEUE_URL=$(aws ssm get-parameter --name "$SSM_SQS_KEY" \
+    --query "Parameter.Value" --output text --region "${AWS_REGION}" 2>/dev/null || echo "")
+if [ -n "$SQS_QUEUE_URL" ]; then
+    export SQS_QUEUE_URL
+    log "SQS queue URL: $SQS_QUEUE_URL"
+else
+    log "WARNING: Could not fetch SQS queue URL from SSM — event sourcing will be disabled on this instance"
+fi
+
 # Execute setup script (preserves environment)
 log "Executing setup script..."
 exec "$SETUP_SCRIPT"

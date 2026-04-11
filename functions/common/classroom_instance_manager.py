@@ -1426,6 +1426,22 @@ WDS_SOCKET_PROTOCOL=wss
 AWS_REGION=${AWS_REGION:-eu-west-1}
 EOF
 
+# ── Event sourcing queue bootstrap (SQS) ─────────────────────────────────────
+# Mirrors fellowship user_data.sh behavior for the inline golden-AMI path.
+# This keeps event emission enabled even when template user_data.sh is bypassed.
+SSM_SQS_KEY="/classroom/${WORKSHOP_NAME:-fellowship}/${ENVIRONMENT:-dev}/messaging/student_progress_queue_url"
+log "Fetching SQS queue URL from SSM: ${SSM_SQS_KEY}"
+SQS_QUEUE_URL=$(aws ssm get-parameter --name "${SSM_SQS_KEY}" \
+    --query "Parameter.Value" --output text --region "${AWS_REGION}" 2>/dev/null || echo "")
+if [ -n "${SQS_QUEUE_URL}" ] && [ "${SQS_QUEUE_URL}" != "None" ]; then
+    export SQS_QUEUE_URL
+    log "SQS queue URL configured"
+    # Persist to .env so compose services can consume it where needed.
+    echo "SQS_QUEUE_URL=${SQS_QUEUE_URL}" >> "${SUT_DIR}/.env"
+else
+    log "WARNING: Could not fetch SQS queue URL from SSM — event sourcing will be disabled on this instance"
+fi
+
 # ── Wildcard cert: try Secrets Manager first, fall back to per-instance ACME ──
 # The issue-wildcard-cert GitHub Actions workflow stores a shared
 # *.fellowship.testingfantasy.com certificate in Secrets Manager at

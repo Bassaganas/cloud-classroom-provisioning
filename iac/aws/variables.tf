@@ -353,3 +353,17 @@ variable "testus_patronus_wait_for_certificate_validation" {
   type        = bool
   default     = true
 }
+
+# ── Palantir artifact variables (shared across workshops) ─────────────────────
+
+variable "lambda_artifact_bucket" {
+  description = "S3 bucket where the palantir leaderboard Lambda deployment artifact is stored"
+  type        = string
+}
+
+variable "lambda_artifact_key" {
+  description = "S3 key of the leaderboard Lambda zip artifact uploaded by palantir-jenkins-ai CI"
+  type        = string
+  default     = "palantir/leaderboard_lambda.zip"
+}
+
