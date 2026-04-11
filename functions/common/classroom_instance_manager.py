@@ -1559,6 +1559,48 @@ else
     log "  To fix: run the issue-wildcard-cert workflow in the lotr_sut repo and re-provision."
 fi
 
+# ── Exercises artifact bootstrap (download & extract from S3) ─────────────────
+# Fetch the latest exercises-*.tar.gz from S3 and extract to /opt/exercises.
+# This provides students with exercise content immediately upon instance launch.
+# The exercises are mounted read-only into the Gitea container.
+
+log "Fetching latest exercises artifact from S3..."
+
+LATEST_EXERCISES=$(aws s3api list-objects-v2 \
+    --bucket "${SUT_BUCKET}" \
+    --prefix "exercises-" \
+    --region "${AWS_REGION}" \
+    --query 'sort_by(Contents[?ends_with(Key, `.tar.gz`)], &LastModified)[-1].Key' \
+    --output text 2>/dev/null || echo "")
+
+if [ -z "$LATEST_EXERCISES" ]; then
+    log "WARNING: No exercises-*.tar.gz artifact found in S3 bucket"
+    log "         Students will not have access to exercises unless provided via another method"
+else
+    log "Downloading exercises artifact: $LATEST_EXERCISES"
+    if aws s3 cp "s3://${SUT_BUCKET}/${LATEST_EXERCISES}" /tmp/exercises.tar.gz \
+            --region "${AWS_REGION}" >/dev/null 2>&1 && [ -f "/tmp/exercises.tar.gz" ]; then
+        log "✓ Exercises downloaded"
+        
+        # Extract to /opt/exercises
+        mkdir -p /opt/exercises
+        log "Extracting exercises to /opt/exercises..."
+        if tar -xzf /tmp/exercises.tar.gz -C /opt/exercises --strip-components=1 2>/dev/null; then
+            chown -R ec2-user:ec2-user /opt/exercises 2>/dev/null || true
+            rm -f /tmp/exercises.tar.gz
+            log "✓ Exercises extracted to /opt/exercises"
+            
+            # Set EXERCISES_DIR so docker-compose can use it
+            export EXERCISES_DIR=/opt/exercises
+        else
+            log "WARNING: Failed to extract exercises tarball"
+            rm -f /tmp/exercises.tar.gz
+        fi
+    else
+        log "WARNING: Failed to download exercises from S3"
+    fi
+fi
+
 log "Starting SUT stack..."
 cd "$SUT_DIR"
 
@@ -2051,6 +2093,7 @@ export WORKSHOP_NAME={workshop_name}
 export ROUTE53_ZONE_ID={HTTPS_HOSTED_ZONE_ID}
 export AWS_REGION={REGION}
 export ENVIRONMENT={ENVIRONMENT}
+export EXERCISES_DIR=/opt/exercises
 """
                 
                 # Add S3 artifact information if available
