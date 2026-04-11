@@ -111,7 +111,7 @@ variable "shared_core_gitea_domain" {
 variable "shared_core_manage_route53_records" {
   description = "Whether to manage Route53 records for shared-core Jenkins/Gitea domains"
   type        = bool
-  default     = false
+  default     = true
 }
 
 variable "shared_core_security_group_id" {

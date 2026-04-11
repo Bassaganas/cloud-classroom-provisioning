@@ -615,9 +615,8 @@ enable_docs_dns_records                         = true
 fellowship_wait_for_certificate_validation      = true
 testus_patronus_wait_for_certificate_validation = true
 
-# Shared-core Route53 records (requires shared_core_manage_route53_records = true to create
-# jenkins/gitea DNS records; leave false if those domains are not in the hosted zone)
-shared_core_manage_route53_records = false
+# Shared-core Route53 records — enabled because testingfantasy.com hosted zone exists in this account
+shared_core_manage_route53_records = true
 shared_core_mode                   = true
 shared_core_environment            = "prod"
 shared_core_github_owner           = "Bassaganas"
