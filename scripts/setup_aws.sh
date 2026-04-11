@@ -617,6 +617,7 @@ testus_patronus_wait_for_certificate_validation = true
 
 # Shared-core Route53 records — enabled because testingfantasy.com hosted zone exists in this account
 shared_core_manage_route53_records = true
+shared_core_hosted_zone_id         = "Z00868603TVDTV1H4G9BU"
 shared_core_mode                   = true
 shared_core_environment            = "prod"
 shared_core_github_owner           = "Bassaganas"

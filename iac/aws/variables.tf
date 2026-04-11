@@ -114,6 +114,12 @@ variable "shared_core_manage_route53_records" {
   default     = true
 }
 
+variable "shared_core_hosted_zone_id" {
+  description = "Route53 hosted zone ID for shared-core Jenkins and Gitea records. When set, passed directly to shared-core-config to avoid a count-depends-on-computed-value Terraform error."
+  type        = string
+  default     = ""
+}
+
 variable "shared_core_security_group_id" {
   description = "Security group ID of the shared core instance"
   type        = string
