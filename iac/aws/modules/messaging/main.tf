@@ -27,15 +27,15 @@
 data "aws_caller_identity" "current" {}
 
 locals {
-  region_code     = replace(var.region, "-", "")
-  name_suffix     = "${var.workshop_name}-${var.environment}-${local.region_code}"
-  queue_name      = "sqs-student-progress-${local.name_suffix}"
-  dlq_name        = "sqs-student-progress-dlq-${local.name_suffix}"
-  ssm_param_name  = "/classroom/${var.workshop_name}/${var.environment}/messaging/student_progress_queue_url"
-  iam_policy_name = "sqs-producer-policy-${local.name_suffix}"
-  leaderboard_lambda_zip_path = "${path.root}/../../functions/packages/leaderboard_lambda.zip"
-  leaderboard_api_zip_path    = "${path.root}/../../functions/packages/leaderboard_api.zip"
-  use_local_leaderboard_zip   = fileexists(local.leaderboard_lambda_zip_path)
+  region_code                   = replace(var.region, "-", "")
+  name_suffix                   = "${var.workshop_name}-${var.environment}-${local.region_code}"
+  queue_name                    = "sqs-student-progress-${local.name_suffix}"
+  dlq_name                      = "sqs-student-progress-dlq-${local.name_suffix}"
+  ssm_param_name                = "/classroom/${var.workshop_name}/${var.environment}/messaging/student_progress_queue_url"
+  iam_policy_name               = "sqs-producer-policy-${local.name_suffix}"
+  leaderboard_lambda_zip_path   = "${path.root}/../../functions/packages/leaderboard_lambda.zip"
+  leaderboard_api_zip_path      = "${path.root}/../../functions/packages/leaderboard_api.zip"
+  use_local_leaderboard_zip     = fileexists(local.leaderboard_lambda_zip_path)
   use_local_leaderboard_api_zip = fileexists(local.leaderboard_api_zip_path)
 }
 
