@@ -1,7 +1,7 @@
-# Route 53 alias record output
+# Route 53 alias record output — managed by the docs_cloudfront module
 output "docs_route53_record_fqdn" {
-  value       = try(aws_route53_record.docs_alias[0].fqdn, null)
-  description = "FQDN of the Route 53 alias record for docs.fellowship.testingfantasy.com"
+  value       = try(module.docs_cloudfront.cloudfront_domain, null)
+  description = "CloudFront domain serving docs.fellowship.testingfantasy.com"
 }
 # Docusaurus Docs CloudFront Outputs
 output "docs_cloudfront_distribution_id" {

@@ -1,7 +1,10 @@
+# Current AWS region (needed for OAC S3 regional endpoint)
+data "aws_region" "current" {}
+
 # Data source for Route53 hosted zone
 data "aws_route53_zone" "domain" {
   count        = var.enable_route53_records ? 1 : 0
-  name         = replace(var.domain_name, "/^[^.]+\\.(.+)$/", "$1")
+  name         = var.zone_name != "" ? "${var.zone_name}." : replace(var.domain_name, "/^[^.]+\\.(.+)$/", "$1")
   private_zone = false
 }
 
@@ -307,6 +310,32 @@ resource "aws_lambda_event_source_mapping" "cloudfront_logs" {
 # CloudFront Function to rewrite API Gateway paths to include stage
 # This adds the stage prefix (e.g., /dev) to API requests before forwarding to API Gateway
 # Only needed when using regional API Gateway endpoint (not custom domain)
+# CloudFront Function to rewrite directory-style paths for static S3 sites
+# e.g., /getting-started/quick-start  →  /getting-started/quick-start/index.html
+# Required because S3 only serves DefaultRootObject at the true root; sub-paths
+# using directory-style URLs must explicitly resolve to their index.html.
+resource "aws_cloudfront_function" "s3_directory_index" {
+  count = var.s3_origin_bucket != "" || var.s3_bucket_domain != "" ? 1 : 0
+
+  name    = "s3-dir-index-${var.environment}-${replace(replace(var.domain_name, ".testingfantasy.com", ""), ".", "-")}"
+  runtime = "cloudfront-js-2.0"
+  comment = "Append /index.html to directory-style requests for S3 static site"
+  code    = <<-EOF
+    function handler(event) {
+      var request = event.request;
+      var uri = request.uri;
+      // If the URI ends with '/' append index.html
+      if (uri.endsWith('/')) {
+        request.uri += 'index.html';
+      } else if (!uri.includes('.')) {
+        // No file extension → treat as directory page
+        request.uri += '/index.html';
+      }
+      return request;
+    }
+  EOF
+}
+
 # Extract a unique identifier from domain name to avoid conflicts when multiple CloudFront distributions
 # use the same workshop_name (e.g., user_management vs dify_jira)
 locals {
@@ -381,6 +410,37 @@ resource "aws_cloudfront_function" "api_path_rewrite" {
   EOF
 
   comment = "Rewrite API paths to include API Gateway stage prefix (only for regional endpoints)"
+}
+
+# CloudFront Function to rewrite directory-style paths for Docusaurus SSG on S3
+# When CloudFront uses S3 REST API (OAI), it does NOT auto-serve index.html for sub-directories.
+# e.g. /getting-started/quick-start → S3 key not found (403) unless rewritten to
+#      /getting-started/quick-start/index.html which IS the actual Docusaurus build artifact.
+resource "aws_cloudfront_function" "s3_path_rewrite" {
+  count = var.enable_s3_path_rewrite ? 1 : 0
+
+  name    = "s3-path-rewrite-${var.environment}-${local.domain_identifier}"
+  runtime = "cloudfront-js-1.0"
+  comment = "Append /index.html to extensionless paths for Docusaurus SSG (S3+OAI)"
+
+  code = <<-EOF
+    function handler(event) {
+      var request = event.request;
+      var uri = request.uri;
+
+      // If the URI ends with '/', serve the index document of that directory.
+      if (uri.endsWith('/')) {
+        request.uri += 'index.html';
+      }
+      // If the URI has no file extension, treat it as a directory and append /index.html.
+      // This covers Docusaurus routes like /getting-started/quick-start
+      else if (!uri.includes('.')) {
+        request.uri += '/index.html';
+      }
+
+      return request;
+    }
+  EOF
 }
 
 # Data sources for AWS-managed CloudFront policies (AWS Best Practice)
@@ -512,14 +572,20 @@ resource "aws_cloudfront_distribution" "distribution" {
   }
 
   # S3 origin for frontend (if provided)
+  # OAC requires the regional S3 endpoint; OAI works with the global endpoint
   dynamic "origin" {
     for_each = var.s3_bucket_domain != "" || var.s3_origin_bucket != "" ? [1] : []
     content {
-      domain_name = var.s3_bucket_domain != "" ? var.s3_bucket_domain : "${var.s3_origin_bucket}.s3.amazonaws.com"
-      origin_id   = "s3-frontend"
+      domain_name = var.s3_bucket_domain != "" ? var.s3_bucket_domain : (
+        var.s3_origin_access_control_id != "" ?
+        "${var.s3_origin_bucket}.s3.${data.aws_region.current.name}.amazonaws.com" :
+        "${var.s3_origin_bucket}.s3.amazonaws.com"
+      )
+      origin_id                = "s3-frontend"
+      origin_access_control_id = var.s3_origin_access_control_id != "" ? var.s3_origin_access_control_id : null
 
       s3_origin_config {
-        origin_access_identity = var.s3_origin_access_identity
+        origin_access_identity = var.s3_origin_access_control_id != "" ? "" : var.s3_origin_access_identity
       }
     }
   }
@@ -609,6 +675,15 @@ resource "aws_cloudfront_distribution" "distribution" {
     min_ttl     = var.s3_bucket_domain != "" || var.s3_origin_bucket != "" ? 0 : 0
     default_ttl = var.s3_bucket_domain != "" || var.s3_origin_bucket != "" ? 3600 : 0 # Cache static assets
     max_ttl     = var.s3_bucket_domain != "" || var.s3_origin_bucket != "" ? 86400 : 0
+
+    # Attach the directory-index rewrite function for S3 static sites
+    dynamic "function_association" {
+      for_each = (var.s3_origin_bucket != "" || var.s3_bucket_domain != "") ? [1] : []
+      content {
+        event_type   = "viewer-request"
+        function_arn = aws_cloudfront_function.s3_directory_index[0].arn
+      }
+    }
   }
 
   # Custom error responses for SPA routing
@@ -620,12 +695,12 @@ resource "aws_cloudfront_distribution" "distribution" {
     response_page_path = "/index.html"
   }
 
-  # Convert 403 to 404, then 404 handler will serve index.html for frontend SPA routing
-  # This handles missing static assets (like vite.svg) that S3 returns as 403
+  # Convert 403 (S3 private bucket missing-key) to 200 + index.html for SSG/SPA routing
+  # S3 never returns 404 for missing objects on a private bucket — it returns 403.
   # Note: 403 errors from API endpoints will still be returned as 403 since they match /api/* pattern first
   custom_error_response {
     error_code         = 403
-    response_code      = 404
+    response_code      = 200
     response_page_path = "/index.html"
   }
 

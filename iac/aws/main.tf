@@ -1,21 +1,11 @@
-# Route 53 alias record for docs.fellowship.testingfantasy.com
-data "aws_route53_zone" "docs" {
-  count        = var.enable_docs_dns_records ? 1 : 0
-  name         = "fellowship.testingfantasy.com."
-  private_zone = false
+# OAC for the Docusaurus docs site (modern replacement for OAI)
+resource "aws_cloudfront_origin_access_control" "docs" {
+  name                              = "docs-fellowship-${var.environment}-oac"
+  origin_access_control_origin_type = "s3"
+  signing_behavior                  = "always"
+  signing_protocol                  = "sigv4"
 }
 
-resource "aws_route53_record" "docs_alias" {
-  count   = var.enable_docs_dns_records ? 1 : 0
-  zone_id = data.aws_route53_zone.docs[0].zone_id
-  name    = "docs.fellowship.testingfantasy.com"
-  type    = "A"
-  alias {
-    name                   = module.docs_cloudfront.cloudfront_domain
-    zone_id                = "Z2FDTNDATAQYW2" # CloudFront hosted zone ID (global)
-    evaluate_target_health = false
-  }
-}
 # Docusaurus Docs CloudFront Distribution
 module "docs_cloudfront" {
   source = "./modules/cloudfront"
@@ -29,9 +19,36 @@ module "docs_cloudfront" {
   workshop_name                   = "docs"
   domain_name                     = "docs.fellowship.testingfantasy.com"
   s3_origin_bucket                = "docusaurus-docs-bucket-default"
+  s3_origin_access_control_id     = aws_cloudfront_origin_access_control.docs.id
   wait_for_certificate_validation = var.enable_docs_dns_records
   enable_route53_records          = var.enable_docs_dns_records
-  # Add/override other variables as needed (e.g., SSL cert, logging)
+  zone_name                       = "testingfantasy.com"
+}
+
+resource "aws_s3_bucket_policy" "docs" {
+  bucket = "docusaurus-docs-bucket-default"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowCloudFrontServicePrincipalReadOnly"
+        Effect = "Allow"
+        Principal = {
+          Service = "cloudfront.amazonaws.com"
+        }
+        Action   = "s3:GetObject"
+        Resource = "arn:aws:s3:::docusaurus-docs-bucket-default/*"
+        Condition = {
+          StringEquals = {
+            "AWS:SourceArn" = module.docs_cloudfront.cloudfront_distribution_arn
+          }
+        }
+      }
+    ]
+  })
+
+  depends_on = [module.docs_cloudfront]
 }
 resource "aws_ssm_parameter" "tutorial_always_on_links" {
   name        = "/cloud-classroom/tutorial-always-on-links"
