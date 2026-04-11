@@ -16,16 +16,16 @@ resource "aws_route53_record" "docs_alias" {
 }
 # Docusaurus Docs CloudFront Distribution
 module "docs_cloudfront" {
-  source        = "./modules/cloudfront"
-  
+  source = "./modules/cloudfront"
+
   providers = {
     aws.us_east_1 = aws.us_east_1
   }
-  
-  environment   = var.environment
-  owner         = var.owner
-  workshop_name = "docs"
-  domain_name   = "docs.fellowship.testingfantasy.com"
+
+  environment      = var.environment
+  owner            = var.owner
+  workshop_name    = "docs"
+  domain_name      = "docs.fellowship.testingfantasy.com"
   s3_origin_bucket = "docusaurus-docs-bucket-default"
   # Add/override other variables as needed (e.g., SSL cert, logging)
 }
