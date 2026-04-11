@@ -166,7 +166,7 @@ module "shared_core_config" {
   shared_core_jenkins_domain    = var.shared_core_jenkins_domain
   shared_core_gitea_domain      = var.shared_core_gitea_domain
   shared_core_security_group_id = module.shared_core_compute.security_group_id
-  shared_core_hosted_zone_id    = module.shared_core_compute.hosted_zone_id
+  shared_core_hosted_zone_id    = var.shared_core_hosted_zone_id != "" ? var.shared_core_hosted_zone_id : module.shared_core_compute.hosted_zone_id
   shared_core_gitea_admin_user  = var.shared_core_gitea_admin_user
   shared_core_gitea_admin_email = var.shared_core_gitea_admin_email
   shared_core_gitea_org_name    = var.shared_core_gitea_org_name

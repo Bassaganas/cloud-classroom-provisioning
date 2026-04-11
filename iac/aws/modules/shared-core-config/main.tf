@@ -89,6 +89,7 @@ resource "aws_ssm_parameter" "shared_core_hosted_zone_id" {
   type        = "String"
   value       = var.shared_core_hosted_zone_id
   tier        = "Standard"
+  overwrite   = true
 
   tags = {
     Environment = var.shared_core_environment
