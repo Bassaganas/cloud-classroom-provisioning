@@ -124,6 +124,15 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Cache Lambda packages
+        id: lambda-cache
+        uses: actions/cache@v4
+        with:
+          path: functions/packages
+          key: ${{ runner.os }}-lambda-${{ hashFiles('functions/**') }}
+          restore-keys: |
+            ${{ runner.os }}-lambda-
+
       - name: Validate leaderboard Lambda artifact
         env:
           LAMBDA_ARTIFACT_BUCKET: ${{ vars.LAMBDA_ARTIFACT_BUCKET }}
@@ -151,12 +160,19 @@ jobs:
           TF_VAR_lambda_artifact_bucket: ${{ vars.LAMBDA_ARTIFACT_BUCKET || '' }}
           TF_VAR_lambda_artifact_key: ${{ vars.LAMBDA_ARTIFACT_KEY || 'palantir/leaderboard_lambda.zip' }}
         run: |
+          SKIP_PKG_FLAG=""
+          if [ "${{ steps.lambda-cache.outputs.cache-hit }}" = "true" ]; then
+            echo "Lambda packages restored from cache – skipping repackaging"
+            SKIP_PKG_FLAG="--skip-packaging"
+          fi
+
           ./scripts/setup_classroom.sh \
             --name "$CLASSROOM_NAME" \
             --cloud aws \
             --region "${AWS_REGION}" \
             --environment dev \
-            --workshop "$WORKSHOP"
+            --workshop "$WORKSHOP" \
+            $SKIP_PKG_FLAG
           
           # Extract Lambda Function URL from Terraform outputs
           cd iac/aws
@@ -201,6 +217,15 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Cache Lambda packages
+        id: lambda-cache
+        uses: actions/cache@v4
+        with:
+          path: functions/packages
+          key: ${{ runner.os }}-lambda-${{ hashFiles('functions/**') }}
+          restore-keys: |
+            ${{ runner.os }}-lambda-
+
       - name: Validate leaderboard Lambda artifact
         env:
           LAMBDA_ARTIFACT_BUCKET: ${{ vars.LAMBDA_ARTIFACT_BUCKET }}
@@ -229,6 +254,10 @@ jobs:
           EXTRA_FLAGS=""
           if [ "${{ inputs.action }}" = "destroy" ]; then
             EXTRA_FLAGS="--destroy"
+          fi
+          if [ "${{ steps.lambda-cache.outputs.cache-hit }}" = "true" ]; then
+            echo "Lambda packages restored from cache – skipping repackaging"
+            EXTRA_FLAGS="$EXTRA_FLAGS --skip-packaging"
           fi
 
           ./scripts/setup_classroom.sh \

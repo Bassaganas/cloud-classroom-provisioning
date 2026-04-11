@@ -129,11 +129,10 @@ module "shared_core_secrets" {
 module "shared_core_iam" {
   source = "./modules/shared-core-iam"
 
-  environment                    = var.environment
-  owner                          = var.owner
-  region                         = var.region
-  github_actions_oidc_thumbprint = var.github_actions_oidc_thumbprint
-  shared_core_environment        = var.shared_core_environment
+  environment             = var.environment
+  owner                   = var.owner
+  region                  = var.region
+  shared_core_environment = var.shared_core_environment
   shared_core_github_owner       = var.shared_core_github_owner
   shared_core_github_repo        = var.shared_core_github_repo
   shared_core_github_environment = var.shared_core_github_environment
