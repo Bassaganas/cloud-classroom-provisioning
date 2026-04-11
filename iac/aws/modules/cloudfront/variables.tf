@@ -1,3 +1,9 @@
+# S3 origin bucket for static site (docs)
+variable "s3_origin_bucket" {
+  description = "Name of the S3 bucket to use as the CloudFront origin for static site (docs)"
+  type        = string
+  default     = ""
+}
 variable "environment" {
   description = "The environment name"
   type        = string

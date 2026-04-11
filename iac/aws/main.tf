@@ -1,3 +1,29 @@
+# Route 53 alias record for docs.fellowship.testingfantasy.com
+data "aws_route53_zone" "docs" {
+  name         = "fellowship.testingfantasy.com."
+  private_zone = false
+}
+
+resource "aws_route53_record" "docs_alias" {
+  zone_id = data.aws_route53_zone.docs.zone_id
+  name    = "docs.fellowship.testingfantasy.com"
+  type    = "A"
+  alias {
+    name                   = module.docs_cloudfront.cloudfront_domain_name
+    zone_id                = "Z2FDTNDATAQYW2" # CloudFront hosted zone ID (global)
+    evaluate_target_health = false
+  }
+}
+# Docusaurus Docs CloudFront Distribution
+module "docs_cloudfront" {
+  source        = "./modules/cloudfront"
+  environment   = var.environment
+  owner         = var.owner
+  workshop_name = "docs"
+  domain_name   = "docs.fellowship.testingfantasy.com"
+  s3_origin_bucket = "docusaurus-docs-bucket-default"
+  # Add/override other variables as needed (e.g., SSL cert, logging)
+}
 resource "aws_ssm_parameter" "tutorial_always_on_links" {
   name        = "/cloud-classroom/tutorial-always-on-links"
   description = "Always-on environment links for tutorials (used by EC2 Manager frontend)"
