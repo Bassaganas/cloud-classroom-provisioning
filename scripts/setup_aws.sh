@@ -593,11 +593,48 @@ terraform {
 }
 EOF
 
-# Update terraform.tfvars with environment
-  cat > terraform.tfvars << EOF
+# Update terraform.tfvars with environment and all settings that must survive re-runs.
+# Read back any existing tfvars values we want to preserve (shared_core_* secrets etc.)
+# so a fresh run does not lose them.
+_tf_sc_ssh_key=""
+_tf_sc_gh_token=""
+_tf_sc_jenkins_pw=""
+_tf_sc_gitea_pw=""
+if [ -f terraform.tfvars ]; then
+  _tf_sc_ssh_key=$(grep -E '^shared_core_ssh_private_key' terraform.tfvars 2>/dev/null | cut -d'=' -f2- | tr -d '[:space:]"' || true)
+  _tf_sc_gh_token=$(grep -E '^shared_core_gh_repo_token' terraform.tfvars 2>/dev/null | cut -d'=' -f2- | tr -d '[:space:]"' || true)
+  _tf_sc_jenkins_pw=$(grep -E '^shared_core_jenkins_admin_password' terraform.tfvars 2>/dev/null | cut -d'=' -f2- | tr -d '[:space:]"' || true)
+  _tf_sc_gitea_pw=$(grep -E '^shared_core_gitea_admin_password' terraform.tfvars 2>/dev/null | cut -d'=' -f2- | tr -d '[:space:]"' || true)
+fi
+
+cat > terraform.tfvars << EOF
 environment = "$ENVIRONMENT"
-owner = "admin"
-region = "$REGION"
+owner       = "admin"
+region      = "$REGION"
+
+# DNS / certificate settings — keep true so custom domains and docs CloudFront are created
+enable_docs_dns_records                         = true
+fellowship_wait_for_certificate_validation      = true
+testus_patronus_wait_for_certificate_validation = true
+
+# Shared-core Route53 records (requires shared_core_manage_route53_records = true to create
+# jenkins/gitea DNS records; leave false if those domains are not in the hosted zone)
+shared_core_manage_route53_records = false
+shared_core_mode                   = true
+shared_core_environment            = "prod"
+shared_core_github_owner           = "Bassaganas"
+shared_core_github_repo            = "lotr_sut"
+shared_core_github_environment     = "sut-production"
+shared_core_instance_type          = "t3.medium"
+shared_core_jenkins_domain         = "jenkins.fellowship.testingfantasy.com"
+shared_core_gitea_domain           = "gitea.fellowship.testingfantasy.com"
+shared_core_gitea_admin_user       = "fellowship"
+shared_core_gitea_admin_email      = "gandalf@fellowship.local"
+shared_core_gitea_org_name         = "fellowship-org"
+
+# Lambda artifact (set via TF_VAR_* env vars in CI; keep empty here for local runs)
+lambda_artifact_bucket = "${TF_VAR_lambda_artifact_bucket:-}"
+lambda_artifact_key    = "${TF_VAR_lambda_artifact_key:-palantir/leaderboard_lambda.zip}"
 EOF
 
 terraform init -reconfigure

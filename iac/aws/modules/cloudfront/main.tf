@@ -1,7 +1,7 @@
 # Data source for Route53 hosted zone
 data "aws_route53_zone" "domain" {
   count        = var.enable_route53_records ? 1 : 0
-  name         = replace(var.domain_name, "/^[^.]+\\.(.+)$/", "$1")
+  name         = var.zone_name != "" ? "${var.zone_name}." : replace(var.domain_name, "/^[^.]+\\.(.+)$/", "$1")
   private_zone = false
 }
 

@@ -1,3 +1,9 @@
+variable "zone_name" {
+  description = "Override for the Route53 hosted zone name. If empty, derived from domain_name by stripping the first label. Use this when domain_name has more than 3 parts (e.g. docs.fellowship.testingfantasy.com)."
+  type        = string
+  default     = ""
+}
+
 # S3 origin bucket for static site (docs)
 variable "s3_origin_bucket" {
   description = "Name of the S3 bucket to use as the CloudFront origin for static site (docs)"

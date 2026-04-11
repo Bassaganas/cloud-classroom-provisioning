@@ -1,21 +1,27 @@
-# Route 53 alias record for docs.fellowship.testingfantasy.com
-data "aws_route53_zone" "docs" {
-  count        = var.enable_docs_dns_records ? 1 : 0
-  name         = "fellowship.testingfantasy.com."
-  private_zone = false
+# OAI for the Docusaurus docs site (required so CloudFront can access the private S3 bucket)
+resource "aws_cloudfront_origin_access_identity" "docs" {
+  comment = "OAI for docusaurus-docs-bucket-default (docs.fellowship.testingfantasy.com)"
 }
 
-resource "aws_route53_record" "docs_alias" {
-  count   = var.enable_docs_dns_records ? 1 : 0
-  zone_id = data.aws_route53_zone.docs[0].zone_id
-  name    = "docs.fellowship.testingfantasy.com"
-  type    = "A"
-  alias {
-    name                   = module.docs_cloudfront.cloudfront_domain
-    zone_id                = "Z2FDTNDATAQYW2" # CloudFront hosted zone ID (global)
-    evaluate_target_health = false
-  }
+resource "aws_s3_bucket_policy" "docs" {
+  bucket = "docusaurus-docs-bucket-default"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowCloudFrontOAI"
+        Effect = "Allow"
+        Principal = {
+          CanonicalUser = aws_cloudfront_origin_access_identity.docs.s3_canonical_user_id
+        }
+        Action   = "s3:GetObject"
+        Resource = "arn:aws:s3:::docusaurus-docs-bucket-default/*"
+      }
+    ]
+  })
 }
+
 # Docusaurus Docs CloudFront Distribution
 module "docs_cloudfront" {
   source = "./modules/cloudfront"
@@ -29,9 +35,10 @@ module "docs_cloudfront" {
   workshop_name                   = "docs"
   domain_name                     = "docs.fellowship.testingfantasy.com"
   s3_origin_bucket                = "docusaurus-docs-bucket-default"
+  s3_origin_access_identity       = aws_cloudfront_origin_access_identity.docs.cloudfront_access_identity_path
   wait_for_certificate_validation = var.enable_docs_dns_records
   enable_route53_records          = var.enable_docs_dns_records
-  # Add/override other variables as needed (e.g., SSL cert, logging)
+  zone_name                       = "testingfantasy.com"
 }
 resource "aws_ssm_parameter" "tutorial_always_on_links" {
   name        = "/cloud-classroom/tutorial-always-on-links"
