@@ -7,19 +7,12 @@ locals {
   shared_core_github_sub = "repo:${var.shared_core_github_owner}/${var.shared_core_github_repo}:environment:${var.shared_core_github_environment}"
 }
 
-resource "aws_iam_openid_connect_provider" "github_actions" {
+# Reference the existing GitHub Actions OIDC provider.
+# AWS allows only one OIDC provider per URL per account, and this provider is
+# shared with the main CI/CD workflow. It is bootstrapped by setup_aws.sh before
+# Terraform runs (created via AWS CLI if absent), so this data source always resolves.
+data "aws_iam_openid_connect_provider" "github_actions" {
   url = "https://token.actions.githubusercontent.com"
-
-  client_id_list = ["sts.amazonaws.com"]
-
-  thumbprint_list = [var.github_actions_oidc_thumbprint]
-
-  tags = {
-    Environment = var.environment
-    Owner       = var.owner
-    Project     = "classroom"
-    Company     = "TestingFantasy"
-  }
 }
 
 resource "aws_iam_policy" "shared_core_github_actions_read" {
@@ -112,7 +105,7 @@ resource "aws_iam_role" "shared_core_github_actions" {
       {
         Effect = "Allow"
         Principal = {
-          Federated = aws_iam_openid_connect_provider.github_actions.arn
+          Federated = data.aws_iam_openid_connect_provider.github_actions.arn
         }
         Action = "sts:AssumeRoleWithWebIdentity"
         Condition = {

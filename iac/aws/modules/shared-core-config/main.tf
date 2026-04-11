@@ -33,6 +33,8 @@ resource "aws_ssm_parameter" "shared_core_ssh_host" {
 }
 
 resource "aws_ssm_parameter" "shared_core_jenkins_domain" {
+  count = try(trimspace(var.shared_core_jenkins_domain), "") != "" ? 1 : 0
+
   name        = "${local.shared_core_prefix}/jenkins-domain"
   description = "Public Jenkins domain for the shared core stack"
   type        = "String"
@@ -48,6 +50,8 @@ resource "aws_ssm_parameter" "shared_core_jenkins_domain" {
 }
 
 resource "aws_ssm_parameter" "shared_core_gitea_domain" {
+  count = try(trimspace(var.shared_core_gitea_domain), "") != "" ? 1 : 0
+
   name        = "${local.shared_core_prefix}/gitea-domain"
   description = "Public Gitea domain for the shared core stack"
   type        = "String"
@@ -78,6 +82,8 @@ resource "aws_ssm_parameter" "shared_core_security_group_id" {
 }
 
 resource "aws_ssm_parameter" "shared_core_hosted_zone_id" {
+  count = try(trimspace(var.shared_core_hosted_zone_id), "") != "" ? 1 : 0
+
   name        = "${local.shared_core_prefix}/hosted-zone-id"
   description = "Route53 hosted zone ID for shared-core Jenkins and Gitea records"
   type        = "String"

@@ -13,11 +13,6 @@ variable "region" {
   type        = string
 }
 
-variable "github_actions_oidc_thumbprint" {
-  description = "Thumbprint for GitHub Actions OIDC provider"
-  type        = string
-}
-
 variable "shared_core_environment" {
   description = "Environment key used for shared-core SSM and Secrets Manager paths"
   type        = string

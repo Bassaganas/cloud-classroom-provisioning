@@ -643,6 +643,26 @@ else
     exit 0
   fi
 
+  # Bootstrap: ensure the GitHub Actions OIDC provider exists before apply.
+  # AWS allows only one provider per URL; shared_core_iam/main.tf uses a data
+  # source (not a resource) so Terraform will fail if the provider is absent.
+  echo "Checking GitHub Actions OIDC provider..."
+  OIDC_ARN=$(aws iam list-open-id-connect-providers \
+    --query "OpenIDConnectProviderList[?contains(Arn, 'token.actions.githubusercontent.com')].Arn" \
+    --output text 2>/dev/null | head -1 | tr -d '[:space:]')
+  if [ -z "$OIDC_ARN" ]; then
+    echo "Creating GitHub Actions OIDC provider..."
+    OIDC_ARN=$(aws iam create-open-id-connect-provider \
+      --url "https://token.actions.githubusercontent.com" \
+      --client-id-list "sts.amazonaws.com" \
+      --thumbprint-list "6938fd4d98bab03faadb97b34396831e3780aea1" \
+      --query 'OpenIDConnectProviderArn' \
+      --output text)
+    echo "✓ Created OIDC provider: $OIDC_ARN"
+  else
+    echo "✓ Found existing OIDC provider: $OIDC_ARN"
+  fi
+
   # Apply the plan
   if [ -n "$TARGET_FLAGS" ]; then
     terraform apply -auto-approve $TARGET_FLAGS

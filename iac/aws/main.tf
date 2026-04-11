@@ -132,7 +132,6 @@ module "shared_core_iam" {
   environment                    = var.environment
   owner                          = var.owner
   region                         = var.region
-  github_actions_oidc_thumbprint = var.github_actions_oidc_thumbprint
   shared_core_environment        = var.shared_core_environment
   shared_core_github_owner       = var.shared_core_github_owner
   shared_core_github_repo        = var.shared_core_github_repo
