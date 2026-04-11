@@ -596,12 +596,10 @@ EOF
 # Update terraform.tfvars with environment and all settings that must survive re-runs.
 # Read back any existing tfvars values we want to preserve (shared_core_* secrets etc.)
 # so a fresh run does not lose them.
-_tf_sc_ssh_key=""
 _tf_sc_gh_token=""
 _tf_sc_jenkins_pw=""
 _tf_sc_gitea_pw=""
 if [ -f terraform.tfvars ]; then
-  _tf_sc_ssh_key=$(grep -E '^shared_core_ssh_private_key' terraform.tfvars 2>/dev/null | cut -d'=' -f2- | tr -d '[:space:]"' || true)
   _tf_sc_gh_token=$(grep -E '^shared_core_gh_repo_token' terraform.tfvars 2>/dev/null | cut -d'=' -f2- | tr -d '[:space:]"' || true)
   _tf_sc_jenkins_pw=$(grep -E '^shared_core_jenkins_admin_password' terraform.tfvars 2>/dev/null | cut -d'=' -f2- | tr -d '[:space:]"' || true)
   _tf_sc_gitea_pw=$(grep -E '^shared_core_gitea_admin_password' terraform.tfvars 2>/dev/null | cut -d'=' -f2- | tr -d '[:space:]"' || true)
@@ -632,19 +630,20 @@ shared_core_gitea_admin_user       = "fellowship"
 shared_core_gitea_admin_email      = "gandalf@fellowship.local"
 shared_core_gitea_org_name         = "fellowship-org"
 
-# Shared-core deploy secrets — prefer TF_VAR_* env vars (set in CI via GitHub secrets),
-# fall back to values read back from the previous tfvars so a re-run never wipes them.
-shared_core_ssh_private_key        = "${TF_VAR_shared_core_ssh_private_key:-${_tf_sc_ssh_key}}"
-shared_core_gh_repo_token          = "${TF_VAR_shared_core_gh_repo_token:-${_tf_sc_gh_token}}"
-shared_core_jenkins_admin_password = "${TF_VAR_shared_core_jenkins_admin_password:-${_tf_sc_jenkins_pw}}"
-shared_core_gitea_admin_password   = "${TF_VAR_shared_core_gitea_admin_password:-${_tf_sc_gitea_pw}}"
-
 # Lambda artifact (set via TF_VAR_* env vars in CI; keep empty here for local runs)
 lambda_artifact_bucket = "${TF_VAR_lambda_artifact_bucket:-}"
 lambda_artifact_key    = "${TF_VAR_lambda_artifact_key:-palantir/leaderboard_lambda.zip}"
 EOF
 
 terraform init -reconfigure
+
+# Shared-core deploy secrets must be passed as TF_VAR_* env vars (not in tfvars) because
+# the SSH private key is multi-line and cannot be embedded in a quoted Terraform string.
+# In CI these are set by the workflow; for local re-runs fall back to values preserved
+# from the previous tfvars (only works for the three simple string vars — not the SSH key).
+export TF_VAR_shared_core_gh_repo_token="${TF_VAR_shared_core_gh_repo_token:-${_tf_sc_gh_token}}"
+export TF_VAR_shared_core_jenkins_admin_password="${TF_VAR_shared_core_jenkins_admin_password:-${_tf_sc_jenkins_pw}}"
+export TF_VAR_shared_core_gitea_admin_password="${TF_VAR_shared_core_gitea_admin_password:-${_tf_sc_gitea_pw}}"
 
 # Determine target flags for partial deployments
 TARGET_FLAGS=""
