@@ -36,7 +36,7 @@ variable "shared_core_security_group_id" {
 variable "shared_core_hosted_zone_id" {
   description = "Route53 hosted zone ID for shared-core domains"
   type        = string
-  default     = null
+  default     = "Z00868603TVDTV1H4G9BU"
 }
 
 variable "shared_core_gitea_admin_user" {
