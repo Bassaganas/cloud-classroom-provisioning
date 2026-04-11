@@ -84,6 +84,12 @@ variable "shared_core_ssh_host" {
   default     = ""
 }
 
+variable "shared_core_mode" {
+  description = "Enable shared-core mode: instance_manager issues shared Jenkins/Gitea URLs instead of per-student installs"
+  type        = bool
+  default     = true
+}
+
 variable "shared_core_jenkins_domain" {
   description = "Public Jenkins domain for shared core"
   type        = string

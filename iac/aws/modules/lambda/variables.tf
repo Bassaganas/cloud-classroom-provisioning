@@ -181,3 +181,21 @@ variable "instance_manager_timeout" {
   default     = 300
 }
 
+variable "shared_core_mode" {
+  description = "Enable shared-core mode in instance_manager (uses shared Jenkins/Gitea instead of per-student installs)"
+  type        = bool
+  default     = true
+}
+
+variable "shared_core_jenkins_url" {
+  description = "Base URL of the shared Jenkins instance (e.g. https://jenkins.fellowship.testingfantasy.com/)"
+  type        = string
+  default     = ""
+}
+
+variable "shared_core_gitea_url" {
+  description = "Base URL of the shared Gitea instance (e.g. https://gitea.fellowship.testingfantasy.com/)"
+  type        = string
+  default     = ""
+}
+

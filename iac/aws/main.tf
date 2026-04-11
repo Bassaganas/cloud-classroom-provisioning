@@ -53,6 +53,9 @@ module "common" {
   instance_manager_password          = var.common_instance_manager_password
   instance_manager_memory_size       = var.common_instance_manager_memory_size
   instance_manager_timeout           = var.common_instance_manager_timeout
+  shared_core_mode                   = var.shared_core_mode
+  shared_core_jenkins_domain         = var.shared_core_jenkins_domain
+  shared_core_gitea_domain           = var.shared_core_gitea_domain
 }
 
 module "shared_core_compute" {
