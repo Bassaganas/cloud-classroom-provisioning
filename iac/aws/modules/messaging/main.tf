@@ -33,6 +33,10 @@ locals {
   dlq_name        = "sqs-student-progress-dlq-${local.name_suffix}"
   ssm_param_name  = "/classroom/${var.workshop_name}/${var.environment}/messaging/student_progress_queue_url"
   iam_policy_name = "sqs-producer-policy-${local.name_suffix}"
+  leaderboard_lambda_zip_path = "${path.root}/../../functions/packages/leaderboard_lambda.zip"
+  leaderboard_api_zip_path    = "${path.root}/../../functions/packages/leaderboard_api.zip"
+  use_local_leaderboard_zip   = fileexists(local.leaderboard_lambda_zip_path)
+  use_local_leaderboard_api_zip = fileexists(local.leaderboard_api_zip_path)
 }
 
 # ── Dead-letter queue ─────────────────────────────────────────────────────────
@@ -257,9 +261,12 @@ resource "aws_lambda_function" "leaderboard_consumer" {
   function_name = "lambda-leaderboard-consumer-${local.name_suffix}"
   role          = aws_iam_role.leaderboard_lambda.arn
 
-  # Artifact packaged by palantir-jenkins-ai CI and uploaded to S3
-  s3_bucket = var.lambda_artifact_bucket
-  s3_key    = var.lambda_artifact_key
+  # Prefer local packaged artifact (same pattern as other classroom Lambdas).
+  # Fall back to S3 artifact when local zip is unavailable.
+  filename         = local.use_local_leaderboard_zip ? local.leaderboard_lambda_zip_path : null
+  source_code_hash = local.use_local_leaderboard_zip ? filebase64sha256(local.leaderboard_lambda_zip_path) : null
+  s3_bucket        = local.use_local_leaderboard_zip ? null : var.lambda_artifact_bucket
+  s3_key           = local.use_local_leaderboard_zip ? null : var.lambda_artifact_key
 
   handler = "leaderboard_lambda.handler"
   runtime = "python3.12"
@@ -278,6 +285,48 @@ resource "aws_lambda_function" "leaderboard_consumer" {
     WorkshopID  = var.workshop_name
     Component   = "messaging"
     Company     = "TestingFantasy"
+  }
+
+  lifecycle {
+    precondition {
+      condition     = local.use_local_leaderboard_zip || length(trimspace(var.lambda_artifact_bucket)) >= 3
+      error_message = "Missing leaderboard Lambda artifact. Either package functions/packages/leaderboard_lambda.zip locally or set lambda_artifact_bucket with a valid S3 bucket name."
+    }
+  }
+}
+
+resource "aws_lambda_function" "leaderboard_api" {
+  function_name = "lambda-leaderboard-api-${local.name_suffix}"
+  role          = aws_iam_role.leaderboard_lambda.arn
+
+  filename         = local.leaderboard_api_zip_path
+  source_code_hash = filebase64sha256(local.leaderboard_api_zip_path)
+  handler          = "leaderboard_api.lambda_handler"
+  runtime          = "python3.12"
+  timeout          = 30
+
+  environment {
+    variables = {
+      LEADERBOARD_TABLE = aws_dynamodb_table.leaderboard.name
+      WORKSHOP_NAME     = var.workshop_name
+      ENVIRONMENT       = var.environment
+    }
+  }
+
+  tags = {
+    Environment = var.environment
+    Owner       = var.owner
+    Project     = "classroom"
+    WorkshopID  = var.workshop_name
+    Component   = "messaging"
+    Company     = "TestingFantasy"
+  }
+
+  lifecycle {
+    precondition {
+      condition     = local.use_local_leaderboard_api_zip
+      error_message = "Missing leaderboard API Lambda artifact. Package functions/packages/leaderboard_api.zip locally before deploying."
+    }
   }
 }
 

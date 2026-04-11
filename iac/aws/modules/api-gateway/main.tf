@@ -32,8 +32,8 @@ locals {
 
 # REST API
 resource "aws_api_gateway_rest_api" "api" {
-  name        = "apigateway-instance-manager-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
-  description = "API Gateway for EC2 Instance Manager - ${var.environment}"
+  name        = "apigateway-${var.api_name}-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
+  description = "API Gateway for ${var.api_name} - ${var.environment}"
 
   endpoint_configuration {
     types = ["REGIONAL"]
@@ -273,7 +273,7 @@ resource "aws_api_gateway_deployment" "api" {
 # CloudWatch Log Group for API Gateway (AWS Best Practice)
 resource "aws_cloudwatch_log_group" "api_gateway" {
   count             = var.enable_logging ? 1 : 0
-  name              = "log-apigateway-instance-manager-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
+  name              = "log-apigateway-${var.api_name}-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   retention_in_days = var.log_retention_days
 
   tags = {

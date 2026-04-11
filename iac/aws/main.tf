@@ -76,6 +76,7 @@ module "workshop_fellowship" {
   environment                             = var.environment
   owner                                   = var.owner
   region                                  = var.region
+  base_domain                             = var.base_domain
   workshop_name                           = var.fellowship_workshop_name
   classroom_name                          = var.fellowship_classroom_name
   ec2_ami_id                              = var.fellowship_ec2_ami_id
@@ -95,6 +96,7 @@ module "workshop_fellowship" {
   instance_manager_timeout                = var.fellowship_instance_manager_timeout
   user_management_domain                  = var.fellowship_user_management_domain
   dify_jira_domain                        = var.fellowship_dify_jira_domain
+  leaderboard_api_domain                  = var.fellowship_leaderboard_api_domain
   wait_for_certificate_validation         = var.fellowship_wait_for_certificate_validation
 
   # Palantir event-sourcing artifact
@@ -142,6 +144,7 @@ module "workshop_testus_patronus" {
   environment                             = var.environment
   owner                                   = var.owner
   region                                  = var.region
+  base_domain                             = var.base_domain
   workshop_name                           = var.testus_patronus_workshop_name
   classroom_name                          = var.testus_patronus_classroom_name
   ec2_ami_id                              = var.testus_patronus_ec2_ami_id
@@ -161,6 +164,7 @@ module "workshop_testus_patronus" {
   instance_manager_timeout                = var.testus_patronus_instance_manager_timeout
   user_management_domain                  = var.testus_patronus_user_management_domain
   dify_jira_domain                        = var.testus_patronus_dify_jira_domain
+  leaderboard_api_domain                  = var.testus_patronus_leaderboard_api_domain
   wait_for_certificate_validation         = var.testus_patronus_wait_for_certificate_validation
 
   # Palantir event-sourcing artifact

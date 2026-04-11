@@ -124,13 +124,32 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Validate leaderboard Lambda artifact
+        env:
+          LAMBDA_ARTIFACT_BUCKET: ${{ vars.LAMBDA_ARTIFACT_BUCKET }}
+          LAMBDA_ARTIFACT_KEY: ${{ vars.LAMBDA_ARTIFACT_KEY || 'palantir/leaderboard_lambda.zip' }}
+        run: |
+          if [ -z "$LAMBDA_ARTIFACT_BUCKET" ]; then
+            echo "No LAMBDA_ARTIFACT_BUCKET configured. Will use locally packaged leaderboard_lambda.zip if available."
+            exit 0
+          fi
+
+          if [ "${#LAMBDA_ARTIFACT_BUCKET}" -lt 3 ]; then
+            echo "::error::Invalid LAMBDA_ARTIFACT_BUCKET '$LAMBDA_ARTIFACT_BUCKET'. Bucket name must be at least 3 characters."
+            exit 1
+          fi
+
+          aws s3api head-object --bucket "$LAMBDA_ARTIFACT_BUCKET" --key "$LAMBDA_ARTIFACT_KEY" >/dev/null
+          echo "✓ Found artifact s3://$LAMBDA_ARTIFACT_BUCKET/$LAMBDA_ARTIFACT_KEY"
+
       - name: Deploy dev environment
         id: deploy
         env:
           CLASSROOM_NAME: ${{ vars.CLASSROOM_NAME || 'fellowship-dev' }}
           WORKSHOP: ${{ vars.WORKSHOP || 'fellowship' }}
           SKIP_TEMPLATE_PUBLISH: 'true'
-          TF_VAR_lambda_artifact_bucket: ${{ vars.LAMBDA_ARTIFACT_BUCKET }}
+          TF_VAR_lambda_artifact_bucket: ${{ vars.LAMBDA_ARTIFACT_BUCKET || '' }}
+          TF_VAR_lambda_artifact_key: ${{ vars.LAMBDA_ARTIFACT_KEY || 'palantir/leaderboard_lambda.zip' }}
         run: |
           ./scripts/setup_classroom.sh \
             --name "$CLASSROOM_NAME" \
@@ -182,11 +201,30 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
 
+      - name: Validate leaderboard Lambda artifact
+        env:
+          LAMBDA_ARTIFACT_BUCKET: ${{ vars.LAMBDA_ARTIFACT_BUCKET }}
+          LAMBDA_ARTIFACT_KEY: ${{ vars.LAMBDA_ARTIFACT_KEY || 'palantir/leaderboard_lambda.zip' }}
+        run: |
+          if [ -z "$LAMBDA_ARTIFACT_BUCKET" ]; then
+            echo "No LAMBDA_ARTIFACT_BUCKET configured. Will use locally packaged leaderboard_lambda.zip if available."
+            exit 0
+          fi
+
+          if [ "${#LAMBDA_ARTIFACT_BUCKET}" -lt 3 ]; then
+            echo "::error::Invalid LAMBDA_ARTIFACT_BUCKET '$LAMBDA_ARTIFACT_BUCKET'. Bucket name must be at least 3 characters."
+            exit 1
+          fi
+
+          aws s3api head-object --bucket "$LAMBDA_ARTIFACT_BUCKET" --key "$LAMBDA_ARTIFACT_KEY" >/dev/null
+          echo "✓ Found artifact s3://$LAMBDA_ARTIFACT_BUCKET/$LAMBDA_ARTIFACT_KEY"
+
       - name: Run deployment action
         env:
           CLASSROOM_NAME: ${{ inputs.classroom_name != '' && inputs.classroom_name || vars.CLASSROOM_NAME || 'fellowship-manual' }}
           SKIP_TEMPLATE_PUBLISH: 'true'
-          TF_VAR_lambda_artifact_bucket: ${{ vars.LAMBDA_ARTIFACT_BUCKET }}
+          TF_VAR_lambda_artifact_bucket: ${{ vars.LAMBDA_ARTIFACT_BUCKET || '' }}
+          TF_VAR_lambda_artifact_key: ${{ vars.LAMBDA_ARTIFACT_KEY || 'palantir/leaderboard_lambda.zip' }}
         run: |
           EXTRA_FLAGS=""
           if [ "${{ inputs.action }}" = "destroy" ]; then

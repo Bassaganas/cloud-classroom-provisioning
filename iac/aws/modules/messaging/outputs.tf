@@ -42,3 +42,13 @@ output "lambda_consumer_name" {
   description = "Name of the leaderboard consumer Lambda function"
   value       = aws_lambda_function.leaderboard_consumer.function_name
 }
+
+output "leaderboard_api_lambda_arn" {
+  description = "ARN of the leaderboard API Lambda function"
+  value       = aws_lambda_function.leaderboard_api.arn
+}
+
+output "leaderboard_api_lambda_name" {
+  description = "Name of the leaderboard API Lambda function"
+  value       = aws_lambda_function.leaderboard_api.function_name
+}
