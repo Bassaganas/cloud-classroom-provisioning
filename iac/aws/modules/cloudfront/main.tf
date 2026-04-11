@@ -1,5 +1,6 @@
 # Data source for Route53 hosted zone
 data "aws_route53_zone" "domain" {
+  count        = var.enable_route53_records ? 1 : 0
   name         = replace(var.domain_name, "/^[^.]+\\.(.+)$/", "$1")
   private_zone = false
 }
@@ -512,9 +513,9 @@ resource "aws_cloudfront_distribution" "distribution" {
 
   # S3 origin for frontend (if provided)
   dynamic "origin" {
-    for_each = var.s3_bucket_domain != "" ? [1] : []
+    for_each = var.s3_bucket_domain != "" || var.s3_origin_bucket != "" ? [1] : []
     content {
-      domain_name = var.s3_bucket_domain
+      domain_name = var.s3_bucket_domain != "" ? var.s3_bucket_domain : "${var.s3_origin_bucket}.s3.amazonaws.com"
       origin_id   = "s3-frontend"
 
       s3_origin_config {
@@ -592,22 +593,22 @@ resource "aws_cloudfront_distribution" "distribution" {
   default_cache_behavior {
     allowed_methods         = ["DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"]
     cached_methods          = ["GET", "HEAD"]
-    target_origin_id        = var.s3_bucket_domain != "" ? "s3-frontend" : (var.api_gateway_domain != "" ? "api-gateway" : "lambda-function-url")
+    target_origin_id        = var.s3_bucket_domain != "" || var.s3_origin_bucket != "" ? "s3-frontend" : (var.api_gateway_domain != "" ? "api-gateway" : "lambda-function-url")
     compress                = true
     viewer_protocol_policy  = "redirect-to-https"
     realtime_log_config_arn = var.enable_cloudwatch_logging ? aws_cloudfront_realtime_log_config.cloudfront_realtime_logs[0].arn : null
 
     forwarded_values {
-      query_string = var.s3_bucket_domain != "" ? false : true
+      query_string = var.s3_bucket_domain != "" || var.s3_origin_bucket != "" ? false : true
       headers      = []
       cookies {
-        forward = var.s3_bucket_domain != "" ? "none" : "all"
+        forward = var.s3_bucket_domain != "" || var.s3_origin_bucket != "" ? "none" : "all"
       }
     }
 
-    min_ttl     = var.s3_bucket_domain != "" ? 0 : 0
-    default_ttl = var.s3_bucket_domain != "" ? 3600 : 0 # Cache static assets
-    max_ttl     = var.s3_bucket_domain != "" ? 86400 : 0
+    min_ttl     = var.s3_bucket_domain != "" || var.s3_origin_bucket != "" ? 0 : 0
+    default_ttl = var.s3_bucket_domain != "" || var.s3_origin_bucket != "" ? 3600 : 0 # Cache static assets
+    max_ttl     = var.s3_bucket_domain != "" || var.s3_origin_bucket != "" ? 86400 : 0
   }
 
   # Custom error responses for SPA routing
@@ -661,7 +662,7 @@ resource "aws_cloudfront_distribution" "distribution" {
 # and access the first validation option by converting the set to a list
 resource "aws_route53_record" "cert_validation" {
   # Use static key based on known domain name (known at plan time)
-  for_each = var.domain_name != "" ? toset([var.domain_name]) : toset([])
+  for_each = var.enable_route53_records && var.domain_name != "" ? toset([var.domain_name]) : toset([])
 
   allow_overwrite = true
   # Access the first (and only) validation option
@@ -670,14 +671,14 @@ resource "aws_route53_record" "cert_validation" {
   records = [try(tolist(aws_acm_certificate.cert.domain_validation_options)[0].resource_record_value, "")]
   ttl     = 60
   type    = try(tolist(aws_acm_certificate.cert.domain_validation_options)[0].resource_record_type, "CNAME")
-  zone_id = data.aws_route53_zone.domain.zone_id
+  zone_id = data.aws_route53_zone.domain[0].zone_id
 }
 
 # Route53 CNAME record pointing to CloudFront distribution
 resource "aws_route53_record" "cloudfront_alias" {
-  for_each = var.wait_for_certificate_validation ? { create = true } : {}
+  for_each = var.wait_for_certificate_validation && var.enable_route53_records ? { create = true } : {}
 
-  zone_id         = data.aws_route53_zone.domain.zone_id
+  zone_id         = data.aws_route53_zone.domain[0].zone_id
   name            = var.domain_name
   type            = "CNAME"
   ttl             = 300

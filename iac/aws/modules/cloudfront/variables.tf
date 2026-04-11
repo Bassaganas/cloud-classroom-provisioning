@@ -66,6 +66,12 @@ variable "wait_for_certificate_validation" {
   default     = true
 }
 
+variable "enable_route53_records" {
+  description = "Whether this module should create/read Route53 records for certificate validation and aliases"
+  type        = bool
+  default     = true
+}
+
 variable "enable_cloudwatch_logging" {
   description = "Enable CloudWatch logging for CloudFront distribution"
   type        = bool

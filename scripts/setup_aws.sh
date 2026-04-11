@@ -8,7 +8,7 @@ ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 # Function to display usage
 usage() {
-  echo "Usage: $0 <classroom-name> <region> [create|destroy] [--environment <dev|staging|prod>] [--workshop <name>] [--with-pool] [--pool-size <number>] [--skip-packaging] [--only-common|--only-workshop] [--validate-only]"
+  echo "Usage: $0 <classroom-name> <region> [create|destroy] [--environment <dev|staging|prod>] [--workshop <name>] [--with-pool] [--pool-size <number>] [--skip-packaging] [--placeholder-packaging] [--only-common|--only-workshop] [--validate-only]"
   echo ""
   echo "Arguments:"
   echo "  classroom-name    Name of the classroom (required)"
@@ -21,6 +21,7 @@ usage() {
   echo "  --with-pool      Emergency option: Create EC2 instances via Terraform (not recommended)"
   echo "  --pool-size      Emergency option: Number of EC2 instances to create via Terraform (default: 4)"
   echo "  --skip-packaging Skip Lambda function packaging (use existing packages)"
+  echo "  --placeholder-packaging Create placeholder Lambda archives for validation-only runs"
   echo "  --only-common    Apply/destroy only the common stack"
   echo "  --only-workshop  Apply/destroy only the workshop stack"
   echo "  --validate-only  Validate deployment without making changes"
@@ -36,6 +37,41 @@ usage() {
 check_prerequisites() {
   command -v terraform >/dev/null 2>&1 || { echo "Terraform is required but not installed. Aborting." >&2; exit 1; }
   command -v aws >/dev/null 2>&1 || { echo "AWS CLI is required but not installed. Aborting." >&2; exit 1; }
+}
+
+create_placeholder_lambda_packages() {
+  local package_dir="${ROOT_DIR}/functions/packages"
+  local package_names=(
+    "testus_patronus_status.zip"
+    "classroom_user_management.zip"
+    "classroom_stop_old_instances.zip"
+    "classroom_instance_manager.zip"
+    "classroom_admin_cleanup.zip"
+    "dify_jira_api.zip"
+    "leaderboard_lambda.zip"
+    "leaderboard_api.zip"
+  )
+  local temp_dir
+
+  mkdir -p "$package_dir"
+  temp_dir=$(mktemp -d)
+  printf 'placeholder package for terraform validate-only\n' > "$temp_dir/README.txt"
+
+  echo "Creating placeholder Lambda packages for validation..."
+  for package_name in "${package_names[@]}"; do
+    if [ -f "$package_dir/$package_name" ]; then
+      echo "  Using existing package: $package_name"
+      continue
+    fi
+
+    (
+      cd "$temp_dir"
+      zip -q -r "$package_dir/$package_name" README.txt
+    )
+    echo "  Created placeholder package: $package_name"
+  done
+
+  rm -rf "$temp_dir"
 }
 
 publish_template_map() {
@@ -348,6 +384,7 @@ ACTION="${3:-create}"
 WITH_POOL=false
 POOL_SIZE=4  # Default for emergency option
 SKIP_PACKAGING=false
+PLACEHOLDER_PACKAGING=false
 WORKSHOP_ROOT="testus_patronus"
 ENVIRONMENT="dev"
 ONLY_COMMON=false
@@ -384,6 +421,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --skip-packaging)
       SKIP_PACKAGING=true
+      shift
+      ;;
+    --placeholder-packaging)
+      PLACEHOLDER_PACKAGING=true
       shift
       ;;
     --environment)
@@ -424,6 +465,16 @@ fi
 
 if [ "$ONLY_COMMON" = true ] && [ "$ONLY_WORKSHOP" = true ]; then
   echo "Error: --only-common and --only-workshop cannot be used together"
+  usage
+fi
+
+if [ "$SKIP_PACKAGING" = true ] && [ "$PLACEHOLDER_PACKAGING" = true ]; then
+  echo "Error: --skip-packaging and --placeholder-packaging cannot be used together"
+  usage
+fi
+
+if [ "$PLACEHOLDER_PACKAGING" = true ] && [ "$VALIDATE_ONLY" != true ]; then
+  echo "Error: --placeholder-packaging can only be used with --validate-only"
   usage
 fi
 
@@ -509,7 +560,9 @@ echo "  DynamoDB Table: $STATE_TABLE"
 cd "$ROOT_DIR"
 
 # Package Lambda function (conditional)
-if [ "$SKIP_PACKAGING" = false ]; then
+if [ "$PLACEHOLDER_PACKAGING" = true ]; then
+  create_placeholder_lambda_packages
+elif [ "$SKIP_PACKAGING" = false ]; then
   echo "Packaging Lambda function..."
   ./scripts/package_lambda.sh --cloud aws
 else
@@ -521,12 +574,6 @@ else
     exit 1
   fi
   echo "Using existing Lambda packages from functions/packages/"
-fi
-
-# Always package Lambda before validation, even in --validate-only mode
-if [ "$VALIDATE_ONLY" = true ] && [ "$SKIP_PACKAGING" = false ]; then
-  echo "Ensuring Lambda packages exist for validation..."
-  ./scripts/package_lambda.sh --cloud aws
 fi
 
 # Configure root module backend and apply

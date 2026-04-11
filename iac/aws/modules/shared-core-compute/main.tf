@@ -14,7 +14,7 @@ data "aws_ami" "amazon_linux_2" {
 }
 
 data "aws_route53_zone" "shared_core" {
-  count        = trimspace(var.shared_core_jenkins_domain) != "" || trimspace(var.shared_core_gitea_domain) != "" ? 1 : 0
+  count        = var.shared_core_manage_route53_records && (trimspace(var.shared_core_jenkins_domain) != "" || trimspace(var.shared_core_gitea_domain) != "") ? 1 : 0
   name         = "${var.base_domain}."
   private_zone = false
 }
@@ -56,7 +56,7 @@ resource "aws_instance" "shared_core_host" {
 }
 
 resource "aws_route53_record" "shared_core_jenkins" {
-  count = trimspace(var.shared_core_jenkins_domain) != "" ? 1 : 0
+  count = var.shared_core_manage_route53_records && trimspace(var.shared_core_jenkins_domain) != "" ? 1 : 0
 
   zone_id         = data.aws_route53_zone.shared_core[0].zone_id
   name            = var.shared_core_jenkins_domain
@@ -67,7 +67,7 @@ resource "aws_route53_record" "shared_core_jenkins" {
 }
 
 resource "aws_route53_record" "shared_core_gitea" {
-  count = trimspace(var.shared_core_gitea_domain) != "" ? 1 : 0
+  count = var.shared_core_manage_route53_records && trimspace(var.shared_core_gitea_domain) != "" ? 1 : 0
 
   zone_id         = data.aws_route53_zone.shared_core[0].zone_id
   name            = var.shared_core_gitea_domain

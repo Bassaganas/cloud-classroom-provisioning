@@ -20,7 +20,7 @@ output "certificate_validation_records" {
 
 output "route53_zone_id" {
   description = "Route53 hosted zone ID"
-  value       = data.aws_route53_zone.domain.zone_id
+  value       = try(data.aws_route53_zone.domain[0].zone_id, null)
 }
 
 output "cloudwatch_log_group_name" {
