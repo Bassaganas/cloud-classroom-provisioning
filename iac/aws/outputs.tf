@@ -10,7 +10,7 @@ output "docs_cloudfront_distribution_id" {
 }
 
 output "docs_cloudfront_domain_name" {
-  value = module.docs_cloudfront.cloudfront_domain_name
+  value = module.docs_cloudfront.cloudfront_domain
   description = "CloudFront domain name for Docusaurus docs"
 }
 output "tutorial_always_on_links_parameter_arn" {
