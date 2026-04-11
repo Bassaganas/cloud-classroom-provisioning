@@ -4,6 +4,18 @@ variable "zone_name" {
   default     = ""
 }
 
+variable "enable_s3_path_rewrite" {
+  description = "Enable a CloudFront viewer-request Function that rewrites directory-style paths to append /index.html. Required for Docusaurus SSG served from a private S3 bucket via OAI (CloudFront REST API does not auto-serve index.html for sub-directories)."
+  type        = bool
+  default     = false
+}
+
+variable "s3_origin_access_control_id" {
+  description = "CloudFront Origin Access Control (OAC) ID for S3 origin. When set, OAC is used instead of the legacy OAI. The S3 origin domain will automatically use the regional endpoint required by OAC."
+  type        = string
+  default     = ""
+}
+
 # S3 origin bucket for static site (docs)
 variable "s3_origin_bucket" {
   description = "Name of the S3 bucket to use as the CloudFront origin for static site (docs)"

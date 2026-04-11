@@ -159,6 +159,10 @@ jobs:
           SKIP_TEMPLATE_PUBLISH: 'true'
           TF_VAR_lambda_artifact_bucket: ${{ vars.LAMBDA_ARTIFACT_BUCKET || '' }}
           TF_VAR_lambda_artifact_key: ${{ vars.LAMBDA_ARTIFACT_KEY || 'palantir/leaderboard_lambda.zip' }}
+          TF_VAR_shared_core_ssh_private_key: ${{ secrets.SHARED_CORE_SSH_PRIVATE_KEY }}
+          TF_VAR_shared_core_gh_repo_token: ${{ secrets.SHARED_CORE_GH_REPO_TOKEN }}
+          TF_VAR_shared_core_jenkins_admin_password: ${{ secrets.SHARED_CORE_JENKINS_ADMIN_PASSWORD }}
+          TF_VAR_shared_core_gitea_admin_password: ${{ secrets.SHARED_CORE_GITEA_ADMIN_PASSWORD }}
         run: |
           SKIP_PKG_FLAG=""
           if [ "${{ steps.lambda-cache.outputs.cache-hit }}" = "true" ]; then
@@ -250,6 +254,10 @@ jobs:
           SKIP_TEMPLATE_PUBLISH: 'true'
           TF_VAR_lambda_artifact_bucket: ${{ vars.LAMBDA_ARTIFACT_BUCKET || '' }}
           TF_VAR_lambda_artifact_key: ${{ vars.LAMBDA_ARTIFACT_KEY || 'palantir/leaderboard_lambda.zip' }}
+          TF_VAR_shared_core_ssh_private_key: ${{ secrets.SHARED_CORE_SSH_PRIVATE_KEY }}
+          TF_VAR_shared_core_gh_repo_token: ${{ secrets.SHARED_CORE_GH_REPO_TOKEN }}
+          TF_VAR_shared_core_jenkins_admin_password: ${{ secrets.SHARED_CORE_JENKINS_ADMIN_PASSWORD }}
+          TF_VAR_shared_core_gitea_admin_password: ${{ secrets.SHARED_CORE_GITEA_ADMIN_PASSWORD }}
         run: |
           EXTRA_FLAGS=""
           if [ "${{ inputs.action }}" = "destroy" ]; then

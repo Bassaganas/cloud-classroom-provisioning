@@ -632,6 +632,13 @@ shared_core_gitea_admin_user       = "fellowship"
 shared_core_gitea_admin_email      = "gandalf@fellowship.local"
 shared_core_gitea_org_name         = "fellowship-org"
 
+# Shared-core deploy secrets — prefer TF_VAR_* env vars (set in CI via GitHub secrets),
+# fall back to values read back from the previous tfvars so a re-run never wipes them.
+shared_core_ssh_private_key        = "${TF_VAR_shared_core_ssh_private_key:-${_tf_sc_ssh_key}}"
+shared_core_gh_repo_token          = "${TF_VAR_shared_core_gh_repo_token:-${_tf_sc_gh_token}}"
+shared_core_jenkins_admin_password = "${TF_VAR_shared_core_jenkins_admin_password:-${_tf_sc_jenkins_pw}}"
+shared_core_gitea_admin_password   = "${TF_VAR_shared_core_gitea_admin_password:-${_tf_sc_gitea_pw}}"
+
 # Lambda artifact (set via TF_VAR_* env vars in CI; keep empty here for local runs)
 lambda_artifact_bucket = "${TF_VAR_lambda_artifact_bucket:-}"
 lambda_artifact_key    = "${TF_VAR_lambda_artifact_key:-palantir/leaderboard_lambda.zip}"

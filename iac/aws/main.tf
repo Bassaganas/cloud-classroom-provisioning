@@ -1,25 +1,9 @@
-# OAI for the Docusaurus docs site (required so CloudFront can access the private S3 bucket)
-resource "aws_cloudfront_origin_access_identity" "docs" {
-  comment = "OAI for docusaurus-docs-bucket-default (docs.fellowship.testingfantasy.com)"
-}
-
-resource "aws_s3_bucket_policy" "docs" {
-  bucket = "docusaurus-docs-bucket-default"
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-    Statement = [
-      {
-        Sid    = "AllowCloudFrontOAI"
-        Effect = "Allow"
-        Principal = {
-          CanonicalUser = aws_cloudfront_origin_access_identity.docs.s3_canonical_user_id
-        }
-        Action   = "s3:GetObject"
-        Resource = "arn:aws:s3:::docusaurus-docs-bucket-default/*"
-      }
-    ]
-  })
+# OAC for the Docusaurus docs site (modern replacement for OAI)
+resource "aws_cloudfront_origin_access_control" "docs" {
+  name                              = "docs-fellowship-${var.environment}-oac"
+  origin_access_control_origin_type = "s3"
+  signing_behavior                  = "always"
+  signing_protocol                  = "sigv4"
 }
 
 # Docusaurus Docs CloudFront Distribution
@@ -35,10 +19,36 @@ module "docs_cloudfront" {
   workshop_name                   = "docs"
   domain_name                     = "docs.fellowship.testingfantasy.com"
   s3_origin_bucket                = "docusaurus-docs-bucket-default"
-  s3_origin_access_identity       = aws_cloudfront_origin_access_identity.docs.cloudfront_access_identity_path
+  s3_origin_access_control_id     = aws_cloudfront_origin_access_control.docs.id
   wait_for_certificate_validation = var.enable_docs_dns_records
   enable_route53_records          = var.enable_docs_dns_records
   zone_name                       = "testingfantasy.com"
+}
+
+resource "aws_s3_bucket_policy" "docs" {
+  bucket = "docusaurus-docs-bucket-default"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowCloudFrontServicePrincipalReadOnly"
+        Effect = "Allow"
+        Principal = {
+          Service = "cloudfront.amazonaws.com"
+        }
+        Action   = "s3:GetObject"
+        Resource = "arn:aws:s3:::docusaurus-docs-bucket-default/*"
+        Condition = {
+          StringEquals = {
+            "AWS:SourceArn" = module.docs_cloudfront.cloudfront_distribution_arn
+          }
+        }
+      }
+    ]
+  })
+
+  depends_on = [module.docs_cloudfront]
 }
 resource "aws_ssm_parameter" "tutorial_always_on_links" {
   name        = "/cloud-classroom/tutorial-always-on-links"

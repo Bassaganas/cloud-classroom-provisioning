@@ -28,6 +28,11 @@ output "cloudwatch_log_group_name" {
   value       = var.enable_cloudwatch_logging ? aws_cloudwatch_log_group.cloudfront_logs[0].name : null
 }
 
+output "cloudfront_distribution_arn" {
+  description = "CloudFront distribution ARN (used for OAC S3 bucket policies)"
+  value       = try(aws_cloudfront_distribution.distribution["create"].arn, null)
+}
+
 output "cloudwatch_log_group_arn" {
   description = "CloudWatch Log Group ARN for CloudFront logs"
   value       = var.enable_cloudwatch_logging ? aws_cloudwatch_log_group.cloudfront_logs[0].arn : null
