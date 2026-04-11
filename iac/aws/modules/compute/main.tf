@@ -203,6 +203,78 @@ resource "aws_security_group" "classroom_sg" {
   }
 }
 
+# Security Group for Shared-Core (Jenkins + Gitea)
+# Dedicated EC2 node running Jenkins controller and Gitea SCM for cohort.
+# Requires additional ports for Jenkins agent JNLP and Gitea Git SSH.
+resource "aws_security_group" "shared_core_sg" {
+  name_prefix = "shared-core-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}-"
+  vpc_id      = data.aws_vpc.default.id
+  description = "Security group for shared-core Jenkins + Gitea deployment"
+
+  # SSH access (EC2 instance administration)
+  ingress {
+    description = "SSH"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # HTTP access (Caddy redirect)
+  ingress {
+    description = "HTTP"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # HTTPS access (Caddy TLS termination for Jenkins and Gitea)
+  ingress {
+    description = "HTTPS"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # Jenkins JNLP agent port (EC2 agents connect here over JNLP)
+  ingress {
+    description = "Jenkins JNLP agents"
+    from_port   = 50000
+    to_port     = 50000
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # Gitea Git SSH port (Git over SSH for students)
+  ingress {
+    description = "Gitea Git SSH"
+    from_port   = 2222
+    to_port     = 2222
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  # All outbound traffic
+  egress {
+    description = "All outbound traffic"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
+  tags = {
+    Name        = "sg-shared-core-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
+    Environment = var.environment
+    Owner       = var.owner
+    Project     = "classroom"
+    WorkshopID  = var.workshop_name
+    Company     = "TestingFantasy"
+  }
+}
+
 # EC2 Pool Instances - Emergency Option
 resource "aws_instance" "classroom_pool" {
   count                  = var.ec2_pool_size > 0 ? var.ec2_pool_size : 0
