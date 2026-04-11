@@ -252,6 +252,57 @@ HTTPS_CERT_ARN = os.environ.get('INSTANCE_MANAGER_HTTPS_CERT_ARN', '')
 HTTPS_ALB_NAME = f"classroom-https-{ENVIRONMENT}"
 HTTPS_ALB_SG_NAME = f"classroom-https-sg-{ENVIRONMENT}"
 
+# ── Shared-Core mode ────────────────────────────────────────────────────────
+# When SHARED_CORE_MODE=true, student assignments receive Jenkins/Gitea URLs
+# pointing to the shared-core EC2 node instead of per-student services.
+# This is the reversible cutover switch described in the migration plan.
+SHARED_CORE_MODE = os.environ.get('SHARED_CORE_MODE', 'false').strip().lower() in ('true', '1', 'yes')
+SHARED_JENKINS_URL = os.environ.get('SHARED_JENKINS_URL', '')
+SHARED_GITEA_URL = os.environ.get('SHARED_GITEA_URL', '')
+
+
+def get_shared_core_urls(student_id: str = '', workshop_name: str = '') -> dict:
+    """Return the shared Jenkins and Gitea URLs for a student in shared-core mode.
+
+    When SHARED_CORE_MODE is active these URLs are issued in every student
+    assignment response instead of per-student hostnames.  The per-student
+    ``workshop_name`` and ``student_id`` are used to build the scoped paths
+    inside the shared services (Jenkins folder, Gitea repo).
+
+    Returns a dict with keys: jenkins_url, gitea_url, jenkins_job_url,
+    gitea_repo_url, shared_core_mode (bool).
+    """
+    if not SHARED_CORE_MODE:
+        return {'shared_core_mode': False}
+
+    if not SHARED_JENKINS_URL or not SHARED_GITEA_URL:
+        logger.warning(
+            "SHARED_CORE_MODE is enabled but SHARED_JENKINS_URL or "
+            "SHARED_GITEA_URL is not set — falling back to per-student URLs"
+        )
+        return {'shared_core_mode': False}
+
+    base_jenkins = SHARED_JENKINS_URL.rstrip('/')
+    base_gitea = SHARED_GITEA_URL.rstrip('/')
+    org = os.environ.get('GITEA_ORG_NAME', 'fellowship-org')
+
+    result: dict = {
+        'shared_core_mode': True,
+        'jenkins_url': base_jenkins + '/',
+        'gitea_url': base_gitea + '/',
+    }
+
+    if student_id:
+        result['jenkins_job_url'] = (
+            f"{base_jenkins}/job/{student_id}/job/fellowship-pipeline/"
+        )
+        result['gitea_repo_url'] = (
+            f"{base_gitea}/{org}/fellowship-sut-{student_id}"
+        )
+
+    return result
+
+
 # Cache for password (to avoid repeated Secrets Manager calls)
 _password_cache = None
 _template_map_cache = None
