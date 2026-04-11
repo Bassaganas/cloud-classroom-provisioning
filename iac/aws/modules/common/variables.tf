@@ -106,3 +106,21 @@ variable "instance_manager_timeout" {
   type        = number
   default     = 300
 }
+
+variable "shared_core_mode" {
+  description = "Enable shared-core mode in instance_manager"
+  type        = bool
+  default     = true
+}
+
+variable "shared_core_jenkins_domain" {
+  description = "Public Jenkins domain for shared core (used to build SHARED_JENKINS_URL)"
+  type        = string
+  default     = ""
+}
+
+variable "shared_core_gitea_domain" {
+  description = "Public Gitea domain for shared core (used to build SHARED_GITEA_URL)"
+  type        = string
+  default     = ""
+}

@@ -128,6 +128,9 @@ module "lambda" {
   instance_manager_base_domain            = var.base_domain
   instance_manager_hosted_zone_id         = data.aws_route53_zone.primary.zone_id
   instance_manager_https_cert_arn         = aws_acm_certificate.instance_https.arn
+  shared_core_mode                        = var.shared_core_mode
+  shared_core_jenkins_url                 = var.shared_core_jenkins_domain != "" ? "https://${var.shared_core_jenkins_domain}/" : ""
+  shared_core_gitea_url                   = var.shared_core_gitea_domain != "" ? "https://${var.shared_core_gitea_domain}/" : ""
 
   enable_status             = false
   enable_user_management    = false

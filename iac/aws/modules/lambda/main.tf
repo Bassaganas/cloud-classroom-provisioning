@@ -195,6 +195,9 @@ resource "aws_lambda_function" "instance_manager" {
       INSTANCE_MANAGER_BASE_DOMAIN            = var.instance_manager_base_domain
       INSTANCE_MANAGER_HOSTED_ZONE_ID         = var.instance_manager_hosted_zone_id
       INSTANCE_MANAGER_HTTPS_CERT_ARN         = var.instance_manager_https_cert_arn
+      SHARED_CORE_MODE                        = var.shared_core_mode ? "true" : "false"
+      SHARED_JENKINS_URL                      = var.shared_core_jenkins_url
+      SHARED_GITEA_URL                        = var.shared_core_gitea_url
     }
   }
 

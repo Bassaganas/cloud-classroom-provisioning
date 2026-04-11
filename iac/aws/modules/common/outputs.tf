@@ -62,6 +62,11 @@ output "security_group_id" {
   value       = module.compute.security_group_id
 }
 
+output "shared_core_security_group_id" {
+  description = "ID of the shared-core Jenkins and Gitea security group"
+  value       = module.compute.shared_core_security_group_id
+}
+
 output "ec2_iam_instance_profile_name" {
   description = "Name of the EC2 IAM instance profile"
   value       = module.compute.ec2_iam_instance_profile_name
