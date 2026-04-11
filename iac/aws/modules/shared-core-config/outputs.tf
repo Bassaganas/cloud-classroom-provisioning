@@ -6,7 +6,7 @@ output "config_parameter_names" {
     jenkins_domain    = aws_ssm_parameter.shared_core_jenkins_domain.name
     gitea_domain      = aws_ssm_parameter.shared_core_gitea_domain.name
     security_group_id = aws_ssm_parameter.shared_core_security_group_id.name
-    hosted_zone_id    = try(aws_ssm_parameter.shared_core_hosted_zone_id[0].name, null)
+    hosted_zone_id    = aws_ssm_parameter.shared_core_hosted_zone_id.name
     gitea_admin_user  = aws_ssm_parameter.shared_core_gitea_admin_user.name
     gitea_admin_email = aws_ssm_parameter.shared_core_gitea_admin_email.name
     gitea_org_name    = aws_ssm_parameter.shared_core_gitea_org_name.name
