@@ -1,16 +1,16 @@
 # Route 53 alias record output
 output "docs_route53_record_fqdn" {
-  value = aws_route53_record.docs_alias.fqdn
+  value       = aws_route53_record.docs_alias.fqdn
   description = "FQDN of the Route 53 alias record for docs.fellowship.testingfantasy.com"
 }
 # Docusaurus Docs CloudFront Outputs
 output "docs_cloudfront_distribution_id" {
-  value = module.docs_cloudfront.cloudfront_distribution_id
+  value       = module.docs_cloudfront.cloudfront_distribution_id
   description = "CloudFront distribution ID for Docusaurus docs"
 }
 
 output "docs_cloudfront_domain_name" {
-  value = module.docs_cloudfront.cloudfront_domain_name
+  value       = module.docs_cloudfront.cloudfront_domain
   description = "CloudFront domain name for Docusaurus docs"
 }
 output "tutorial_always_on_links_parameter_arn" {

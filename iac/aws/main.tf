@@ -9,18 +9,23 @@ resource "aws_route53_record" "docs_alias" {
   name    = "docs.fellowship.testingfantasy.com"
   type    = "A"
   alias {
-    name                   = module.docs_cloudfront.cloudfront_domain_name
+    name                   = module.docs_cloudfront.cloudfront_domain
     zone_id                = "Z2FDTNDATAQYW2" # CloudFront hosted zone ID (global)
     evaluate_target_health = false
   }
 }
 # Docusaurus Docs CloudFront Distribution
 module "docs_cloudfront" {
-  source        = "./modules/cloudfront"
-  environment   = var.environment
-  owner         = var.owner
-  workshop_name = "docs"
-  domain_name   = "docs.fellowship.testingfantasy.com"
+  source = "./modules/cloudfront"
+
+  providers = {
+    aws.us_east_1 = aws.us_east_1
+  }
+
+  environment      = var.environment
+  owner            = var.owner
+  workshop_name    = "docs"
+  domain_name      = "docs.fellowship.testingfantasy.com"
   s3_origin_bucket = "docusaurus-docs-bucket-default"
   # Add/override other variables as needed (e.g., SSL cert, logging)
 }

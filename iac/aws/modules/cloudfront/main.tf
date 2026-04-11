@@ -1,37 +1,3 @@
-# CloudFront distribution for Docusaurus docs static site
-resource "aws_cloudfront_distribution" "docs" {
-  enabled = true
-  origin {
-    domain_name = "${var.s3_origin_bucket}.s3.amazonaws.com"
-    origin_id   = "docsS3Origin"
-  }
-  default_cache_behavior {
-    allowed_methods  = ["GET", "HEAD"]
-    cached_methods   = ["GET", "HEAD"]
-    target_origin_id = "docsS3Origin"
-    viewer_protocol_policy = "redirect-to-https"
-    forwarded_values {
-      query_string = false
-      cookies {
-        forward = "none"
-      }
-    }
-  }
-  price_class = "PriceClass_100"
-  enabled     = true
-  is_ipv6_enabled = true
-  comment     = "Docusaurus docs static site distribution"
-  aliases     = [var.domain_name]
-  # viewer_certificate and logging can be added as needed
-}
-
-output "cloudfront_distribution_id" {
-  value = aws_cloudfront_distribution.docs.id
-}
-
-output "cloudfront_domain_name" {
-  value = aws_cloudfront_distribution.docs.domain_name
-}
 # Data source for Route53 hosted zone
 data "aws_route53_zone" "domain" {
   name         = replace(var.domain_name, "/^[^.]+\\.(.+)$/", "$1")
