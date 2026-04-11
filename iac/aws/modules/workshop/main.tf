@@ -198,6 +198,25 @@ module "messaging" {
   lambda_artifact_key    = var.lambda_artifact_key
 }
 
+module "leaderboard_api_gateway" {
+  source = "../api-gateway"
+
+  providers = {
+    aws.us_east_1 = aws.us_east_1
+  }
+
+  api_name                        = "leaderboard"
+  lambda_function_arn             = module.messaging.leaderboard_api_lambda_arn
+  environment                     = var.environment
+  owner                           = var.owner
+  workshop_name                   = var.workshop_name
+  region                          = var.region
+  domain_name                     = var.leaderboard_api_domain
+  api_custom_domain_name          = var.leaderboard_api_domain
+  base_domain                     = var.base_domain
+  wait_for_certificate_validation = var.wait_for_certificate_validation
+}
+
 # Attach SQS producer policy to the shared EC2 IAM role so student instances can publish events.
 # Role name is extracted from the ARN (arn:aws:iam::account:role/role-name → role-name).
 resource "aws_iam_role_policy_attachment" "sqs_producer" {

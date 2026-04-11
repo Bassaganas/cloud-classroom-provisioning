@@ -56,6 +56,11 @@ output "fellowship_dify_jira_custom_url" {
   value       = module.workshop_fellowship.dify_jira_custom_url
 }
 
+output "fellowship_leaderboard_api_custom_url" {
+  description = "Custom domain URL for fellowship leaderboard API"
+  value       = module.workshop_fellowship.leaderboard_api_custom_domain
+}
+
 # Fellowship messaging outputs
 output "fellowship_sqs_queue_url" {
   description = "SQS queue URL for fellowship student progress events"
@@ -92,6 +97,11 @@ output "testus_patronus_user_management_custom_url" {
 output "testus_patronus_dify_jira_custom_url" {
   description = "Custom domain URL for testus_patronus Dify Jira API"
   value       = module.workshop_testus_patronus.dify_jira_custom_url
+}
+
+output "testus_patronus_leaderboard_api_custom_url" {
+  description = "Custom domain URL for testus_patronus leaderboard API"
+  value       = module.workshop_testus_patronus.leaderboard_api_custom_domain
 }
 
 output "instance_manager_s3_bucket_name" {
@@ -140,4 +150,24 @@ output "instance_manager_api_gateway_url" {
 output "instance_manager_openapi_spec_url" {
   description = "URL to export OpenAPI spec from API Gateway"
   value       = module.common.instance_manager_openapi_spec_url
+}
+
+output "fellowship_leaderboard_api_gateway_url" {
+  description = "API Gateway invoke URL for the fellowship leaderboard API"
+  value       = module.workshop_fellowship.leaderboard_api_gateway_url
+}
+
+output "fellowship_leaderboard_openapi_spec_url" {
+  description = "OpenAPI spec URL for the fellowship leaderboard API"
+  value       = module.workshop_fellowship.leaderboard_openapi_spec_url
+}
+
+output "testus_patronus_leaderboard_api_gateway_url" {
+  description = "API Gateway invoke URL for the testus_patronus leaderboard API"
+  value       = module.workshop_testus_patronus.leaderboard_api_gateway_url
+}
+
+output "testus_patronus_leaderboard_openapi_spec_url" {
+  description = "OpenAPI spec URL for the testus_patronus leaderboard API"
+  value       = module.workshop_testus_patronus.leaderboard_openapi_spec_url
 }

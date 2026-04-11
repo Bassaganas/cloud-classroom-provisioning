@@ -13,6 +13,11 @@ output "security_group_id" {
   value       = aws_security_group.classroom_sg.id
 }
 
+output "shared_core_security_group_id" {
+  description = "ID of the shared-core (Jenkins + Gitea) security group"
+  value       = aws_security_group.shared_core_sg.id
+}
+
 output "vpc_id" {
   description = "ID of the default VPC being used"
   value       = data.aws_vpc.default.id

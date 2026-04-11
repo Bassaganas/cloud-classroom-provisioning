@@ -26,6 +26,12 @@ variable "ec2_iam_role_arn" {
 variable "lambda_artifact_bucket" {
   description = "S3 bucket name holding the leaderboard Lambda deployment artifact"
   type        = string
+  default     = ""
+
+  validation {
+    condition     = trimspace(var.lambda_artifact_bucket) == "" || length(trimspace(var.lambda_artifact_bucket)) >= 3
+    error_message = "lambda_artifact_bucket must be empty (to use local packaged artifact) or a valid S3 bucket name with at least 3 characters."
+  }
 }
 
 variable "lambda_artifact_key" {

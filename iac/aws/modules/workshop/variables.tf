@@ -49,6 +49,12 @@ variable "region" {
   default     = "eu-west-3"
 }
 
+variable "base_domain" {
+  description = "Base DNS domain for custom workshop subdomains"
+  type        = string
+  default     = ""
+}
+
 variable "workshop_name" {
   description = "Workshop identifier for tagging and naming"
   type        = string
@@ -162,6 +168,11 @@ variable "dify_jira_domain" {
   type        = string
 }
 
+variable "leaderboard_api_domain" {
+  description = "Custom domain name for the leaderboard API Gateway"
+  type        = string
+}
+
 variable "wait_for_certificate_validation" {
   description = "Wait for ACM certificate validation before creating CloudFront distribution"
   type        = bool
@@ -211,6 +222,12 @@ variable "spot_max_price_multiplier" {
 variable "lambda_artifact_bucket" {
   description = "S3 bucket where the palantir leaderboard Lambda artifact is stored"
   type        = string
+  default     = ""
+
+  validation {
+    condition     = trimspace(var.lambda_artifact_bucket) == "" || length(trimspace(var.lambda_artifact_bucket)) >= 3
+    error_message = "lambda_artifact_bucket must be empty (to use local packaged artifact) or a valid S3 bucket name with at least 3 characters."
+  }
 }
 
 variable "lambda_artifact_key" {

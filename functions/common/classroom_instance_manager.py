@@ -252,6 +252,57 @@ HTTPS_CERT_ARN = os.environ.get('INSTANCE_MANAGER_HTTPS_CERT_ARN', '')
 HTTPS_ALB_NAME = f"classroom-https-{ENVIRONMENT}"
 HTTPS_ALB_SG_NAME = f"classroom-https-sg-{ENVIRONMENT}"
 
+# ── Shared-Core mode ────────────────────────────────────────────────────────
+# When SHARED_CORE_MODE=true, student assignments receive Jenkins/Gitea URLs
+# pointing to the shared-core EC2 node instead of per-student services.
+# This is the reversible cutover switch described in the migration plan.
+SHARED_CORE_MODE = os.environ.get('SHARED_CORE_MODE', 'false').strip().lower() in ('true', '1', 'yes')
+SHARED_JENKINS_URL = os.environ.get('SHARED_JENKINS_URL', '')
+SHARED_GITEA_URL = os.environ.get('SHARED_GITEA_URL', '')
+
+
+def get_shared_core_urls(student_id: str = '', workshop_name: str = '') -> dict:
+    """Return the shared Jenkins and Gitea URLs for a student in shared-core mode.
+
+    When SHARED_CORE_MODE is active these URLs are issued in every student
+    assignment response instead of per-student hostnames.  The per-student
+    ``workshop_name`` and ``student_id`` are used to build the scoped paths
+    inside the shared services (Jenkins folder, Gitea repo).
+
+    Returns a dict with keys: jenkins_url, gitea_url, jenkins_job_url,
+    gitea_repo_url, shared_core_mode (bool).
+    """
+    if not SHARED_CORE_MODE:
+        return {'shared_core_mode': False}
+
+    if not SHARED_JENKINS_URL or not SHARED_GITEA_URL:
+        logger.warning(
+            "SHARED_CORE_MODE is enabled but SHARED_JENKINS_URL or "
+            "SHARED_GITEA_URL is not set — falling back to per-student URLs"
+        )
+        return {'shared_core_mode': False}
+
+    base_jenkins = SHARED_JENKINS_URL.rstrip('/')
+    base_gitea = SHARED_GITEA_URL.rstrip('/')
+    org = os.environ.get('GITEA_ORG_NAME', 'fellowship-org')
+
+    result: dict = {
+        'shared_core_mode': True,
+        'jenkins_url': base_jenkins + '/',
+        'gitea_url': base_gitea + '/',
+    }
+
+    if student_id:
+        result['jenkins_job_url'] = (
+            f"{base_jenkins}/job/{student_id}/job/fellowship-pipeline/"
+        )
+        result['gitea_repo_url'] = (
+            f"{base_gitea}/{org}/fellowship-sut-{student_id}"
+        )
+
+    return result
+
+
 # Cache for password (to avoid repeated Secrets Manager calls)
 _password_cache = None
 _template_map_cache = None
@@ -1429,10 +1480,14 @@ EOF
 # ── Event sourcing queue bootstrap (SQS) ─────────────────────────────────────
 # Mirrors fellowship user_data.sh behavior for the inline golden-AMI path.
 # This keeps event emission enabled even when template user_data.sh is bypassed.
+# Keep a concrete region variable so set -u cannot fail if AWS_REGION was never injected.
+SQS_AWS_REGION="${AWS_REGION:-${REGION:-eu-west-1}}"
+export AWS_REGION="${SQS_AWS_REGION}"
+
 SSM_SQS_KEY="/classroom/${WORKSHOP_NAME:-fellowship}/${ENVIRONMENT:-dev}/messaging/student_progress_queue_url"
 log "Fetching SQS queue URL from SSM: ${SSM_SQS_KEY}"
 SQS_QUEUE_URL=$(aws ssm get-parameter --name "${SSM_SQS_KEY}" \
-    --query "Parameter.Value" --output text --region "${AWS_REGION}" 2>/dev/null || echo "")
+    --query "Parameter.Value" --output text --region "${SQS_AWS_REGION}" 2>/dev/null || echo "")
 if [ -n "${SQS_QUEUE_URL}" ] && [ "${SQS_QUEUE_URL}" != "None" ]; then
     export SQS_QUEUE_URL
     log "SQS queue URL configured"
@@ -1502,6 +1557,48 @@ else
     log "  Falling back to Caddyfile.fellowship (per-instance ACME via Route53)"
     log "  This will consume 1 cert from the LE 50/week limit for this instance."
     log "  To fix: run the issue-wildcard-cert workflow in the lotr_sut repo and re-provision."
+fi
+
+# ── Exercises artifact bootstrap (download & extract from S3) ─────────────────
+# Fetch the latest exercises-*.tar.gz from S3 and extract to /opt/exercises.
+# This provides students with exercise content immediately upon instance launch.
+# The exercises are mounted read-only into the Gitea container.
+
+log "Fetching latest exercises artifact from S3..."
+
+LATEST_EXERCISES=$(aws s3api list-objects-v2 \
+    --bucket "${SUT_BUCKET}" \
+    --prefix "exercises-" \
+    --region "${AWS_REGION}" \
+    --query 'sort_by(Contents[?ends_with(Key, `.tar.gz`)], &LastModified)[-1].Key' \
+    --output text 2>/dev/null || echo "")
+
+if [ -z "$LATEST_EXERCISES" ]; then
+    log "WARNING: No exercises-*.tar.gz artifact found in S3 bucket"
+    log "         Students will not have access to exercises unless provided via another method"
+else
+    log "Downloading exercises artifact: $LATEST_EXERCISES"
+    if aws s3 cp "s3://${SUT_BUCKET}/${LATEST_EXERCISES}" /tmp/exercises.tar.gz \
+            --region "${AWS_REGION}" >/dev/null 2>&1 && [ -f "/tmp/exercises.tar.gz" ]; then
+        log "✓ Exercises downloaded"
+        
+        # Extract to /opt/exercises
+        mkdir -p /opt/exercises
+        log "Extracting exercises to /opt/exercises..."
+        if tar -xzf /tmp/exercises.tar.gz -C /opt/exercises --strip-components=1 2>/dev/null; then
+            chown -R ec2-user:ec2-user /opt/exercises 2>/dev/null || true
+            rm -f /tmp/exercises.tar.gz
+            log "✓ Exercises extracted to /opt/exercises"
+            
+            # Set EXERCISES_DIR so docker-compose can use it
+            export EXERCISES_DIR=/opt/exercises
+        else
+            log "WARNING: Failed to extract exercises tarball"
+            rm -f /tmp/exercises.tar.gz
+        fi
+    else
+        log "WARNING: Failed to download exercises from S3"
+    fi
 fi
 
 log "Starting SUT stack..."
@@ -1994,6 +2091,9 @@ export IDE_DOMAIN={ide_domain}
 export MACHINE_NAME={machine_name}
 export WORKSHOP_NAME={workshop_name}
 export ROUTE53_ZONE_ID={HTTPS_HOSTED_ZONE_ID}
+export AWS_REGION={REGION}
+export ENVIRONMENT={ENVIRONMENT}
+export EXERCISES_DIR=/opt/exercises
 """
                 
                 # Add S3 artifact information if available

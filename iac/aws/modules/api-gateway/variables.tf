@@ -3,6 +3,12 @@ variable "lambda_function_arn" {
   type        = string
 }
 
+variable "api_name" {
+  description = "Service name used in API Gateway resource naming"
+  type        = string
+  default     = "instance-manager"
+}
+
 variable "environment" {
   description = "The environment name"
   type        = string

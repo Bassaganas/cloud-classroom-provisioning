@@ -476,6 +476,66 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
     echo "✓ Verified: dify_jira_api.py packaged correctly"
     
     rm -rf "$TEMP_DIR4"
+
+    # Package leaderboard consumer Lambda function
+    echo "Packaging AWS Lambda leaderboard consumer function..."
+
+    PACKAGE_PATH="$PROJECT_ROOT/functions/packages/leaderboard_lambda.zip"
+    if [ -f "$PACKAGE_PATH" ]; then
+        rm -f "$PACKAGE_PATH"
+    fi
+
+    TEMP_DIR7=$(mktemp -d)
+    cp "$PROJECT_ROOT/functions/aws/leaderboard_lambda.py" "$TEMP_DIR7/"
+    $PIP_CMD install -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR7/"
+
+    cd "$TEMP_DIR7"
+    zip -r9 "$PACKAGE_PATH" .
+    cd "$PROJECT_ROOT"
+
+    if ! unzip -l "$PACKAGE_PATH" | grep -q "leaderboard_lambda.py"; then
+        echo "ERROR: Package does not contain leaderboard_lambda.py"
+        rm -rf "$TEMP_DIR7"
+        exit 1
+    fi
+    if ! unzip -p "$PACKAGE_PATH" leaderboard_lambda.py | grep -q "def handler"; then
+        echo "ERROR: handler function not found in leaderboard_lambda.py"
+        rm -rf "$TEMP_DIR7"
+        exit 1
+    fi
+
+    echo "✓ Verified: leaderboard_lambda.py packaged correctly"
+    rm -rf "$TEMP_DIR7"
+
+    # Package leaderboard API Lambda function
+    echo "Packaging AWS Lambda leaderboard API function..."
+
+    PACKAGE_PATH="$PROJECT_ROOT/functions/packages/leaderboard_api.zip"
+    if [ -f "$PACKAGE_PATH" ]; then
+        rm -f "$PACKAGE_PATH"
+    fi
+
+    TEMP_DIR8=$(mktemp -d)
+    cp "$PROJECT_ROOT/functions/aws/leaderboard_api.py" "$TEMP_DIR8/"
+    $PIP_CMD install -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR8/"
+
+    cd "$TEMP_DIR8"
+    zip -r9 "$PACKAGE_PATH" .
+    cd "$PROJECT_ROOT"
+
+    if ! unzip -l "$PACKAGE_PATH" | grep -q "leaderboard_api.py"; then
+        echo "ERROR: Package does not contain leaderboard_api.py"
+        rm -rf "$TEMP_DIR8"
+        exit 1
+    fi
+    if ! unzip -p "$PACKAGE_PATH" leaderboard_api.py | grep -q "def lambda_handler"; then
+        echo "ERROR: lambda_handler function not found in leaderboard_api.py"
+        rm -rf "$TEMP_DIR8"
+        exit 1
+    fi
+
+    echo "✓ Verified: leaderboard_api.py packaged correctly"
+    rm -rf "$TEMP_DIR8"
     
 else
     # Azure Function packaging

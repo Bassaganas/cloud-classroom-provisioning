@@ -52,6 +52,21 @@ output "dify_jira_api_url" {
   value       = module.lambda.dify_jira_api_url
 }
 
+output "leaderboard_api_gateway_url" {
+  description = "API Gateway invoke URL for the leaderboard API"
+  value       = module.leaderboard_api_gateway.api_gateway_invoke_url
+}
+
+output "leaderboard_api_custom_domain" {
+  description = "Custom domain URL for the leaderboard API"
+  value       = var.leaderboard_api_domain != "" ? "https://${var.leaderboard_api_domain}" : null
+}
+
+output "leaderboard_openapi_spec_url" {
+  description = "URL to export OpenAPI spec for the leaderboard API"
+  value       = module.leaderboard_api_gateway.openapi_spec_url
+}
+
 # CloudFront Outputs - User Management
 output "user_management_custom_url" {
   description = "Custom domain URL for user management"

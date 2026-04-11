@@ -226,6 +226,12 @@ variable "fellowship_dify_jira_domain" {
   default     = "dify-jira-fellowship.testingfantasy.com"
 }
 
+variable "fellowship_leaderboard_api_domain" {
+  description = "Leaderboard API domain for fellowship"
+  type        = string
+  default     = "leaderboard-api-fellowship.testingfantasy.com"
+}
+
 variable "fellowship_wait_for_certificate_validation" {
   description = "Wait for certificate validation for fellowship"
   type        = bool
@@ -348,6 +354,12 @@ variable "testus_patronus_dify_jira_domain" {
   default     = "dify-jira.testingfantasy.com"
 }
 
+variable "testus_patronus_leaderboard_api_domain" {
+  description = "Leaderboard API domain for testus_patronus"
+  type        = string
+  default     = "leaderboard-api-testus-patronus.testingfantasy.com"
+}
+
 variable "testus_patronus_wait_for_certificate_validation" {
   description = "Wait for certificate validation for testus_patronus"
   type        = bool
@@ -359,6 +371,12 @@ variable "testus_patronus_wait_for_certificate_validation" {
 variable "lambda_artifact_bucket" {
   description = "S3 bucket where the palantir leaderboard Lambda deployment artifact is stored"
   type        = string
+  default     = ""
+
+  validation {
+    condition     = trimspace(var.lambda_artifact_bucket) == "" || length(trimspace(var.lambda_artifact_bucket)) >= 3
+    error_message = "lambda_artifact_bucket must be empty (to use local packaged artifact) or a valid S3 bucket name with at least 3 characters."
+  }
 }
 
 variable "lambda_artifact_key" {
