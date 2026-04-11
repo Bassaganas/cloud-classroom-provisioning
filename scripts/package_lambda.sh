@@ -65,7 +65,7 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
         exit 1
     fi
     
-    $PIP_CMD install -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR1/"
+    $PIP_CMD install -q -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR1/"
     
     # Verify no unwanted Lambda function files in root directory (check for other Lambda function patterns)
     UNWANTED_LAMBDA_FILES=$(find "$TEMP_DIR1" -maxdepth 1 -type f \( -name "classroom_*.py" -o -name "testus_patronus_*.py" -o -name "dify_jira_*.py" \) ! -name "classroom_user_management.py")
@@ -78,7 +78,7 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
     fi
     
     cd "$TEMP_DIR1"
-    zip -r9 "$PACKAGE_PATH" .
+    zip -r9q "$PACKAGE_PATH" .
     cd "$PROJECT_ROOT"
     
     # Verify package contents
@@ -130,7 +130,7 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
         exit 1
     fi
     
-    $PIP_CMD install -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR2/"
+    $PIP_CMD install -q -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR2/"
     
     # Verify no unwanted Lambda function files in root directory (check for other Lambda function patterns)
     UNWANTED_LAMBDA_FILES=$(find "$TEMP_DIR2" -maxdepth 1 -type f \( -name "classroom_*.py" -o -name "testus_patronus_*.py" -o -name "dify_jira_*.py" \) ! -name "testus_patronus_status.py")
@@ -143,7 +143,7 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
     fi
     
     cd "$TEMP_DIR2"
-    zip -r9 "$PACKAGE_PATH" .
+    zip -r9q "$PACKAGE_PATH" .
     cd "$PROJECT_ROOT"
     
     # Verify package contents
@@ -195,7 +195,7 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
         exit 1
     fi
     
-    $PIP_CMD install -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR3/"
+    $PIP_CMD install -q -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR3/"
     
     # Verify no unwanted Lambda function files in root directory (check for other Lambda function patterns)
     UNWANTED_LAMBDA_FILES=$(find "$TEMP_DIR3" -maxdepth 1 -type f \( -name "classroom_*.py" -o -name "testus_patronus_*.py" -o -name "dify_jira_*.py" \) ! -name "classroom_stop_old_instances.py")
@@ -208,7 +208,7 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
     fi
     
     cd "$TEMP_DIR3"
-    zip -r9 "$PACKAGE_PATH" .
+    zip -r9q "$PACKAGE_PATH" .
     cd "$PROJECT_ROOT"
     
     # Verify package contents
@@ -260,7 +260,7 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
         exit 1
     fi
     
-    $PIP_CMD install -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR6/"
+    $PIP_CMD install -q -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR6/"
     
     # Verify no unwanted Lambda function files in root directory (check for other Lambda function patterns)
     UNWANTED_LAMBDA_FILES=$(find "$TEMP_DIR6" -maxdepth 1 -type f \( -name "classroom_*.py" -o -name "testus_patronus_*.py" -o -name "dify_jira_*.py" \) ! -name "classroom_admin_cleanup.py")
@@ -273,7 +273,7 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
     fi
     
     cd "$TEMP_DIR6"
-    zip -r9 "$PACKAGE_PATH" .
+    zip -r9q "$PACKAGE_PATH" .
     cd "$PROJECT_ROOT"
     
     # Verify package contents
@@ -320,7 +320,6 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
     
     # Create fresh temporary directory for this Lambda (completely isolated)
     TEMP_DIR5=$(mktemp -d)
-    echo "Created isolated temporary directory: $TEMP_DIR5"
     
     # Verify source file exists and has content
     if [ ! -f "$PROJECT_ROOT/functions/common/classroom_instance_manager.py" ]; then
@@ -330,7 +329,6 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
     fi
     
     SOURCE_SIZE=$(wc -c < "$PROJECT_ROOT/functions/common/classroom_instance_manager.py")
-    echo "Source file size: $SOURCE_SIZE bytes"
     
     if [ "$SOURCE_SIZE" -lt 100 ]; then
         echo "ERROR: Source file appears to be empty or too small ($SOURCE_SIZE bytes)"
@@ -338,8 +336,6 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
         exit 1
     fi
     
-    # Explicitly copy ONLY the intended file (classroom_instance_manager.py)
-    echo "Copying classroom_instance_manager.py to temp directory..."
     cp "$PROJECT_ROOT/functions/common/classroom_instance_manager.py" "$TEMP_DIR5/"
     
     # Verify copy succeeded
@@ -349,7 +345,6 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
         rm -rf "$TEMP_DIR5"
         exit 1
     fi
-    echo "File copied successfully: $COPIED_SIZE bytes"
     
     # Verify temp directory only contains the intended file before installing dependencies
     PYTHON_FILES_IN_TEMP=$(find "$TEMP_DIR5" -maxdepth 1 -name "*.py" -type f | wc -l)
@@ -360,14 +355,10 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
         exit 1
     fi
     
-    # Install dependencies
-    echo "Installing dependencies..."
-    $PIP_CMD install -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR5/"
+    $PIP_CMD install -q -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR5/"
     
-    # Create zip from clean temp directory
-    echo "Creating zip package..."
     cd "$TEMP_DIR5"
-    zip -r9 "$PACKAGE_PATH" .
+    zip -r9q "$PACKAGE_PATH" .
     cd "$PROJECT_ROOT"
     
     # Verify the package was created
@@ -401,12 +392,8 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
     fi
     echo "✓ Verified: testus_patronus_instance_manager.py is not in the package"
     
-    PACKAGE_SIZE=$(unzip -l "$PACKAGE_PATH" | grep "classroom_instance_manager.py" | awk '{print $1}')
-    echo "Package created successfully. File size in package: $PACKAGE_SIZE bytes"
-    
     # Clean up temp directory
     rm -rf "$TEMP_DIR5"
-    echo "✓ Cleanup complete"
 
     # Package dify_jira API Lambda function
     echo "Packaging AWS Lambda dify_jira API function..."
@@ -424,11 +411,8 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
     cp "$PROJECT_ROOT/functions/aws/testus_patronus/dify_jira_api.py" "$TEMP_DIR4/"
 
     # Copy the dataset directory with JSON files (make it optional)
-    echo "Copying dataset directory..."
     if [ -d "$PROJECT_ROOT/../dify_jira/data/dataset" ]; then
         cp -r "$PROJECT_ROOT/../dify_jira/data/dataset" "$TEMP_DIR4/data/"
-    else
-        echo "Warning: Dataset directory not found, skipping..."
     fi
 
     # Verify temp directory only contains the intended file before installing dependencies
@@ -442,7 +426,7 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
     fi
 
     # Install dependencies
-    $PIP_CMD install -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR4/"
+    $PIP_CMD install -q -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR4/"
 
     # Verify no unwanted Lambda function files in root directory (check for other Lambda function patterns)
     UNWANTED_LAMBDA_FILES=$(find "$TEMP_DIR4" -maxdepth 1 -type f \( -name "classroom_*.py" -o -name "testus_patronus_*.py" -o -name "dify_jira_*.py" \) ! -name "dify_jira_api.py")
@@ -456,7 +440,7 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
 
     # Create the package
     cd "$TEMP_DIR4"
-    zip -r9 "$PACKAGE_PATH" .
+    zip -r9q "$PACKAGE_PATH" .
     cd "$PROJECT_ROOT"
     
     # Verify package contents
@@ -487,10 +471,10 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
 
     TEMP_DIR7=$(mktemp -d)
     cp "$PROJECT_ROOT/functions/aws/leaderboard_lambda.py" "$TEMP_DIR7/"
-    $PIP_CMD install -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR7/"
+    $PIP_CMD install -q -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR7/"
 
     cd "$TEMP_DIR7"
-    zip -r9 "$PACKAGE_PATH" .
+    zip -r9q "$PACKAGE_PATH" .
     cd "$PROJECT_ROOT"
 
     if ! unzip -l "$PACKAGE_PATH" | grep -q "leaderboard_lambda.py"; then
@@ -517,10 +501,10 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
 
     TEMP_DIR8=$(mktemp -d)
     cp "$PROJECT_ROOT/functions/aws/leaderboard_api.py" "$TEMP_DIR8/"
-    $PIP_CMD install -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR8/"
+    $PIP_CMD install -q -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR8/"
 
     cd "$TEMP_DIR8"
-    zip -r9 "$PACKAGE_PATH" .
+    zip -r9q "$PACKAGE_PATH" .
     cd "$PROJECT_ROOT"
 
     if ! unzip -l "$PACKAGE_PATH" | grep -q "leaderboard_api.py"; then
@@ -544,14 +528,14 @@ else
     PACKAGE_PATH="$PROJECT_ROOT/functions/packages/azure_function.zip"
     
     # Install dependencies
-    $PIP_CMD install -r "$PROJECT_ROOT/functions/azure/requirements.txt" -t "$TEMP_DIR/"
+    $PIP_CMD install -q -r "$PROJECT_ROOT/functions/azure/requirements.txt" -t "$TEMP_DIR/"
     
     # Copy all Azure function files
     cp -r "$PROJECT_ROOT/functions/azure/"* "$TEMP_DIR/"
     
     # Create deployment package
     cd "$TEMP_DIR"
-    zip -r9 "$PACKAGE_PATH" . -x "*.pyc" "__pycache__/*" "*.git*"
+    zip -r9q "$PACKAGE_PATH" . -x "*.pyc" "__pycache__/*" "*.git*"
     cd "$PROJECT_ROOT"
     
     # Verify package
@@ -562,7 +546,6 @@ else
     fi
     
     # Verify package contents
-    echo "Verifying package contents..."
     if ! unzip -l "$PACKAGE_PATH" | grep -q "function_app.py"; then
         echo "Error: Package is missing function_app.py"
         rm -rf "$TEMP_DIR"
@@ -579,8 +562,7 @@ else
         exit 1
     fi
     
-    echo "Azure Function packaged successfully at: $PACKAGE_PATH"
-    echo "Package contents verified successfully"
+    echo "✓ Azure Function packaged successfully at: $PACKAGE_PATH"
     
     # Clean up
     rm -rf "$TEMP_DIR"

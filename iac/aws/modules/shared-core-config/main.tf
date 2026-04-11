@@ -78,8 +78,6 @@ resource "aws_ssm_parameter" "shared_core_security_group_id" {
 }
 
 resource "aws_ssm_parameter" "shared_core_hosted_zone_id" {
-  count = var.shared_core_hosted_zone_id != null && trimspace(var.shared_core_hosted_zone_id) != "" ? 1 : 0
-
   name        = "${local.shared_core_prefix}/hosted-zone-id"
   description = "Route53 hosted zone ID for shared-core Jenkins and Gitea records"
   type        = "String"
