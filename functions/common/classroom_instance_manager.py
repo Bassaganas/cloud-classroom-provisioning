@@ -1480,10 +1480,14 @@ EOF
 # ── Event sourcing queue bootstrap (SQS) ─────────────────────────────────────
 # Mirrors fellowship user_data.sh behavior for the inline golden-AMI path.
 # This keeps event emission enabled even when template user_data.sh is bypassed.
+# Keep a concrete region variable so set -u cannot fail if AWS_REGION was never injected.
+SQS_AWS_REGION="${AWS_REGION:-${REGION:-eu-west-1}}"
+export AWS_REGION="${SQS_AWS_REGION}"
+
 SSM_SQS_KEY="/classroom/${WORKSHOP_NAME:-fellowship}/${ENVIRONMENT:-dev}/messaging/student_progress_queue_url"
 log "Fetching SQS queue URL from SSM: ${SSM_SQS_KEY}"
 SQS_QUEUE_URL=$(aws ssm get-parameter --name "${SSM_SQS_KEY}" \
-    --query "Parameter.Value" --output text --region "${AWS_REGION}" 2>/dev/null || echo "")
+    --query "Parameter.Value" --output text --region "${SQS_AWS_REGION}" 2>/dev/null || echo "")
 if [ -n "${SQS_QUEUE_URL}" ] && [ "${SQS_QUEUE_URL}" != "None" ]; then
     export SQS_QUEUE_URL
     log "SQS queue URL configured"
@@ -2045,6 +2049,8 @@ export IDE_DOMAIN={ide_domain}
 export MACHINE_NAME={machine_name}
 export WORKSHOP_NAME={workshop_name}
 export ROUTE53_ZONE_ID={HTTPS_HOSTED_ZONE_ID}
+export AWS_REGION={REGION}
+export ENVIRONMENT={ENVIRONMENT}
 """
                 
                 # Add S3 artifact information if available
