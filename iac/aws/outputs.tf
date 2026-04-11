@@ -1,6 +1,6 @@
 # Route 53 alias record output
 output "docs_route53_record_fqdn" {
-  value       = aws_route53_record.docs_alias.fqdn
+  value       = try(aws_route53_record.docs_alias[0].fqdn, null)
   description = "FQDN of the Route 53 alias record for docs.fellowship.testingfantasy.com"
 }
 # Docusaurus Docs CloudFront Outputs

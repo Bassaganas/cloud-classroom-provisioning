@@ -48,6 +48,12 @@ variable "shared_core_gitea_domain" {
   type        = string
 }
 
+variable "shared_core_manage_route53_records" {
+  description = "Whether this module should manage Route53 records for shared-core domains"
+  type        = bool
+  default     = false
+}
+
 variable "shared_core_security_group_id" {
   description = "Security group ID override for shared-core host"
   type        = string

@@ -24,6 +24,12 @@ variable "base_domain" {
   default     = "testingfantasy.com"
 }
 
+variable "enable_docs_dns_records" {
+  description = "Whether to create Route53 records and certificate validation records for docs CloudFront"
+  type        = bool
+  default     = false
+}
+
 variable "github_actions_oidc_thumbprint" {
   description = "Thumbprint for the GitHub Actions OIDC provider"
   type        = string
@@ -100,6 +106,12 @@ variable "shared_core_gitea_domain" {
   description = "Public Gitea domain for shared core"
   type        = string
   default     = ""
+}
+
+variable "shared_core_manage_route53_records" {
+  description = "Whether to manage Route53 records for shared-core Jenkins/Gitea domains"
+  type        = bool
+  default     = false
 }
 
 variable "shared_core_security_group_id" {

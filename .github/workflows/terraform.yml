@@ -27,6 +27,7 @@ permissions:
 env:
   AWS_REGION: ${{ vars.AWS_REGION || 'eu-west-1' }}
   TF_IN_AUTOMATION: true
+  PR_VALIDATION_PACKAGE_MODE: ${{ vars.PR_VALIDATION_PACKAGE_MODE || 'placeholder' }}
 
 jobs:
   validate:
@@ -88,11 +89,28 @@ jobs:
       - name: Validate deployment with setup_classroom.sh --validate-only
         id: validate
         run: |
+          EXTRA_PACKAGING_FLAG=""
+          case "${PR_VALIDATION_PACKAGE_MODE}" in
+            full)
+              ;;
+            placeholder)
+              EXTRA_PACKAGING_FLAG="--placeholder-packaging"
+              ;;
+            skip)
+              EXTRA_PACKAGING_FLAG="--skip-packaging"
+              ;;
+            *)
+              echo "::error::Unsupported PR_VALIDATION_PACKAGE_MODE '${PR_VALIDATION_PACKAGE_MODE}'. Use full, placeholder, or skip."
+              exit 1
+              ;;
+          esac
+
           ./scripts/setup_classroom.sh \
             --name classroom-dev-pr \
             --cloud aws \
             --region "${AWS_REGION}" \
             --environment dev \
+            ${EXTRA_PACKAGING_FLAG} \
             --validate-only 2>&1 | tee /tmp/validation.log
 
       - name: Extract Terraform plan from validation log
@@ -127,7 +145,8 @@ jobs:
               '</details>',
               '',
               '✓ Validation passed with `--validate-only` flag.',
-              '> Lambda packaging and Terraform plan validated without deployment.'
+              `> Validation package mode: ${process.env.PR_VALIDATION_PACKAGE_MODE}`,
+              '> Terraform plan validated without deployment.'
             ].join('\n');
 
             await github.rest.issues.createComment({

@@ -1,11 +1,13 @@
 # Route 53 alias record for docs.fellowship.testingfantasy.com
 data "aws_route53_zone" "docs" {
+  count        = var.enable_docs_dns_records ? 1 : 0
   name         = "fellowship.testingfantasy.com."
   private_zone = false
 }
 
 resource "aws_route53_record" "docs_alias" {
-  zone_id = data.aws_route53_zone.docs.zone_id
+  count   = var.enable_docs_dns_records ? 1 : 0
+  zone_id = data.aws_route53_zone.docs[0].zone_id
   name    = "docs.fellowship.testingfantasy.com"
   type    = "A"
   alias {
@@ -22,11 +24,13 @@ module "docs_cloudfront" {
     aws.us_east_1 = aws.us_east_1
   }
 
-  environment      = var.environment
-  owner            = var.owner
-  workshop_name    = "docs"
-  domain_name      = "docs.fellowship.testingfantasy.com"
-  s3_origin_bucket = "docusaurus-docs-bucket-default"
+  environment                     = var.environment
+  owner                           = var.owner
+  workshop_name                   = "docs"
+  domain_name                     = "docs.fellowship.testingfantasy.com"
+  s3_origin_bucket                = "docusaurus-docs-bucket-default"
+  wait_for_certificate_validation = var.enable_docs_dns_records
+  enable_route53_records          = var.enable_docs_dns_records
   # Add/override other variables as needed (e.g., SSL cert, logging)
 }
 resource "aws_ssm_parameter" "tutorial_always_on_links" {
@@ -104,6 +108,7 @@ module "shared_core_compute" {
   shared_core_ssh_host                 = var.shared_core_ssh_host
   shared_core_jenkins_domain           = var.shared_core_jenkins_domain
   shared_core_gitea_domain             = var.shared_core_gitea_domain
+  shared_core_manage_route53_records   = var.shared_core_manage_route53_records
   shared_core_security_group_id        = var.shared_core_security_group_id
   common_subnet_id                     = module.common.subnet_id
   common_shared_core_security_group_id = module.common.shared_core_security_group_id
