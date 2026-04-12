@@ -23,11 +23,11 @@
 data "aws_caller_identity" "current" {}
 
 locals {
-  region_code  = replace(var.region, "-", "")
-  name_suffix  = "${var.environment}-${local.region_code}"
-  queue_name   = "sqs-shared-core-provisioning-${local.name_suffix}"
-  dlq_name     = "sqs-shared-core-provisioning-dlq-${local.name_suffix}"
-  table_name   = "dynamodb-shared-core-provisioning-status-${local.name_suffix}"
+  region_code   = replace(var.region, "-", "")
+  name_suffix   = "${var.environment}-${local.region_code}"
+  queue_name    = "sqs-shared-core-provisioning-${local.name_suffix}"
+  dlq_name      = "sqs-shared-core-provisioning-dlq-${local.name_suffix}"
+  table_name    = "dynamodb-shared-core-provisioning-status-${local.name_suffix}"
   function_name = "lambda-shared-core-provisioner-${local.name_suffix}"
   # SSM parameter so instance-manager can discover queue URL at runtime
   ssm_queue_url_param = "/classroom/shared-core/${var.environment}/provisioning-queue-url"
@@ -58,7 +58,7 @@ resource "aws_sqs_queue" "provisioning" {
 
   # Provisioning tasks can take up to 90 s; hide message while being processed
   visibility_timeout_seconds = 200
-  message_retention_seconds  = 3600  # 1 hour — tasks are ephemeral
+  message_retention_seconds  = 3600 # 1 hour — tasks are ephemeral
   delay_seconds              = 0
 
   redrive_policy = jsonencode({
@@ -245,7 +245,7 @@ resource "aws_lambda_function" "provisioner" {
   role          = aws_iam_role.provisioner.arn
   handler       = "shared_core_provisioner.lambda_handler"
   runtime       = "python3.9"
-  timeout       = 180  # 3 min — SSM polling can take up to 90 s + retry
+  timeout       = 180 # 3 min — SSM polling can take up to 90 s + retry
   memory_size   = 256
   package_type  = "Zip"
 
@@ -253,9 +253,9 @@ resource "aws_lambda_function" "provisioner" {
 
   environment {
     variables = {
-      ENVIRONMENT                        = var.environment
-      CLASSROOM_REGION                   = var.region
-      PROVISIONING_STATUS_TABLE          = local.table_name
+      ENVIRONMENT               = var.environment
+      CLASSROOM_REGION          = var.region
+      PROVISIONING_STATUS_TABLE = local.table_name
       # Workshop name stored in SSM at /classroom/shared-core/{env}/instance-id
       # The Lambda reads credentials and instance ID from SSM at runtime
     }
@@ -275,7 +275,7 @@ resource "aws_lambda_function" "provisioner" {
 resource "aws_lambda_event_source_mapping" "provisioning_sqs" {
   event_source_arn = aws_sqs_queue.provisioning.arn
   function_name    = aws_lambda_function.provisioner.arn
-  batch_size       = 1  # Process one request at a time for clear per-student tracking
+  batch_size       = 1 # Process one request at a time for clear per-student tracking
   enabled          = true
 
   depends_on = [aws_iam_role_policy.provisioner_policy]
