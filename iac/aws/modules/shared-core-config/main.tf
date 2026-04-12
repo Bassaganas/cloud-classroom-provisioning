@@ -143,3 +143,82 @@ resource "aws_ssm_parameter" "shared_core_gitea_org_name" {
     Company     = "TestingFantasy"
   }
 }
+
+# ── Jenkins ECS Fargate agent pool parameters ─────────────────────────────────
+# These are read by deploy-shared-core.yml and passed to docker-compose as
+# JENKINS_AGENT_* environment variables so the JCasC ECS cloud block resolves.
+
+resource "aws_ssm_parameter" "jenkins_agent_ecs_cluster_arn" {
+  name        = "${local.shared_core_prefix}/agent/ecs-cluster-arn"
+  description = "ARN of the ECS cluster used for Jenkins Fargate build agents"
+  type        = "String"
+  value       = var.jenkins_agent_ecs_cluster_arn
+  tier        = "Standard"
+
+  tags = {
+    Environment = var.shared_core_environment
+    Owner       = var.owner
+    Project     = "classroom"
+    Company     = "TestingFantasy"
+  }
+}
+
+resource "aws_ssm_parameter" "jenkins_agent_ecr_image" {
+  name        = "${local.shared_core_prefix}/agent/ecr-agent-image"
+  description = "ECR repository URL for the custom Jenkins inbound-agent image"
+  type        = "String"
+  value       = "${var.jenkins_agent_ecr_image}:latest"
+  tier        = "Standard"
+
+  tags = {
+    Environment = var.shared_core_environment
+    Owner       = var.owner
+    Project     = "classroom"
+    Company     = "TestingFantasy"
+  }
+}
+
+resource "aws_ssm_parameter" "jenkins_agent_ecs_security_group_id" {
+  name        = "${local.shared_core_prefix}/agent/agent-security-group-id"
+  description = "Security group ID for ECS Jenkins Fargate agent tasks"
+  type        = "String"
+  value       = var.jenkins_agent_ecs_security_group_id
+  tier        = "Standard"
+
+  tags = {
+    Environment = var.shared_core_environment
+    Owner       = var.owner
+    Project     = "classroom"
+    Company     = "TestingFantasy"
+  }
+}
+
+resource "aws_ssm_parameter" "jenkins_agent_task_execution_role_arn" {
+  name        = "${local.shared_core_prefix}/agent/task-execution-role-arn"
+  description = "ARN of the ECS task execution role for Jenkins agent tasks"
+  type        = "String"
+  value       = var.jenkins_agent_task_execution_role_arn
+  tier        = "Standard"
+
+  tags = {
+    Environment = var.shared_core_environment
+    Owner       = var.owner
+    Project     = "classroom"
+    Company     = "TestingFantasy"
+  }
+}
+
+resource "aws_ssm_parameter" "jenkins_agent_task_role_arn" {
+  name        = "${local.shared_core_prefix}/agent/task-role-arn"
+  description = "ARN of the ECS task role (runtime permissions for Jenkins agent containers)"
+  type        = "String"
+  value       = var.jenkins_agent_task_role_arn
+  tier        = "Standard"
+
+  tags = {
+    Environment = var.shared_core_environment
+    Owner       = var.owner
+    Project     = "classroom"
+    Company     = "TestingFantasy"
+  }
+}

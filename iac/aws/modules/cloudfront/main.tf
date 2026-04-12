@@ -319,18 +319,31 @@ resource "aws_cloudfront_function" "s3_directory_index" {
 
   name    = "s3-dir-index-${var.environment}-${replace(replace(var.domain_name, ".testingfantasy.com", ""), ".", "-")}"
   runtime = "cloudfront-js-2.0"
-  comment = "Append /index.html to directory-style requests for S3 static site"
+  comment = "Rewrite extensionless paths to .html for Docusaurus trailingSlash:false builds"
   code    = <<-EOF
     function handler(event) {
       var request = event.request;
       var uri = request.uri;
-      // If the URI ends with '/' append index.html
-      if (uri.endsWith('/')) {
-        request.uri += 'index.html';
-      } else if (!uri.includes('.')) {
-        // No file extension → treat as directory page
-        request.uri += '/index.html';
+
+      // Root is handled by DefaultRootObject (index.html), nothing to do
+      if (uri === '/') {
+        return request;
       }
+
+      // Strip trailing slash so /path/ and /path are treated identically
+      if (uri.endsWith('/')) {
+        uri = uri.slice(0, -1);
+      }
+
+      // Check whether the last segment already carries a file extension
+      var lastSlash = uri.lastIndexOf('/');
+      var lastSegment = uri.substring(lastSlash + 1);
+      if (!lastSegment.includes('.')) {
+        // No extension → Docusaurus page; append .html (trailingSlash: false)
+        uri += '.html';
+      }
+
+      request.uri = uri;
       return request;
     }
   EOF
