@@ -97,15 +97,46 @@ echo "Base path: $templates_param"
 
 # Publish individual per-workshop parameters (preferred by Lambda over the combined map)
 # This mirrors what publish_template_map() does in setup_aws.sh
+#
+# IMPORTANT: Preserve the existing ami_id if a golden AMI is already published.
+# The bake-ami workflow writes a golden AMI ID to SSM after each successful bake.
+# If we blindly overwrite with the Terraform-resolved base AL2 AMI, instances will
+# boot with no Docker and the inline golden-AMI bootstrap will fail.
 workshop_names=$(echo "$templates_json" | jq -r 'keys[]')
 for workshop_name in $workshop_names; do
   workshop_template=$(echo "$templates_json" | jq --arg name "$workshop_name" '.[$name]')
   individual_param="${templates_param}/${workshop_name}"
+
+  # Check if an existing golden ami_id is already stored in SSM.
+  # If so, carry it forward so bake-ami results are not silently discarded.
+  existing_value=$(aws ssm get-parameter \
+    --name "$individual_param" \
+    --region "$REGION" \
+    --query 'Parameter.Value' \
+    --output text 2>/dev/null || echo "")
+  if [ -n "$existing_value" ] && [ "$existing_value" != "None" ]; then
+    existing_ami=$(echo "$existing_value" | jq -r '.ami_id // empty' 2>/dev/null || echo "")
+    new_ami=$(echo "$workshop_template" | jq -r '.ami_id // empty' 2>/dev/null || echo "")
+    if [ -n "$existing_ami" ] && [ "$existing_ami" != "$new_ami" ]; then
+      # Determine which AMI is a golden (baked) AMI vs a plain base AMI.
+      # Golden AMIs are tagged Source=fellowship-sut; plain Amazon AMIs are not owned by us.
+      golden_tag=$(aws ec2 describe-images --image-ids "$existing_ami" \
+        --owners self \
+        --region "$REGION" \
+        --query 'Images[0].Tags[?Key==`Source`].Value | [0]' \
+        --output text 2>/dev/null || echo "")
+      if [ "$golden_tag" = "fellowship-sut" ]; then
+        echo "  Preserving golden ami_id $existing_ami for $workshop_name (not overwriting with base AMI $new_ami)"
+        workshop_template=$(echo "$workshop_template" | jq --arg ami "$existing_ami" '.ami_id = $ami')
+      fi
+    fi
+  fi
+
   if aws ssm put-parameter \
     --name "$individual_param" \
     --type "String" \
     --value "$workshop_template" \
-    --tier "Standard" \
+    --tier "Advanced" \
     --overwrite \
     --region "$REGION" >/dev/null 2>&1; then
     echo "✓ Published individual parameter: $individual_param"

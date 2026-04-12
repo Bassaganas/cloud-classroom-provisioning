@@ -2,149 +2,87 @@
 
 [![Documentation](https://img.shields.io/badge/docs-live-brightgreen)](https://Bassaganas.github.io/cloud-classroom-provisioning/)
 
-A comprehensive Infrastructure as Code (IaC) solution for provisioning and managing cloud classroom environments on AWS and Azure. This project automates the creation of student accounts, EC2 instance pools with pre-configured applications (Dify AI, Jenkins), and provides a web-based management interface for instructors.
+Provisioning stack for LOTR workshop environments on AWS, with separate student and instructor access paths, EC2 lifecycle automation, and CI/CD deployment workflows.
 
-## 🎯 Project Goal
+## Canonical Documentation Set
 
-This project enables educational institutions and training organizations to:
+The documents below are the maintained source of truth for this repository root:
 
-- **Automate Classroom Setup**: Deploy complete cloud classroom infrastructure with a single command
-- **Manage Student Accounts**: Automatically create and manage student AWS/Azure accounts with appropriate permissions
-- **Provide Hands-On Learning**: Pre-configure EC2 instances with applications like Dify AI and Jenkins for immediate use
-- **Control Costs**: Automatically stop/terminate idle instances to minimize cloud costs
-- **Simplify Management**: Web-based UI for instructors to manage instances, assignments, and configurations
-- **Support Multiple Workshops**: Deploy different workshop configurations (Testus Patronus, Fellowship, etc.) with isolated resources
+- [README.md](README.md): Project overview, current status, and quick start.
+- [REQUIREMENTS.md](REQUIREMENTS.md): Functional, security, and operational requirements.
+- [TESTS.md](TESTS.md): Test strategy, test modes, and execution commands.
+- [DEPLOYMENTS.md](DEPLOYMENTS.md): CI/CD flow, manual deployment, and checklists.
+- [CHANGELOG.md](CHANGELOG.md): Consolidated release and fix history.
+- [FAQ.md](FAQ.md): Short answers to common platform and operations questions.
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md): Problems and solutions.
 
-## 🏗️ Architecture Overview
+Website docs remain available at:
+[https://Bassaganas.github.io/cloud-classroom-provisioning/](https://Bassaganas.github.io/cloud-classroom-provisioning/)
 
-The system follows a **serverless modular architecture** pattern with **separate access paths for students and instructors**:
+## Current State (April 2026)
 
-```mermaid
-flowchart TB
-    subgraph users[User Access Layer]
-        Students[Students]
-        Instructors[Instructors]
-        Admins[Admins]
-    end
-    
-    subgraph studentAccess[Student Access Path]
-        StudentCF[CloudFront<br/>testus-patronus.testingfantasy.com<br/>fellowship-of-the-build.testingfantasy.com]
-        StudentLambda[Workshop Lambda Functions<br/>classroom_user_management.py<br/>Serves HTML directly]
-    end
-    
-    subgraph instructorAccess[Instructor Access Path]
-        InstructorCF[CloudFront<br/>ec2-management-env.testingfantasy.com]
-        InstructorS3[S3 Bucket<br/>React SPA]
-        InstructorAPI[API Gateway<br/>REST API<br/>ec2-management-api-env.testingfantasy.com]
-        InstanceManager[Instance Manager Lambda<br/>classroom_instance_manager.py]
-    end
-    
-    subgraph compute[Compute Layer]
-        EC2Pool[EC2 Instance Pool<br/>Pre-configured applications<br/>Dify AI, Jenkins, etc.]
-        CleanupLambdas[Cleanup Lambda Functions<br/>Stop Old Instances<br/>Admin Cleanup]
-    end
-    
-    subgraph data[Data Layer]
-        DynamoDB[(DynamoDB<br/>Instance Assignments<br/>Tutorial Sessions)]
-        SSM[SSM Parameter Store<br/>Templates & Configs]
-        Secrets[Secrets Manager<br/>Passwords & Credentials]
-    end
-    
-    Students --> StudentCF
-    StudentCF --> StudentLambda
-    StudentLambda --> EC2Pool
-    StudentLambda --> DynamoDB
-    StudentLambda --> SSM
-    StudentLambda --> Secrets
-    
-    Instructors --> InstructorCF
-    InstructorCF --> InstructorS3
-    InstructorS3 --> InstructorAPI
-    InstructorAPI --> InstanceManager
-    InstanceManager --> EC2Pool
-    InstanceManager --> DynamoDB
-    InstanceManager --> SSM
-    InstanceManager --> Secrets
-    
-    CleanupLambdas --> EC2Pool
-    CleanupLambdas --> DynamoDB
-```
+- Wildcard certificate provisioning fixes are implemented and deployment-ready.
+    - EC2 metadata hop limit set to 2 where instances are created.
+    - Route53 permission set includes `route53:GetChange`.
+- Spot instance lifecycle reliability is improved.
+    - Termination path now cancels spot requests to prevent phantom relaunches.
+- Core E2E suite is green: 16/16 passing in recent runs.
+- Golden AMI pipeline support exists via GitHub Actions bake flow.
 
-## 🚀 Quick Start
+## Architecture Summary
 
-### For Teaching/Training (with EC2 instances)
+- Student path: CloudFront -> workshop Lambda functions serving student experiences.
+- Instructor path: CloudFront/S3 React UI -> API Gateway -> instance manager Lambda.
+- Shared services: EC2 pool, DynamoDB, SSM Parameter Store, Secrets Manager.
+- IaC: Terraform modules under `iac/aws`.
+
+## Quick Start
+
+Deploy a classroom with pool instances:
 
 ```bash
 ./scripts/setup_classroom.sh \
-  --name my-classroom \
-  --cloud aws \
-  --region eu-west-1 \
-  --environment dev \
-  --with-pool \
-  --pool-size 10  # Number of machines you need, can be created later from ec2 manager
+    --name fellowship-dev \
+    --cloud aws \
+    --region eu-west-1 \
+    --environment dev \
+    --workshop fellowship \
+    --with-pool \
+    --pool-size 10
 ```
 
-### For Development/Testing (Lambda only, no EC2 costs)
+Deploy low-cost dev infrastructure without pool provisioning:
 
 ```bash
 ./scripts/setup_classroom.sh \
-  --name dev-test \
-  --cloud aws \
-  --region eu-west-1 \
-  --environment dev
+    --name fellowship-dev \
+    --cloud aws \
+    --region eu-west-1 \
+    --environment dev \
+    --workshop fellowship
 ```
 
-## 📚 Documentation
+Destroy an environment:
 
-Full documentation is available at: **[https://Bassaganas.github.io/cloud-classroom-provisioning/](https://Bassaganas.github.io/cloud-classroom-provisioning/)**
+```bash
+./scripts/setup_classroom.sh \
+    --name fellowship-dev \
+    --cloud aws \
+    --region eu-west-1 \
+    --environment dev \
+    --workshop fellowship \
+    --destroy
+```
 
-### Quick Links
+## Documentation Structure
 
-- [Getting Started](https://Bassaganas.github.io/cloud-classroom-provisioning/docs/getting-started/quick-start) - Quick deployment guide
-- [Architecture](https://Bassaganas.github.io/cloud-classroom-provisioning/docs/architecture/overview) - System architecture and components
-- [Deployment Guide](https://Bassaganas.github.io/cloud-classroom-provisioning/docs/deployment/guide) - Step-by-step deployment instructions
-- [Custom Domains](https://Bassaganas.github.io/cloud-classroom-provisioning/docs/deployment/custom-domains) - Custom domain configuration
-- [Usage Guide](https://Bassaganas.github.io/cloud-classroom-provisioning/docs/usage/instructors) - For instructors and students
-- [API Reference](https://Bassaganas.github.io/cloud-classroom-provisioning/docs/usage/api) - Instance Manager API documentation
-- [Terraform Structure](https://Bassaganas.github.io/cloud-classroom-provisioning/docs/development/terraform) - Infrastructure as Code organization
-- [Troubleshooting](https://Bassaganas.github.io/cloud-classroom-provisioning/docs/reference/troubleshooting) - Common issues and solutions
-- [Cost Optimization](https://Bassaganas.github.io/cloud-classroom-provisioning/docs/reference/costs) - Cost estimates and saving tips
+**Primary Documentation (Maintained):**
+- This README provides overview and quick start
+- [REQUIREMENTS.md](REQUIREMENTS.md) details functional, security, and operational requirements
+- [TESTS.md](TESTS.md) documents test strategy, modes, and execution
+- [DEPLOYMENTS.md](DEPLOYMENTS.md) covers CI/CD workflows, Golden AMI baking, and checklists
+- [CHANGELOG.md](CHANGELOG.md) lists fixes and features
+- [FAQ.md](FAQ.md) provides concise operational answers
+- [TROUBLESHOOTING.md](TROUBLESHOOTING.md) provides issue-to-fix playbooks
 
-## 🏗️ Key Components
-
-**Student-Facing Components:**
-- Workshop Lambda Functions that serve HTML pages directly to students
-- Accessed via CloudFront: `testus-patronus.testingfantasy.com`, `fellowship-of-the-build.testingfantasy.com`
-
-**Instructor-Facing Components:**
-- EC2 Manager Frontend (React SPA) hosted on S3 and served via CloudFront
-- API Gateway REST API for instance management
-- Instance Manager Lambda for EC2 lifecycle management
-
-**Shared Components:**
-- EC2 Instances with pre-configured applications (Dify AI, Jenkins)
-- Data Storage: DynamoDB, SSM Parameter Store, Secrets Manager
-- Infrastructure as Code: Terraform modules for reproducible deployments
-
-## 🤝 Contributing
-
-1. Fork the repository
-2. Create a feature branch
-3. Test your changes with a small classroom deployment
-4. Update documentation if needed
-5. Submit a pull request
-
-For more details, see the [Contributing Guide](https://Bassaganas.github.io/cloud-classroom-provisioning/docs/contributing).
-
-## 📄 License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## 🆘 Support
-
-For support:
-1. Check the [documentation](https://Bassaganas.github.io/cloud-classroom-provisioning/)
-2. Review existing GitHub issues
-3. Test with a small deployment first
-4. Open a detailed issue with logs and configuration
-5. Contact the maintainers
+For most day-to-day work, these seven files are sufficient.

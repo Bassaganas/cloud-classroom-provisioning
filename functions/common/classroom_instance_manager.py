@@ -1999,7 +1999,27 @@ docker compose up -d
 log "SUT stack started."
 
 if [ "${SHARED_CORE_MODE:-false}" = "true" ]; then
-    log "Shared-core mode enabled — skipping local DevOps Escape Room startup"
+    log "Shared-core mode enabled — Jenkins/Gitea are shared; starting per-instance code-server (IDE) only"
+    # In shared-core mode the full escape-room stack (Jenkins + Gitea + gitea-init) is not
+    # started because those services live on the shared-core EC2.  However students still
+    # need a per-instance IDE (code-server).  We start it alone with --no-deps so that the
+    # compose dependency on gitea-init (which is not running here) is not enforced.
+    # GITEA_HTTP_URL points to the shared Gitea so the code-server entrypoint can clone repos.
+    if [ -n "${IDE_DOMAIN:-}" ] && [ -d "$ESCAPE_ROOM_DIR" ]; then
+        cd "$ESCAPE_ROOM_DIR"
+        # Point code-server at shared Gitea so the entrypoint can clone student repos.
+        # WORKSPACE_DIR is intentionally NOT overridden — the entrypoint auto-detects
+        # /opt/fellowship-sut (golden AMI path) and uses it as the workspace.
+        export GITEA_HTTP_URL="${SHARED_GITEA_URL:-}"
+        if docker compose up -d --no-deps code-server; then
+            log "✓ code-server (IDE) started for ${IDE_DOMAIN}"
+        else
+            log "WARNING: Failed to start code-server (IDE) — ${IDE_DOMAIN} will return 502"
+        fi
+        cd "$SUT_DIR"
+    else
+        log "IDE_DOMAIN not set or escape-room directory absent — skipping code-server startup"
+    fi
 elif [ -n "${JENKINS_DOMAIN:-}" ] && [ -d "$ESCAPE_ROOM_DIR" ]; then
     log "Starting DevOps Escape Room stack..."
     cd "$ESCAPE_ROOM_DIR"
@@ -4294,6 +4314,7 @@ def lambda_handler(event, context):
                 
                 instance = response['Reservations'][0]['Instances'][0]
                 tags = {tag['Key']: tag['Value'] for tag in instance.get('Tags', [])}
+                workshop_name = tags.get('WorkshopID') or WORKSHOP_NAME
                 
                 if tags.get('Type') != 'pool':
                     return {
@@ -4390,7 +4411,7 @@ def lambda_handler(event, context):
                         'attempted': provision_result['success'] or provision_result['message'].startswith('Shared-core'),
                         'success': provision_result['success'],
                         'message': provision_result['message'],
-                        'command_id': provision_result['command_id']
+                        'command_id': provision_result.get('command_id') or provision_result.get('request_id', '')
                     }
                 }
                 
