@@ -117,6 +117,8 @@ def _get_shared_core_credentials() -> dict:
         "jenkins_admin_user": "fellowship",
         "jenkins_admin_password": "fellowship123",
         "gitea_org_name": "fellowship-org",
+        "gitea_domain": "",
+        "jenkins_domain": "",
     }
 
     # Passwords from Secrets Manager
@@ -136,10 +138,12 @@ def _get_shared_core_credentials() -> dict:
     except Exception as exc:
         logger.warning(f"Error reading deploy secret: {exc}, using defaults")
 
-    # Usernames / org from SSM
+    # Usernames / org / domains from SSM
     for param_key, cred_key, default in [
         ("gitea-admin-user", "gitea_admin_user", "fellowship"),
         ("gitea-org-name", "gitea_org_name", "fellowship-org"),
+        ("gitea-domain", "gitea_domain", ""),
+        ("jenkins-domain", "jenkins_domain", ""),
     ]:
         param_name = f"/classroom/shared-core/{ENVIRONMENT}/{param_key}"
         try:
@@ -149,6 +153,14 @@ def _get_shared_core_credentials() -> dict:
             credentials[cred_key] = default
         except Exception as exc:
             logger.warning(f"Error reading {param_name}: {exc}, using default")
+
+    # Build service URLs from domains
+    gitea_domain = credentials.get("gitea_domain", "")
+    jenkins_domain = credentials.get("jenkins_domain", "")
+    credentials["gitea_url"] = f"https://{gitea_domain}" if gitea_domain else "http://localhost:3000"
+    credentials["jenkins_url"] = f"https://{jenkins_domain}" if jenkins_domain else "http://localhost:8080"
+    # Internal Docker hostname used by Jenkins to clone repos (runs inside Docker network)
+    credentials["gitea_internal_url"] = "http://gitea:3000"
 
     return credentials
 
@@ -188,7 +200,7 @@ def _invoke_ssm_command(
             response = ssm_client.send_command(
                 InstanceIds=[instance_id],
                 DocumentName="AWS-RunShellScript",
-                Parameters={"command": [full_command]},
+                Parameters={"commands": [full_command]},
                 TimeoutSeconds=600,
             )
             command_id = response["Command"]["CommandId"]
@@ -205,9 +217,9 @@ def _invoke_ssm_command(
                     output = invocation.get("StandardOutputContent", "")
                     error = invocation.get("StandardErrorContent", "")
                     if status == "Success":
-                        logger.info(f"SSM succeeded. output={output[:300]}")
+                        logger.info(f"SSM succeeded. output={output[:2000]}")
                     else:
-                        logger.error(f"SSM failed status={status} error={error[:300]}")
+                        logger.error(f"SSM failed status={status} error={error[:2000]} output={output[:1000]}")
                     return {
                         "success": status == "Success",
                         "command_id": command_id,
@@ -225,7 +237,7 @@ def _invoke_ssm_command(
                 "error": "Command did not complete within 90 seconds",
             }
 
-        except ssm_client.exceptions.InvalidInstanceInformationException:
+        except ssm_client.exceptions.InvalidInstanceId:
             logger.warning(f"Instance {instance_id} not SSM-ready (attempt {attempt})")
             if attempt < max_retries:
                 time.sleep(10)
@@ -280,12 +292,18 @@ def _provision(request_id: str, student_id: str, workshop_name: str, student_pas
 
     credentials = _get_shared_core_credentials()
     env_vars = {
+        "GITEA_URL": credentials["gitea_url"],
+        "JENKINS_URL": credentials["jenkins_url"],
+        "GITEA_INTERNAL_URL": credentials["gitea_internal_url"],
         "GITEA_ADMIN_USER": credentials["gitea_admin_user"],
         "GITEA_ADMIN_PASSWORD": credentials["gitea_admin_password"],
         "GITEA_ORG_NAME": credentials["gitea_org_name"],
         "JENKINS_ADMIN_USER": credentials["jenkins_admin_user"],
         "JENKINS_ADMIN_PASSWORD": credentials["jenkins_admin_password"],
+        "SHARED_GITEA_URL": credentials["gitea_url"],
+        "SHARED_JENKINS_URL": credentials["jenkins_url"],
     }
+    logger.info(f"[{request_id}] using GITEA_URL={credentials['gitea_url']} JENKINS_URL={credentials['jenkins_url']}")
 
     result = _invoke_ssm_command(
         instance_id=instance_id,
@@ -323,6 +341,8 @@ def _deprovision(request_id: str, student_id: str, workshop_name: str):
 
     credentials = _get_shared_core_credentials()
     env_vars = {
+        "GITEA_URL": credentials["gitea_url"],
+        "JENKINS_URL": credentials["jenkins_url"],
         "GITEA_ADMIN_USER": credentials["gitea_admin_user"],
         "GITEA_ADMIN_PASSWORD": credentials["gitea_admin_password"],
         "GITEA_ORG_NAME": credentials["gitea_org_name"],

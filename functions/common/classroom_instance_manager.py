@@ -2168,7 +2168,7 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
                     stop_timeout=None, terminate_timeout=None, hard_terminate_timeout=None,
                     tutorial_session_id=None, purchase_type='on-demand', spot_duration_hours=2,
                     spot_max_price=None, idempotency_key=None, fallback_to_on_demand=False,
-                    ec2_instance_type=None):
+                    ec2_instance_type=None, student_name=None):
     """Create EC2 instance(s) for a workshop template
     
     Args:
@@ -2809,7 +2809,45 @@ export SHARED_GITEA_URL={SHARED_GITEA_URL}
                             instances[-1]['https_domain'] = domain
             else:
                 logger.info("HTTPS not configured - skipping Caddy domain setup")
-        
+
+            # ── Provision student on shared-core (async via SQS when queue is configured) ──
+            # Use the provided student_name, or auto-generate a unique one per instance.
+            # The generated name is tagged on the EC2 instance so it can be retrieved later.
+            effective_student_name = student_name or f"student-{uuid.uuid4().hex[:8]}"
+            # Tag the instance with the (possibly auto-generated) student name so that
+            # delete_instances can deprovision it via the EC2 Student tag fallback.
+            try:
+                ec2.create_tags(
+                    Resources=[instance_id],
+                    Tags=[{'Key': 'Student', 'Value': effective_student_name}]
+                )
+            except Exception as tag_e:
+                logger.warning(f"[{instance_id}] Could not tag instance with Student={effective_student_name}: {tag_e}")
+            try:
+                provision_result = provision_student_on_shared_core(
+                    student_id=effective_student_name,
+                    workshop_name=workshop_name
+                )
+                if provision_result['success']:
+                    logger.info(
+                        f"[{instance_id}] Enqueued shared-core provision for student "
+                        f"{effective_student_name} (request_id={provision_result.get('request_id') or provision_result.get('command_id', '')})"
+                    )
+                else:
+                    logger.warning(
+                        f"[{instance_id}] Shared-core provision for {effective_student_name} failed: "
+                        f"{provision_result.get('message', '')}"
+                    )
+                instances[-1]['shared_core_provision'] = {
+                    'student_name': effective_student_name,
+                    'auto_generated': student_name is None,
+                    'success': provision_result['success'],
+                    'async': provision_result.get('async', False),
+                    'request_id': provision_result.get('request_id') or provision_result.get('command_id', ''),
+                }
+            except Exception as prov_e:
+                logger.error(f"[{instance_id}] Error calling provision_student_on_shared_core: {prov_e}")
+
         result = {
             'success': True,
             'instances': instances,
@@ -3283,27 +3321,36 @@ def delete_instances(instance_ids=None, delete_type='individual'):
                 # Clean up DynamoDB assignment (non-blocking)
                 try:
                     response = table.get_item(Key={'instance_id': instance_id})
+                    student_name_to_deprovision = None
                     if 'Item' in response:
-                        student_name = response['Item'].get('student_name')
-                        if student_name:
-                            logger.warning(f"Instance {instance_id} is assigned to {student_name}. Cleaning up assignment.")
-                            
-                            # Deprovision student from shared-core before terminating instance
-                            try:
-                                deprovision_result = deprovision_student_on_shared_core(
-                                    student_id=student_name,
-                                    workshop_name=workshop_for_instance or WORKSHOP_NAME,
-                                    force=True
-                                )
-                                if deprovision_result['success']:
-                                    logger.info(f"Successfully deprovisioned {student_name} from shared-core (command_id={deprovision_result['command_id']})")
-                                else:
-                                    logger.warning(f"Failed to deprovision {student_name} from shared-core: {deprovision_result['message']}")
-                            except Exception as deprov_e:
-                                logger.error(f"Error deprovisioning {student_name} from shared-core: {str(deprov_e)}")
-                            
-                            # Delete the assignment record
+                        student_name_to_deprovision = response['Item'].get('student_name')
+                        if student_name_to_deprovision:
+                            logger.warning(f"Instance {instance_id} is assigned to {student_name_to_deprovision}. Cleaning up assignment.")
                             table.delete_item(Key={'instance_id': instance_id})
+                    # Fallback: check EC2 Student tag for instances not in DynamoDB
+                    # (e.g. admin instances, or pool instances that were tagged but not recorded)
+                    if not student_name_to_deprovision:
+                        student_name_to_deprovision = instance_tags.get('Student')
+                        if student_name_to_deprovision:
+                            logger.info(f"Instance {instance_id} has Student EC2 tag '{student_name_to_deprovision}' but no DynamoDB record; will deprovision.")
+
+                    if student_name_to_deprovision:
+                        # Deprovision student from shared-core before terminating instance
+                        try:
+                            deprovision_result = deprovision_student_on_shared_core(
+                                student_id=student_name_to_deprovision,
+                                workshop_name=workshop_for_instance or WORKSHOP_NAME,
+                                force=True
+                            )
+                            if deprovision_result['success']:
+                                logger.info(
+                                    f"Enqueued shared-core deprovision for {student_name_to_deprovision} "
+                                    f"(request_id={deprovision_result.get('request_id') or deprovision_result.get('command_id', '')})"
+                                )
+                            else:
+                                logger.warning(f"Failed to deprovision {student_name_to_deprovision} from shared-core: {deprovision_result['message']}")
+                        except Exception as deprov_e:
+                            logger.error(f"Error deprovisioning {student_name_to_deprovision} from shared-core: {str(deprov_e)}")
                 except Exception as e:
                     logger.warning(f"Error cleaning up assignment: {str(e)}")
                 
@@ -4125,6 +4172,8 @@ def lambda_handler(event, context):
                         })
                     }
             
+            student_name = body.get('student_name') or query_params.get('student_name') or None
+
             result = create_instance(
                 count=count,
                 instance_type=instance_type,
@@ -4137,7 +4186,8 @@ def lambda_handler(event, context):
                 purchase_type=purchase_type,
                 spot_max_price=spot_max_price,
                 idempotency_key=idempotency_key,
-                ec2_instance_type=ec2_instance_type
+                ec2_instance_type=ec2_instance_type,
+                student_name=student_name
             )
             # Add a message indicating the operation is async
             if result['success']:
@@ -5580,6 +5630,11 @@ def get_frontend_html():
                         <input type="number" id="poolCount" min="1" max="120" value="4" required>
                     </div>
                     <div class="form-group">
+                        <label>Student name (optional):</label>
+                        <input type="text" id="poolStudentName" placeholder="Auto-generated if empty">
+                        <small style="color: #666; font-size: 0.85em;">For bulk creates, each instance gets a unique auto-generated name</small>
+                    </div>
+                    <div class="form-group">
                         <label>Stop Timeout (minutes, optional):</label>
                         <input type="number" id="poolStopTimeout" min="1" max="1440" placeholder="Uses SSM default">
                         <small style="color: #666; font-size: 0.85em;">Minutes before stopping unassigned running instances</small>
@@ -5608,6 +5663,11 @@ def get_frontend_html():
                     <div class="form-group">
                         <label>Number of instances:</label>
                         <input type="number" id="adminCount" min="1" max="5" value="1" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Student name (optional):</label>
+                        <input type="text" id="adminStudentName" placeholder="Auto-generated if empty">
+                        <small style="color: #666; font-size: 0.85em;">Gitea/Jenkins user that will be provisioned on shared-core</small>
                     </div>
                     <div class="form-group">
                         <label>Cleanup after (days):</label>
@@ -5740,7 +5800,7 @@ def get_frontend_html():
             });
         }
 
-        async function createInstances(count, type, cleanupDays = null, stopTimeout = null, terminateTimeout = null, hardTerminateTimeout = null) {
+        async function createInstances(count, type, cleanupDays = null, stopTimeout = null, terminateTimeout = null, hardTerminateTimeout = null, studentName = null) {
             try {
                 showMessage('Creating instances...', 'success');
                 const payload = {count, type};
@@ -5756,6 +5816,9 @@ def get_frontend_html():
                 }
                 if (hardTerminateTimeout !== null && hardTerminateTimeout !== '') {
                     payload.hard_terminate_timeout = parseInt(hardTerminateTimeout);
+                }
+                if (studentName) {
+                    payload.student_name = studentName;
                 }
                 const response = await fetch(`${API_URL}/create`, {
                     method: 'POST',
@@ -5928,13 +5991,25 @@ def get_frontend_html():
                     return;
                 }
 
-                let tableHTML = '<table><thead><tr><th>Instance ID</th><th>Workshop</th><th>Type</th><th>State</th><th>Public IP</th><th>Assigned To</th><th>Days Remaining</th><th>Actions</th></tr></thead><tbody>';
+                let tableHTML = '<table><thead><tr><th>Instance ID</th><th>Workshop</th><th>Type</th><th>State</th><th>Public IP</th><th>Student</th><th>Assigned To</th><th>Days Remaining</th><th>Actions</th></tr></thead><tbody>';
                 
                 data.instances.forEach(instance => {
                     const workshop = instance.tags && instance.tags.WorkshopID ? instance.tags.WorkshopID : '-';
                     const typeBadge = `<span class="badge ${instance.type}">${instance.type}</span>`;
                     const stateBadge = `<span class="badge ${instance.state}">${instance.state}</span>`;
-                    
+
+                    // Student column: EC2 Student tag (set at creation, auto-generated if no name provided)
+                    const studentTag = instance.tags && instance.tags.Student ? instance.tags.Student : null;
+                    let studentCell;
+                    if (studentTag) {
+                        const isAutoGenerated = studentTag.startsWith('student-') && studentTag.length === 16;
+                        studentCell = isAutoGenerated
+                            ? `<span style="color: #999; font-style: italic; font-size: 0.85em;" title="Auto-generated">${studentTag}</span>`
+                            : `<span class="badge assigned">${studentTag}</span>`;
+                    } else {
+                        studentCell = '<span style="color: #ccc;">—</span>';
+                    }
+
                     // Assigned To column: show badge if assigned, or button if unassigned pool instance
                     let assignedBadge;
                     if (instance.assigned_to) {
@@ -6005,6 +6080,7 @@ def get_frontend_html():
                             <td>${typeBadge}</td>
                             <td>${stateBadge}</td>
                             <td>${publicIpCell}</td>
+                            <td>${studentCell}</td>
                             <td>${assignedBadge}</td>
                             <td>${daysRemainingCell}</td>
                             <td>${httpsButton}<br>${deleteButton}</td>
@@ -6028,7 +6104,8 @@ def get_frontend_html():
             const stopTimeout = document.getElementById('poolStopTimeout').value;
             const terminateTimeout = document.getElementById('poolTerminateTimeout').value;
             const hardTerminateTimeout = document.getElementById('poolHardTerminateTimeout').value;
-            createInstances(count, 'pool', null, stopTimeout, terminateTimeout, hardTerminateTimeout);
+            const studentName = document.getElementById('poolStudentName').value.trim() || null;
+            createInstances(count, 'pool', null, stopTimeout, terminateTimeout, hardTerminateTimeout, studentName);
         });
 
         document.getElementById('createAdminForm').addEventListener('submit', (e) => {
@@ -6038,7 +6115,8 @@ def get_frontend_html():
             const stopTimeout = document.getElementById('adminStopTimeout').value;
             const terminateTimeout = document.getElementById('adminTerminateTimeout').value;
             const hardTerminateTimeout = document.getElementById('adminHardTerminateTimeout').value;
-            createInstances(count, 'admin', cleanupDays, stopTimeout, terminateTimeout, hardTerminateTimeout);
+            const studentName = document.getElementById('adminStudentName').value.trim() || null;
+            createInstances(count, 'admin', cleanupDays, stopTimeout, terminateTimeout, hardTerminateTimeout, studentName);
         });
 
         document.getElementById('timeoutSettingsForm').addEventListener('submit', saveTimeoutSettings);
