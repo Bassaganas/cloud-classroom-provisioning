@@ -57,6 +57,11 @@ output "subnet_id" {
   value       = module.compute.subnet_id
 }
 
+output "vpc_id" {
+  description = "ID of the default VPC"
+  value       = module.compute.vpc_id
+}
+
 output "security_group_id" {
   description = "ID of the classroom security group"
   value       = module.compute.security_group_id
@@ -75,6 +80,11 @@ output "ec2_iam_instance_profile_name" {
 output "ec2_iam_role_arn" {
   description = "ARN of the EC2 IAM role"
   value       = module.compute.ec2_iam_role_arn
+}
+
+output "ec2_iam_role_name" {
+  description = "Name of the EC2 IAM role (used to attach additional policies)"
+  value       = module.compute.ec2_iam_role_name
 }
 
 output "s3_frontend_bucket_name" {

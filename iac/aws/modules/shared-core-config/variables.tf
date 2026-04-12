@@ -53,3 +53,28 @@ variable "shared_core_gitea_org_name" {
   description = "Gitea organisation name for shared core"
   type        = string
 }
+
+variable "jenkins_agent_ecs_cluster_arn" {
+  description = "ARN of the ECS cluster for Jenkins Fargate build agents"
+  type        = string
+}
+
+variable "jenkins_agent_ecr_image" {
+  description = "ECR repository URL for the Jenkins agent image (tag appended automatically)"
+  type        = string
+}
+
+variable "jenkins_agent_ecs_security_group_id" {
+  description = "Security group ID for Jenkins ECS Fargate agent tasks"
+  type        = string
+}
+
+variable "jenkins_agent_task_execution_role_arn" {
+  description = "ARN of the ECS task execution role"
+  type        = string
+}
+
+variable "jenkins_agent_task_role_arn" {
+  description = "ARN of the ECS task role"
+  type        = string
+}

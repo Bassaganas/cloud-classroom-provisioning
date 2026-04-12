@@ -3,6 +3,11 @@ output "ec2_iam_role_arn" {
   value       = aws_iam_role.ec2_ssm_role.arn
 }
 
+output "ec2_iam_role_name" {
+  description = "Name of the EC2 SSM IAM role (used to attach additional policies)"
+  value       = aws_iam_role.ec2_ssm_role.name
+}
+
 output "ec2_iam_instance_profile_name" {
   description = "Name of the EC2 IAM instance profile"
   value       = aws_iam_instance_profile.ec2_ssm_profile.name

@@ -170,6 +170,28 @@ module "shared_core_config" {
   shared_core_gitea_admin_user  = var.shared_core_gitea_admin_user
   shared_core_gitea_admin_email = var.shared_core_gitea_admin_email
   shared_core_gitea_org_name    = var.shared_core_gitea_org_name
+
+  # Jenkins ECS agent pool SSM parameters
+  jenkins_agent_ecs_cluster_arn         = module.jenkins_agent_ecs.ecs_cluster_arn
+  jenkins_agent_ecr_image               = module.jenkins_agent_ecs.ecr_repository_url
+  jenkins_agent_ecs_security_group_id   = module.jenkins_agent_ecs.agent_security_group_id
+  jenkins_agent_task_execution_role_arn = module.jenkins_agent_ecs.task_execution_role_arn
+  jenkins_agent_task_role_arn           = module.jenkins_agent_ecs.task_role_arn
+}
+
+# Jenkins ECS Fargate Agent Pool
+module "jenkins_agent_ecs" {
+  source = "./modules/jenkins-agent-ecs"
+
+  depends_on = [module.common]
+
+  environment                   = var.environment
+  owner                         = var.owner
+  region                        = var.region
+  vpc_id                        = module.common.vpc_id
+  subnet_id                     = module.common.subnet_id
+  shared_core_security_group_id = module.common.shared_core_security_group_id
+  shared_core_ec2_role_name     = module.common.ec2_iam_role_name
 }
 
 # Fellowship Workshop Module
