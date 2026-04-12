@@ -520,7 +520,48 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
 
     echo "✓ Verified: leaderboard_api.py packaged correctly"
     rm -rf "$TEMP_DIR8"
-    
+
+    # Package shared_core_provisioner Lambda function (async provisioning worker)
+    echo "Packaging AWS Lambda shared_core_provisioner function..."
+
+    PACKAGE_PATH="$PROJECT_ROOT/functions/packages/shared_core_provisioner.zip"
+    if [ -f "$PACKAGE_PATH" ]; then
+        echo "Deleting existing zip file to ensure clean packaging..."
+        rm -f "$PACKAGE_PATH"
+    fi
+
+    TEMP_DIR9=$(mktemp -d)
+    cp "$PROJECT_ROOT/functions/aws/shared_core_provisioner.py" "$TEMP_DIR9/"
+
+    PYTHON_FILES_IN_TEMP=$(find "$TEMP_DIR9" -maxdepth 1 -name "*.py" -type f | wc -l)
+    if [ "$PYTHON_FILES_IN_TEMP" -ne 1 ]; then
+        echo "ERROR: Temp directory contains unexpected Python files before dependency installation"
+        echo "Found $PYTHON_FILES_IN_TEMP Python files, expected 1"
+        find "$TEMP_DIR9" -maxdepth 1 -name "*.py" -type f
+        rm -rf "$TEMP_DIR9"
+        exit 1
+    fi
+
+    $PIP_CMD install -q -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR9/"
+
+    cd "$TEMP_DIR9"
+    zip -r9q "$PACKAGE_PATH" .
+    cd "$PROJECT_ROOT"
+
+    if ! unzip -l "$PACKAGE_PATH" | grep -q "shared_core_provisioner.py"; then
+        echo "ERROR: Package does not contain shared_core_provisioner.py"
+        rm -rf "$TEMP_DIR9"
+        exit 1
+    fi
+    if ! unzip -p "$PACKAGE_PATH" shared_core_provisioner.py | grep -q "def lambda_handler"; then
+        echo "ERROR: lambda_handler function not found in shared_core_provisioner.py"
+        rm -rf "$TEMP_DIR9"
+        exit 1
+    fi
+
+    echo "✓ Verified: shared_core_provisioner.py packaged correctly"
+    rm -rf "$TEMP_DIR9"
+
 else
     # Azure Function packaging
     echo "Packaging Azure Function..."

@@ -7,6 +7,8 @@ import {
   CardContent,
   CircularProgress,
   Container,
+  FormControlLabel,
+  Switch,
   Stack,
   TextField,
   Typography
@@ -22,6 +24,9 @@ function WorkshopConfig() {
     terminate_timeout: 20,
     hard_terminate_timeout: 45,
     admin_cleanup_days: 7,
+    shared_core_mode: false,
+    shared_jenkins_url: '',
+    shared_gitea_url: '',
   })
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -36,7 +41,12 @@ function WorkshopConfig() {
       setLoading(true)
       const response = await api.getTimeoutSettings(workshopName)
       if (response.success && response.settings) {
-        setSettings(response.settings)
+        setSettings((prev) => ({ ...prev, ...response.settings }))
+      }
+
+      const sharedCoreResponse = await api.getSharedCoreSettings(workshopName)
+      if (sharedCoreResponse.success && sharedCoreResponse.settings) {
+        setSettings((prev) => ({ ...prev, ...sharedCoreResponse.settings }))
       }
     } catch (error) {
       showToast(`Error loading settings: ${error.message}`, 'error')
@@ -56,10 +66,16 @@ function WorkshopConfig() {
         hard_terminate_timeout: parseInt(settings.hard_terminate_timeout),
         admin_cleanup_days: parseInt(settings.admin_cleanup_days),
       })
-      if (response.success) {
+
+      const sharedCoreResponse = await api.updateSharedCoreSettings({
+        workshop: workshopName,
+        shared_core_mode: Boolean(settings.shared_core_mode),
+      })
+
+      if (response.success && sharedCoreResponse.success) {
         showToast(`Settings saved for ${workshopName}`, 'success')
       } else {
-        showToast(response.error || 'Failed to save settings', 'error')
+        showToast(response.error || sharedCoreResponse.error || 'Failed to save settings', 'error')
       }
     } catch (error) {
       showToast(error.message, 'error')
@@ -139,6 +155,31 @@ function WorkshopConfig() {
                   helperText="Days before admin instances are deleted"
                   required
                 />
+
+                <Box sx={{ p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
+                  <Typography variant="subtitle1" sx={{ mb: 1 }}>
+                    Infrastructure Mode
+                  </Typography>
+                  <FormControlLabel
+                    control={
+                      <Switch
+                        checked={Boolean(settings.shared_core_mode)}
+                        onChange={(e) => setSettings({ ...settings, shared_core_mode: e.target.checked })}
+                      />
+                    }
+                    label="Use shared-core mode for student assignments"
+                  />
+                  <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                    When enabled, students are routed to shared Jenkins and Gitea instead of per-student DevOps stacks.
+                  </Typography>
+                  {settings.shared_core_mode && (
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
+                      Shared Jenkins: {settings.shared_jenkins_url || 'Not configured'}
+                      <br />
+                      Shared Gitea: {settings.shared_gitea_url || 'Not configured'}
+                    </Typography>
+                  )}
+                </Box>
 
                 <Stack direction="row" spacing={1.5}>
                   <Button type="submit" variant="contained" disabled={saving}>

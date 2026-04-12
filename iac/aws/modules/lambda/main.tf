@@ -198,6 +198,7 @@ resource "aws_lambda_function" "instance_manager" {
       SHARED_CORE_MODE                        = var.shared_core_mode ? "true" : "false"
       SHARED_JENKINS_URL                      = var.shared_core_jenkins_url
       SHARED_GITEA_URL                        = var.shared_core_gitea_url
+      SHARED_CORE_PROVISIONING_QUEUE_URL      = var.shared_core_provisioning_queue_url
     }
   }
 

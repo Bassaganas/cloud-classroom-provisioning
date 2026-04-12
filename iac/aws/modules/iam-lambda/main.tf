@@ -200,6 +200,17 @@ resource "aws_iam_role_policy" "lambda_iam_policy" {
           "ce:GetCostAndUsage"
         ]
         Resource = "*"
+      },
+      # SQS — send async provisioning/deprovisioning requests to shared-core
+      # ARN is computed from deterministic queue name to avoid circular module dependency
+      {
+        Effect = "Allow"
+        Action = [
+          "sqs:SendMessage",
+          "sqs:GetQueueUrl",
+          "sqs:GetQueueAttributes"
+        ]
+        Resource = "arn:aws:sqs:${var.region}:${var.account_id}:sqs-shared-core-provisioning-${var.environment}-${replace(var.region, "-", "")}"
       }
     ]
   })

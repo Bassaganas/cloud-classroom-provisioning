@@ -102,3 +102,12 @@ output "instance_manager_openapi_spec_url" {
   value       = module.api_gateway.openapi_spec_url
 }
 
+output "shared_core_provisioning_queue_url" {
+  description = "URL of the SQS queue for async shared-core student provisioning"
+  value       = module.shared_core_provisioning.provisioning_queue_url
+}
+
+output "shared_core_provisioning_status_table" {
+  description = "DynamoDB table name for tracking provisioning request status"
+  value       = module.shared_core_provisioning.provisioning_status_table_name
+}

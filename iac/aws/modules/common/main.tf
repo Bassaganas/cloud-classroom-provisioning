@@ -131,6 +131,7 @@ module "lambda" {
   shared_core_mode                        = var.shared_core_mode
   shared_core_jenkins_url                 = var.shared_core_jenkins_domain != "" ? "https://${var.shared_core_jenkins_domain}/" : ""
   shared_core_gitea_url                   = var.shared_core_gitea_domain != "" ? "https://${var.shared_core_gitea_domain}/" : ""
+  shared_core_provisioning_queue_url      = module.shared_core_provisioning.provisioning_queue_url
 
   enable_status             = false
   enable_user_management    = false
@@ -141,6 +142,19 @@ module "lambda" {
 
   instance_manager_memory_size = var.instance_manager_memory_size
   instance_manager_timeout     = var.instance_manager_timeout
+}
+
+# Shared-Core Provisioning Module — async student lifecycle via SQS + Lambda
+# Must run after iam_lambda so we can pass the Lambda role ARN to the queue policy
+module "shared_core_provisioning" {
+  source = "../shared-core-provisioning"
+
+  environment                      = var.environment
+  owner                            = var.owner
+  region                           = var.region
+  instance_manager_lambda_role_arn = module.iam_lambda.lambda_role_arn
+
+  depends_on = [module.iam_lambda]
 }
 
 # API Gateway Module - REST API for Instance Manager

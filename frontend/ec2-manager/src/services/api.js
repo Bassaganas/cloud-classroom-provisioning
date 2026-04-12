@@ -144,6 +144,14 @@ export const api = {
 
   // Timeout settings
   getTimeoutSettings: (workshop) => apiRequest(`/timeout_settings?workshop=${workshop}`),
+
+  // Shared-core mode settings
+  getSharedCoreSettings: (workshop) => apiRequest(`/shared_core_settings?workshop=${workshop}`),
+
+  updateSharedCoreSettings: (data) => apiRequest('/update_shared_core_settings', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
   
   updateTimeoutSettings: (data) => apiRequest('/update_timeout_settings', {
     method: 'POST',
