@@ -46,6 +46,8 @@ try:
     logger.info("Initializing AWS clients...")
     ec2 = boto3.client('ec2', region_name=REGION)
     elbv2 = boto3.client('elbv2', region_name=REGION)
+    ssm = boto3.client('ssm', region_name=REGION)
+    secretsmanager = boto3.client('secretsmanager', region_name=REGION)
     dynamodb = boto3.resource('dynamodb', region_name=REGION)
     dynamodb_client = boto3.client('dynamodb', region_name=REGION)
     table = dynamodb.Table(f"instance-assignments-{WORKSHOP_NAME}-{ENVIRONMENT}")
@@ -59,6 +61,346 @@ def get_tutorial_sessions_table(workshop_name=None):
     """Get the tutorial sessions DynamoDB table for a workshop"""
     workshop = workshop_name or WORKSHOP_NAME
     return dynamodb.Table(f"tutorial-sessions-{workshop}-{ENVIRONMENT}")
+
+def get_shared_core_instance_id(workshop_name=None):
+    """Retrieve the shared-core instance ID from SSM Parameter Store.
+    
+    Args:
+        workshop_name: Workshop identifier (defaults to WORKSHOP_NAME)
+    
+    Returns:
+        Instance ID (str) or None if not found/configured
+    """
+    workshop = workshop_name or WORKSHOP_NAME
+    env = ENVIRONMENT
+    param_name = f"/classroom/shared-core/{env}/instance-id"
+    
+    try:
+        response = ssm.get_parameter(Name=param_name, WithDecryption=False)
+        instance_id = response['Parameter']['Value']
+        logger.info(f"Retrieved shared-core instance ID from {param_name}: {instance_id}")
+        return instance_id
+    except ssm.exceptions.ParameterNotFound:
+        logger.warning(f"Shared-core instance ID parameter not found: {param_name}. Skipping student provisioning.")
+        return None
+    except Exception as e:
+        logger.warning(f"Error retrieving shared-core instance ID: {str(e)}. Skipping student provisioning.")
+        return None
+
+def get_shared_core_credentials():
+    """Retrieve Gitea/Jenkins admin credentials from SSM and Secrets Manager.
+    
+    Credentials are split across:
+    - SSM Parameters: Usernames, org name, URLs
+    - Secrets Manager: Admin passwords (in deploy secret)
+    
+    Returns:
+        dict with keys: gitea_admin_user, gitea_admin_password, jenkins_admin_user, jenkins_admin_password, gitea_org_name
+        or empty dict {} if not found/configured (graceful degradation)
+    """
+    import json
+    env = ENVIRONMENT
+    credentials = {}
+    
+    try:
+        # Try to read passwords from Secrets Manager deploy secret
+        deploy_secret_name = f"/classroom/shared-core/{env}/deploy"
+        try:
+            response = secretsmanager.get_secret_value(SecretId=deploy_secret_name)
+            if 'SecretString' in response:
+                deploy_secret = json.loads(response['SecretString'])
+                credentials['gitea_admin_password'] = deploy_secret.get('gitea_admin_password', 'fellowship123')
+                credentials['jenkins_admin_password'] = deploy_secret.get('jenkins_admin_password', 'fellowship123')
+        except secretsmanager.exceptions.ResourceNotFoundException:
+            logger.debug(f"Deploy secret not found: {deploy_secret_name}, using defaults")
+            credentials['gitea_admin_password'] = 'fellowship123'
+            credentials['jenkins_admin_password'] = 'fellowship123'
+        except Exception as e:
+            logger.warning(f"Error reading deploy secret: {str(e)}, using defaults")
+            credentials['gitea_admin_password'] = 'fellowship123'
+            credentials['jenkins_admin_password'] = 'fellowship123'
+        
+        # Try to read usernames and org from SSM parameters
+        try:
+            gitea_user_param = ssm.get_parameter(
+                Name=f"/classroom/shared-core/{env}/gitea-admin-user",
+                WithDecryption=False
+            )
+            credentials['gitea_admin_user'] = gitea_user_param['Parameter']['Value']
+        except ssm.exceptions.ParameterNotFound:
+            credentials['gitea_admin_user'] = 'fellowship'
+        except Exception as e:
+            logger.warning(f"Error reading gitea-admin-user parameter: {str(e)}, using default")
+            credentials['gitea_admin_user'] = 'fellowship'
+        
+        try:
+            gitea_org_param = ssm.get_parameter(
+                Name=f"/classroom/shared-core/{env}/gitea-org-name",
+                WithDecryption=False
+            )
+            credentials['gitea_org_name'] = gitea_org_param['Parameter']['Value']
+        except ssm.exceptions.ParameterNotFound:
+            credentials['gitea_org_name'] = 'fellowship-org'
+        except Exception as e:
+            logger.warning(f"Error reading gitea-org-name parameter: {str(e)}, using default")
+            credentials['gitea_org_name'] = 'fellowship-org'
+        
+        # Jenkins admin username defaults to 'fellowship' (no SSM parameter, use default)
+        credentials['jenkins_admin_user'] = 'fellowship'
+        
+        logger.info(f"Retrieved shared-core credentials from SSM/Secrets Manager")
+        return credentials
+        
+    except Exception as e:
+        logger.warning(f"Unexpected error retrieving shared-core credentials: {str(e)}. Using defaults.")
+        return {
+            'gitea_admin_user': 'fellowship',
+            'gitea_admin_password': 'fellowship123',
+            'jenkins_admin_user': 'fellowship',
+            'jenkins_admin_password': 'fellowship123',
+            'gitea_org_name': 'fellowship-org'
+        }
+
+def invoke_ssm_command(instance_id, script_path, parameters, environment_vars=None, max_retries=3):
+    """Invoke a script on an EC2 instance via SSM Run Command with retries.
+    
+    Args:
+        instance_id: Target EC2 instance ID
+        script_path: Path to script on the instance (e.g., /opt/scripts/provision-student.sh)
+        parameters: List of command parameters (e.g., [student_id, student_password])
+        environment_vars: Dict of environment variables to set (e.g., {'GITEA_ADMIN_PASSWORD': '...'})
+        max_retries: Number of retries on transient failure
+    
+    Returns:
+        dict with keys: success (bool), command_id (str), status (str), output (str), error (str)
+    """
+    # Build command with environment variables if provided
+    if environment_vars is None:
+        environment_vars = {}
+    
+    # Build environment variable exports
+    env_exports = ""
+    for key, value in environment_vars.items():
+        # Escape single quotes in value by replacing ' with '\''
+        escaped_value = value.replace("'", "'\\''")
+        env_exports += f"export {key}='{escaped_value}'\n"
+    
+    # Build full command with environment variables
+    params_str = ' '.join(f"'{str(p)}'" for p in parameters)
+    full_command = f"{env_exports}bash {script_path} {params_str}"
+    
+    for attempt in range(1, max_retries + 1):
+        try:
+            logger.info(f"SSM invocation attempt {attempt}/{max_retries}: {script_path} with {len(parameters)} params on {instance_id}")
+            
+            response = ssm.send_command(
+                InstanceIds=[instance_id],
+                DocumentName="AWS-RunShellScript",
+                Parameters={"command": [full_command]},
+                TimeoutSeconds=600  # 10 minutes
+            )
+            
+            command_id = response['Command']['CommandId']
+            logger.info(f"SSM command sent: {command_id}")
+            
+            # Poll for command completion (max 90 seconds)
+            for poll_attempt in range(18):  # 18 × 5s = 90s
+                time.sleep(5)
+                
+                invocation = ssm.get_command_invocation(
+                    CommandId=command_id,
+                    InstanceId=instance_id
+                )
+                
+                status = invocation['Status']
+                logger.info(f"SSM command status (poll {poll_attempt + 1}): {status}")
+                
+                if status in ['Success', 'Failed', 'Cancelled', 'TimedOut', 'Cancelling']:
+                    output = invocation.get('StandardOutputContent', '')
+                    error = invocation.get('StandardErrorContent', '')
+                    
+                    if status == 'Success':
+                        logger.info(f"SSM command succeeded. Output: {output[:500]}")
+                        return {
+                            'success': True,
+                            'command_id': command_id,
+                            'status': status,
+                            'output': output,
+                            'error': error
+                        }
+                    else:
+                        logger.error(f"SSM command failed with status {status}. Error: {error[:500]}")
+                        return {
+                            'success': False,
+                            'command_id': command_id,
+                            'status': status,
+                            'output': output,
+                            'error': error
+                        }
+            
+            # Timeout waiting for command
+            logger.warning(f"SSM command did not complete within 90 seconds (command_id: {command_id})")
+            return {
+                'success': False,
+                'command_id': command_id,
+                'status': 'Timeout',
+                'output': '',
+                'error': 'Command did not complete within 90 seconds'
+            }
+        
+        except ssm.exceptions.InvalidInstanceInformationException:
+            logger.warning(f"Instance {instance_id} is not SSM-ready (attempt {attempt}/{max_retries})")
+            if attempt < max_retries:
+                logger.info(f"Retrying in 10 seconds...")
+                time.sleep(10)
+            else:
+                return {
+                    'success': False,
+                    'command_id': '',
+                    'status': 'InvalidInstance',
+                    'output': '',
+                    'error': f'Instance {instance_id} is not SSM-ready after {max_retries} retries'
+                }
+        
+        except Exception as e:
+            logger.error(f"Error invoking SSM command (attempt {attempt}/{max_retries}): {str(e)}")
+            if attempt < max_retries:
+                logger.info(f"Retrying in 5 seconds...")
+                time.sleep(5)
+            else:
+                return {
+                    'success': False,
+                    'command_id': '',
+                    'status': 'Error',
+                    'output': '',
+                    'error': str(e)
+                }
+    
+    return {
+        'success': False,
+        'command_id': '',
+        'status': 'Failed',
+        'output': '',
+        'error': f'Failed to invoke SSM command after {max_retries} retries'
+    }
+
+def provision_student_on_shared_core(student_id, workshop_name=None, student_password=None):
+    """Provision a student on the shared-core stack (Gitea user, repo, Jenkins job).
+    
+    Args:
+        student_id: Student username/ID
+        workshop_name: Workshop identifier (defaults to WORKSHOP_NAME)
+        student_password: Student password (optional, defaults to 'fellowship123')
+    
+    Returns:
+        dict with keys: success (bool), command_id (str), message (str), details (dict)
+    """
+    shared_core_id = get_shared_core_instance_id(workshop_name)
+    if not shared_core_id:
+        logger.info(f"Shared-core not configured; skipping student provisioning for {student_id}")
+        return {
+            'success': True,  # Treat as success (not an error)
+            'command_id': '',
+            'message': 'Shared-core not configured; student provisioning skipped',
+            'details': {}
+        }
+    
+    credentials = get_shared_core_credentials()
+    
+    if not student_password:
+        student_password = 'fellowship123'  # Default password
+    
+    # Prepare environment variables for the provisioning script
+    environment_vars = {
+        'GITEA_ADMIN_USER': credentials.get('gitea_admin_user', 'fellowship'),
+        'GITEA_ADMIN_PASSWORD': credentials.get('gitea_admin_password', 'fellowship123'),
+        'GITEA_ORG_NAME': credentials.get('gitea_org_name', 'fellowship-org'),
+        'JENKINS_ADMIN_USER': credentials.get('jenkins_admin_user', 'fellowship'),
+        'JENKINS_ADMIN_PASSWORD': credentials.get('jenkins_admin_password', 'fellowship123'),
+    }
+    
+    # Invoke provision-student.sh on shared-core
+    result = invoke_ssm_command(
+        instance_id=shared_core_id,
+        script_path="/opt/scripts/provision-student.sh",
+        parameters=[student_id, student_password],
+        environment_vars=environment_vars
+    )
+    
+    if result['success']:
+        logger.info(f"✓ Successfully provisioned student {student_id} on shared-core")
+    else:
+        logger.error(f"✗ Failed to provision student {student_id} on shared-core: {result['error']}")
+    
+    return {
+        'success': result['success'],
+        'command_id': result['command_id'],
+        'message': f"Provision student {student_id} on shared-core",
+        'details': {
+            'student_id': student_id,
+            'status': result['status'],
+            'output': result['output'][:500] if result['output'] else '',
+            'error': result['error'][:500] if result['error'] else ''
+        }
+    }
+
+def deprovision_student_on_shared_core(student_id, workshop_name=None, force=False):
+    """Remove a student from the shared-core stack (delete Gitea repo, Jenkins job).
+    
+    Args:
+        student_id: Student username/ID
+        workshop_name: Workshop identifier (defaults to WORKSHOP_NAME)
+        force: If True, skip confirmation warning
+    
+    Returns:
+        dict with keys: success (bool), command_id (str), message (str), details (dict)
+    """
+    shared_core_id = get_shared_core_instance_id(workshop_name)
+    if not shared_core_id:
+        logger.info(f"Shared-core not configured; skipping student deprovisioning for {student_id}")
+        return {
+            'success': True,  # Treat as success (not an error)
+            'command_id': '',
+            'message': 'Shared-core not configured; student deprovisioning skipped',
+            'details': {}
+        }
+    
+    credentials = get_shared_core_credentials()
+    
+    # Prepare environment variables for the deprovisioning script
+    environment_vars = {
+        'GITEA_ADMIN_USER': credentials.get('gitea_admin_user', 'fellowship'),
+        'GITEA_ADMIN_PASSWORD': credentials.get('gitea_admin_password', 'fellowship123'),
+        'GITEA_ORG_NAME': credentials.get('gitea_org_name', 'fellowship-org'),
+        'JENKINS_ADMIN_USER': credentials.get('jenkins_admin_user', 'fellowship'),
+        'JENKINS_ADMIN_PASSWORD': credentials.get('jenkins_admin_password', 'fellowship123'),
+    }
+    
+    # Invoke deprovision-student.sh on shared-core with --confirm flag
+    result = invoke_ssm_command(
+        instance_id=shared_core_id,
+        script_path="/opt/scripts/deprovision-student.sh",
+        parameters=[student_id, "--confirm"],
+        environment_vars=environment_vars
+    )
+    
+    if result['success']:
+        logger.info(f"✓ Successfully deprovisioned student {student_id} from shared-core")
+    else:
+        logger.error(f"✗ Failed to deprovision student {student_id} from shared-core: {result['error']}")
+    
+    return {
+        'success': result['success'],
+        'command_id': result['command_id'],
+        'message': f"Deprovision student {student_id} from shared-core",
+        'details': {
+            'student_id': student_id,
+            'status': result['status'],
+            'output': result['output'][:500] if result['output'] else '',
+            'error': result['error'][:500] if result['error'] else ''
+        }
+    }
+
 
 def convert_decimal(obj):
     """Convert Decimal objects to int or float for JSON serialization"""
@@ -238,9 +580,7 @@ SUBNET_ID = os.environ.get('EC2_SUBNET_ID')
 SECURITY_GROUP_IDS = os.environ.get('EC2_SECURITY_GROUP_IDS', '').split(',') if os.environ.get('EC2_SECURITY_GROUP_IDS') else []
 IAM_INSTANCE_PROFILE = os.environ.get('EC2_IAM_INSTANCE_PROFILE', f'ec2-ssm-profile-{WORKSHOP_NAME}-{ENVIRONMENT}')
 
-# Initialize Secrets Manager client for password authentication
-secretsmanager = boto3.client('secretsmanager', region_name=REGION)
-ssm = boto3.client('ssm', region_name=REGION)
+# AWS clients already initialized above
 PASSWORD_SECRET_NAME = os.environ.get('INSTANCE_MANAGER_PASSWORD_SECRET', '')
 TEMPLATE_MAP_PARAMETER = os.environ.get(
     'INSTANCE_MANAGER_TEMPLATE_MAP_PARAMETER',
@@ -261,6 +601,64 @@ SHARED_JENKINS_URL = os.environ.get('SHARED_JENKINS_URL', '')
 SHARED_GITEA_URL = os.environ.get('SHARED_GITEA_URL', '')
 
 
+def get_shared_core_mode(workshop_name=None):
+    """Resolve shared-core mode for a workshop from SSM, with env fallback."""
+    workshop = workshop_name or WORKSHOP_NAME
+    default_mode = SHARED_CORE_MODE
+    parameter_name = f'/classroom/{workshop}/{ENVIRONMENT}/shared_core_mode'
+
+    try:
+        response = ssm.get_parameter(Name=parameter_name)
+        value = str(response['Parameter']['Value']).strip().lower()
+        return value in ('true', '1', 'yes')
+    except ClientError as e:
+        if e.response['Error']['Code'] != 'ParameterNotFound':
+            logger.warning(f"Error reading shared core mode from {parameter_name}: {str(e)}")
+    except Exception as e:
+        logger.warning(f"Unexpected error reading shared core mode from {parameter_name}: {str(e)}")
+
+    return default_mode
+
+
+def update_shared_core_mode(workshop_name, enabled):
+    """Persist shared-core mode flag in SSM Parameter Store."""
+    parameter_name = f'/classroom/{workshop_name}/{ENVIRONMENT}/shared_core_mode'
+    try:
+        ssm.put_parameter(
+            Name=parameter_name,
+            Value='true' if enabled else 'false',
+            Type='String',
+            Overwrite=True
+        )
+        return {
+            'success': True,
+            'workshop': workshop_name,
+            'shared_core_mode': enabled,
+            'parameter': parameter_name,
+        }
+    except Exception as e:
+        logger.error(f"Error updating shared core mode for {workshop_name}: {str(e)}")
+        return {
+            'success': False,
+            'error': str(e),
+            'workshop': workshop_name,
+            'shared_core_mode': enabled,
+            'parameter': parameter_name,
+        }
+
+
+def get_shared_core_settings(workshop_name=None):
+    """Return shared-core settings for UI and API consumers."""
+    workshop = workshop_name or WORKSHOP_NAME
+    mode = get_shared_core_mode(workshop)
+    return {
+        'workshop': workshop,
+        'shared_core_mode': mode,
+        'shared_jenkins_url': SHARED_JENKINS_URL,
+        'shared_gitea_url': SHARED_GITEA_URL,
+    }
+
+
 def get_shared_core_urls(student_id: str = '', workshop_name: str = '') -> dict:
     """Return the shared Jenkins and Gitea URLs for a student in shared-core mode.
 
@@ -272,7 +670,7 @@ def get_shared_core_urls(student_id: str = '', workshop_name: str = '') -> dict:
     Returns a dict with keys: jenkins_url, gitea_url, jenkins_job_url,
     gitea_repo_url, shared_core_mode (bool).
     """
-    if not SHARED_CORE_MODE:
+    if not get_shared_core_mode(workshop_name):
         return {'shared_core_mode': False}
 
     if not SHARED_JENKINS_URL or not SHARED_GITEA_URL:
@@ -305,6 +703,7 @@ def get_shared_core_urls(student_id: str = '', workshop_name: str = '') -> dict:
 
 # Cache for password (to avoid repeated Secrets Manager calls)
 _password_cache = None
+_secretsmanager = None  # Reuse Secrets Manager client from above
 _template_map_cache = None
 _template_map_cache_time = None
 # Cache TTL: Reduced to 60 seconds for faster template updates during development
@@ -1612,6 +2011,9 @@ docker compose up -d
 log "SUT stack started."
 
 if [ -n "${JENKINS_DOMAIN:-}" ] && [ -d "$ESCAPE_ROOM_DIR" ]; then
+if [ "${SHARED_CORE_MODE:-false}" = "true" ]; then
+    log "Shared-core mode enabled — skipping local DevOps Escape Room startup"
+elif [ -n "${JENKINS_DOMAIN:-}" ] && [ -d "$ESCAPE_ROOM_DIR" ]; then
     log "Starting DevOps Escape Room stack..."
     cd "$ESCAPE_ROOM_DIR"
     export JENKINS_URL="https://${JENKINS_DOMAIN}/"
@@ -1638,9 +2040,15 @@ fi
 
 log "==========================="
 
-log "Find Jenkins at https://${JENKINS_DOMAIN:-<no-jenkins-domain-configured>}/"
-log "Find IDE at https://${IDE_DOMAIN:-<no-ide-domain-configured>}/"
-log "Find Gitea at https://${GITEA_DOMAIN:-<no-gitea-domain-configured>}/"
+if [ "${SHARED_CORE_MODE:-false}" = "true" ]; then
+    log "Find Jenkins at ${SHARED_JENKINS_URL:-<no-shared-jenkins-url-configured>}"
+    log "Find Gitea at ${SHARED_GITEA_URL:-<no-shared-gitea-url-configured>}"
+    log "Find IDE at https://${IDE_DOMAIN:-<no-ide-domain-configured>}/"
+else
+    log "Find Jenkins at https://${JENKINS_DOMAIN:-<no-jenkins-domain-configured>}/"
+    log "Find IDE at https://${IDE_DOMAIN:-<no-ide-domain-configured>}/"
+    log "Find Gitea at https://${GITEA_DOMAIN:-<no-gitea-domain-configured>}/"
+fi
 log "Find SUT frontend at https://${CADDY_DOMAIN:-<no-caddy-domain-configured>}/"
 
 log "==========================="
@@ -2098,6 +2506,9 @@ export ROUTE53_ZONE_ID={HTTPS_HOSTED_ZONE_ID}
 export AWS_REGION={REGION}
 export ENVIRONMENT={ENVIRONMENT}
 export EXERCISES_DIR=/opt/exercises
+export SHARED_CORE_MODE={'true' if get_shared_core_mode(workshop_name) else 'false'}
+export SHARED_JENKINS_URL={SHARED_JENKINS_URL}
+export SHARED_GITEA_URL={SHARED_GITEA_URL}
 """
                 
                 # Add S3 artifact information if available
@@ -2869,6 +3280,21 @@ def delete_instances(instance_ids=None, delete_type='individual'):
                         student_name = response['Item'].get('student_name')
                         if student_name:
                             logger.warning(f"Instance {instance_id} is assigned to {student_name}. Cleaning up assignment.")
+                            
+                            # Deprovision student from shared-core before terminating instance
+                            try:
+                                deprovision_result = deprovision_student_on_shared_core(
+                                    student_id=student_name,
+                                    workshop_name=workshop_for_instance or WORKSHOP_NAME,
+                                    force=True
+                                )
+                                if deprovision_result['success']:
+                                    logger.info(f"Successfully deprovisioned {student_name} from shared-core (command_id={deprovision_result['command_id']})")
+                                else:
+                                    logger.warning(f"Failed to deprovision {student_name} from shared-core: {deprovision_result['message']}")
+                            except Exception as deprov_e:
+                                logger.error(f"Error deprovisioning {student_name} from shared-core: {str(deprov_e)}")
+                            
                             # Delete the assignment record
                             table.delete_item(Key={'instance_id': instance_id})
                 except Exception as e:
@@ -3196,6 +3622,56 @@ def get_swagger_spec():
                     },
                     'responses': {
                         '200': {'description': 'Settings updated'},
+                        '401': {'description': 'Authentication required'}
+                    }
+                }
+            },
+            '/api/shared_core_settings': {
+                'get': {
+                    'summary': 'Get shared-core mode settings',
+                    'description': 'Get shared-core mode and shared service URLs for a workshop',
+                    'parameters': [
+                        {
+                            'name': 'workshop',
+                            'in': 'query',
+                            'required': True,
+                            'schema': {'type': 'string'}
+                        },
+                        {
+                            'name': 'password',
+                            'in': 'query',
+                            'required': True,
+                            'schema': {'type': 'string'}
+                        }
+                    ],
+                    'responses': {
+                        '200': {'description': 'Shared-core settings'},
+                        '401': {'description': 'Authentication required'}
+                    }
+                }
+            },
+            '/api/update_shared_core_settings': {
+                'post': {
+                    'summary': 'Update shared-core mode settings',
+                    'description': 'Enable or disable shared-core mode for a workshop',
+                    'requestBody': {
+                        'required': True,
+                        'content': {
+                            'application/json': {
+                                'schema': {
+                                    'type': 'object',
+                                    'properties': {
+                                        'workshop': {'type': 'string'},
+                                        'shared_core_mode': {'type': 'boolean'},
+                                        'password': {'type': 'string'}
+                                    },
+                                    'required': ['workshop', 'shared_core_mode']
+                                }
+                            }
+                        }
+                    },
+                    'responses': {
+                        '200': {'description': 'Shared-core settings updated'},
                         '401': {'description': 'Authentication required'}
                     }
                 }
@@ -3912,15 +4388,29 @@ def lambda_handler(event, context):
                 
                 logger.info(f"Manually assigned instance {instance_id} to {student_name}")
                 
+                # Provision student on shared-core if enabled
+                provision_result = provision_student_on_shared_core(
+                    student_id=student_name,
+                    workshop_name=workshop_name or WORKSHOP_NAME
+                )
+                
+                response_body = {
+                    'success': True,
+                    'message': f'Successfully assigned instance {instance_id} to {student_name}',
+                    'instance_id': instance_id,
+                    'student_name': student_name,
+                    'shared_core_provision': {
+                        'attempted': provision_result['success'] or provision_result['message'].startswith('Shared-core'),
+                        'success': provision_result['success'],
+                        'message': provision_result['message'],
+                        'command_id': provision_result['command_id']
+                    }
+                }
+                
                 return {
                     'statusCode': 200,
                     'headers': get_cors_headers(),
-                    'body': json.dumps({
-                        'success': True,
-                        'message': f'Successfully assigned instance {instance_id} to {student_name}',
-                        'instance_id': instance_id,
-                        'student_name': student_name
-                    })
+                    'body': json.dumps(response_body)
                 }
             except ClientError as e:
                 if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
@@ -4074,6 +4564,40 @@ def lambda_handler(event, context):
                 'statusCode': 200,
                 'headers': get_cors_headers(),
                 'body': json.dumps({'success': True, 'settings': timeouts, 'timeouts': timeouts})
+            }
+
+        elif api_path == '/shared_core_settings' and http_method == 'GET':
+            workshop_name = query_params.get('workshop') or WORKSHOP_NAME
+            settings = get_shared_core_settings(workshop_name)
+            return {
+                'statusCode': 200,
+                'headers': get_cors_headers(),
+                'body': json.dumps({'success': True, 'settings': settings})
+            }
+
+        elif api_path == '/update_shared_core_settings' and http_method == 'POST':
+            workshop_name = body.get('workshop')
+            shared_core_mode = parse_bool(body.get('shared_core_mode'))
+
+            if not workshop_name:
+                return {
+                    'statusCode': 400,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({'success': False, 'error': 'Workshop name is required'})
+                }
+
+            if shared_core_mode is None:
+                return {
+                    'statusCode': 400,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({'success': False, 'error': 'shared_core_mode must be a boolean'})
+                }
+
+            result = update_shared_core_mode(workshop_name, shared_core_mode)
+            return {
+                'statusCode': 200 if result['success'] else 500,
+                'headers': get_cors_headers(),
+                'body': json.dumps(result)
             }
         
         elif api_path == '/update_timeout_settings' and http_method == 'POST':
@@ -4614,7 +5138,9 @@ def lambda_handler(event, context):
                         'POST /api/enable_https': 'Enable HTTPS',
                         'POST /api/delete_https': 'Disable HTTPS',
                         'GET /api/timeout_settings': 'Get timeout settings',
-                        'POST /api/update_timeout_settings': 'Update timeout settings'
+                        'POST /api/update_timeout_settings': 'Update timeout settings',
+                        'GET /api/shared_core_settings': 'Get shared-core mode settings',
+                        'POST /api/update_shared_core_settings': 'Update shared-core mode settings'
                     }
                 })
             }
