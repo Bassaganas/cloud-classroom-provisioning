@@ -149,9 +149,10 @@ create_gitea_repo() {
 seed_jenkinsfile() {
     log "Step 2.5: Seeding Jenkinsfile into '${REPO_NAME}'..."
 
-    # Base64-encode the Jenkinsfile content (Gitea contents API requires base64)
+    # Base64-encode via heredoc (avoids quoting issues with special chars)
     local content
-    content=$(printf '%s' "pipeline {
+    content=$(base64 << 'JFEOF' | tr -d '\n'
+pipeline {
     agent { label 'fellowship-agent' }
 
     stages {
@@ -172,7 +173,7 @@ seed_jenkinsfile() {
                         npm install
                         npm run build --if-present
                     else
-                        echo \"No package.json found, skipping npm build\"
+                        echo "No package.json found, skipping npm build"
                     fi
                 '''
             }
@@ -181,22 +182,32 @@ seed_jenkinsfile() {
 
     post {
         always {
-            echo \"Pipeline complete for student ${STUDENT_ID}\"
+            echo "Pipeline complete"
         }
     }
 }
-" | base64 | tr -d '\n')
+JFEOF
+)
 
-    local response
-    response=$(gitea_api PUT "/repos/${GITEA_ORG_NAME}/${REPO_NAME}/contents/Jenkinsfile" "{
-        \"message\": \"chore: seed Jenkinsfile for fellowship pipeline\",
-        \"content\": \"${content}\"
-    }") || true
+    # Write JSON body to temp file so curl doesn't mangle base64 through shell quoting
+    local tmp_body
+    tmp_body=$(mktemp)
+    printf '{"message":"chore: seed Jenkinsfile for fellowship pipeline","content":"%s"}' "$content" > "$tmp_body"
 
-    if echo "$response" | grep -q '"content"'; then
+    local http_status
+    http_status=$(curl -s -o /dev/null -w "%{http_code}" \
+        -X PUT "${GITEA_URL}/api/v1/repos/${GITEA_ORG_NAME}/${REPO_NAME}/contents/Jenkinsfile" \
+        -u "${GITEA_ADMIN_USER}:${GITEA_ADMIN_PASSWORD}" \
+        -H "Content-Type: application/json" \
+        --data-binary "@${tmp_body}") || true
+    rm -f "$tmp_body"
+
+    if [ "$http_status" = "201" ]; then
         log "  ✓ Jenkinsfile seeded into '${REPO_NAME}'"
+    elif [ "$http_status" = "422" ]; then
+        log "  ✓ Jenkinsfile already exists in '${REPO_NAME}' (skipped)"
     else
-        warn "Jenkinsfile seed may have failed or already exists: $response"
+        warn "Jenkinsfile seed returned HTTP ${http_status}"
     fi
 }
 
