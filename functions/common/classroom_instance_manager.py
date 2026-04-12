@@ -1,4 +1,5 @@
 import json
+import uuid
 import boto3
 import os
 import sys
@@ -48,6 +49,7 @@ try:
     elbv2 = boto3.client('elbv2', region_name=REGION)
     ssm = boto3.client('ssm', region_name=REGION)
     secretsmanager = boto3.client('secretsmanager', region_name=REGION)
+    sqs = boto3.client('sqs', region_name=REGION)
     dynamodb = boto3.resource('dynamodb', region_name=REGION)
     dynamodb_client = boto3.client('dynamodb', region_name=REGION)
     table = dynamodb.Table(f"instance-assignments-{WORKSHOP_NAME}-{ENVIRONMENT}")
@@ -284,33 +286,95 @@ def invoke_ssm_command(instance_id, script_path, parameters, environment_vars=No
         'error': f'Failed to invoke SSM command after {max_retries} retries'
     }
 
+# Queue URL for async provisioning. When set, provision/deprovision calls enqueue
+# to SQS and return immediately. When empty, falls back to synchronous SSM.
+SHARED_CORE_PROVISIONING_QUEUE_URL = os.environ.get('SHARED_CORE_PROVISIONING_QUEUE_URL', '')
+
+
+def _enqueue_provisioning_request(action, student_id, workshop_name, student_password=None):
+    """Send a provisioning/deprovisioning request to SQS.
+
+    Returns:
+        dict(success, request_id, message, async=True)
+    """
+    request_id = str(uuid.uuid4())
+    message = {
+        'request_id': request_id,
+        'action': action,
+        'student_id': student_id,
+        'workshop_name': workshop_name or WORKSHOP_NAME,
+    }
+    if student_password:
+        message['student_password'] = student_password
+
+    try:
+        sqs.send_message(
+            QueueUrl=SHARED_CORE_PROVISIONING_QUEUE_URL,
+            MessageBody=json.dumps(message),
+            MessageAttributes={
+                'action': {'DataType': 'String', 'StringValue': action},
+                'student_id': {'DataType': 'String', 'StringValue': student_id},
+            }
+        )
+        logger.info(
+            f"[{request_id}] Enqueued {action} for student {student_id} — async, returning immediately"
+        )
+        return {
+            'success': True,
+            'request_id': request_id,
+            'async': True,
+            'message': f"{action} queued for student {student_id}; track via request_id",
+            'details': {'student_id': student_id, 'status': 'queued'},
+        }
+    except Exception as exc:
+        logger.error(f"[{request_id}] Failed to enqueue {action} for {student_id}: {exc}")
+        return {
+            'success': False,
+            'request_id': request_id,
+            'async': True,
+            'message': f"{action} enqueue failed: {exc}",
+            'details': {'student_id': student_id, 'status': 'enqueue_failed', 'error': str(exc)},
+        }
+
+
 def provision_student_on_shared_core(student_id, workshop_name=None, student_password=None):
     """Provision a student on the shared-core stack (Gitea user, repo, Jenkins job).
-    
+
+    When SHARED_CORE_PROVISIONING_QUEUE_URL is set the request is enqueued to SQS
+    and this function returns immediately with a request_id for status tracking.
+    When the queue URL is not configured it falls back to synchronous SSM execution.
+
     Args:
         student_id: Student username/ID
         workshop_name: Workshop identifier (defaults to WORKSHOP_NAME)
         student_password: Student password (optional, defaults to 'fellowship123')
-    
+
     Returns:
-        dict with keys: success (bool), command_id (str), message (str), details (dict)
+        dict with keys: success (bool), request_id|command_id (str), message (str),
+                        async (bool), details (dict)
     """
+    # ── Async path (preferred) ────────────────────────────────────────────────
+    if SHARED_CORE_PROVISIONING_QUEUE_URL:
+        return _enqueue_provisioning_request(
+            'provision', student_id, workshop_name, student_password or 'fellowship123'
+        )
+
+    # ── Synchronous fallback (no queue configured) ────────────────────────────
     shared_core_id = get_shared_core_instance_id(workshop_name)
     if not shared_core_id:
         logger.info(f"Shared-core not configured; skipping student provisioning for {student_id}")
         return {
-            'success': True,  # Treat as success (not an error)
+            'success': True,
             'command_id': '',
+            'async': False,
             'message': 'Shared-core not configured; student provisioning skipped',
             'details': {}
         }
-    
+
     credentials = get_shared_core_credentials()
-    
     if not student_password:
-        student_password = 'fellowship123'  # Default password
-    
-    # Prepare environment variables for the provisioning script
+        student_password = 'fellowship123'
+
     environment_vars = {
         'GITEA_ADMIN_USER': credentials.get('gitea_admin_user', 'fellowship'),
         'GITEA_ADMIN_PASSWORD': credentials.get('gitea_admin_password', 'fellowship123'),
@@ -318,23 +382,23 @@ def provision_student_on_shared_core(student_id, workshop_name=None, student_pas
         'JENKINS_ADMIN_USER': credentials.get('jenkins_admin_user', 'fellowship'),
         'JENKINS_ADMIN_PASSWORD': credentials.get('jenkins_admin_password', 'fellowship123'),
     }
-    
-    # Invoke provision-student.sh on shared-core
+
     result = invoke_ssm_command(
         instance_id=shared_core_id,
         script_path="/opt/scripts/provision-student.sh",
         parameters=[student_id, student_password],
         environment_vars=environment_vars
     )
-    
+
     if result['success']:
-        logger.info(f"✓ Successfully provisioned student {student_id} on shared-core")
+        logger.info(f"✓ Provisioned student {student_id} on shared-core (sync)")
     else:
-        logger.error(f"✗ Failed to provision student {student_id} on shared-core: {result['error']}")
-    
+        logger.error(f"✗ Failed to provision student {student_id} on shared-core (sync): {result['error']}")
+
     return {
         'success': result['success'],
         'command_id': result['command_id'],
+        'async': False,
         'message': f"Provision student {student_id} on shared-core",
         'details': {
             'student_id': student_id,
@@ -346,28 +410,38 @@ def provision_student_on_shared_core(student_id, workshop_name=None, student_pas
 
 def deprovision_student_on_shared_core(student_id, workshop_name=None, force=False):
     """Remove a student from the shared-core stack (delete Gitea repo, Jenkins job).
-    
+
+    When SHARED_CORE_PROVISIONING_QUEUE_URL is set the request is enqueued to SQS
+    and this function returns immediately with a request_id for status tracking.
+    When the queue URL is not configured it falls back to synchronous SSM execution.
+
     Args:
         student_id: Student username/ID
         workshop_name: Workshop identifier (defaults to WORKSHOP_NAME)
-        force: If True, skip confirmation warning
-    
+        force: Unused (kept for API compatibility); the provisioner script always
+               runs with --confirm.
+
     Returns:
-        dict with keys: success (bool), command_id (str), message (str), details (dict)
+        dict with keys: success (bool), request_id|command_id (str), message (str),
+                        async (bool), details (dict)
     """
+    # ── Async path (preferred) ────────────────────────────────────────────────
+    if SHARED_CORE_PROVISIONING_QUEUE_URL:
+        return _enqueue_provisioning_request('deprovision', student_id, workshop_name)
+
+    # ── Synchronous fallback (no queue configured) ────────────────────────────
     shared_core_id = get_shared_core_instance_id(workshop_name)
     if not shared_core_id:
         logger.info(f"Shared-core not configured; skipping student deprovisioning for {student_id}")
         return {
-            'success': True,  # Treat as success (not an error)
+            'success': True,
             'command_id': '',
+            'async': False,
             'message': 'Shared-core not configured; student deprovisioning skipped',
             'details': {}
         }
-    
+
     credentials = get_shared_core_credentials()
-    
-    # Prepare environment variables for the deprovisioning script
     environment_vars = {
         'GITEA_ADMIN_USER': credentials.get('gitea_admin_user', 'fellowship'),
         'GITEA_ADMIN_PASSWORD': credentials.get('gitea_admin_password', 'fellowship123'),
@@ -375,23 +449,23 @@ def deprovision_student_on_shared_core(student_id, workshop_name=None, force=Fal
         'JENKINS_ADMIN_USER': credentials.get('jenkins_admin_user', 'fellowship'),
         'JENKINS_ADMIN_PASSWORD': credentials.get('jenkins_admin_password', 'fellowship123'),
     }
-    
-    # Invoke deprovision-student.sh on shared-core with --confirm flag
+
     result = invoke_ssm_command(
         instance_id=shared_core_id,
         script_path="/opt/scripts/deprovision-student.sh",
         parameters=[student_id, "--confirm"],
         environment_vars=environment_vars
     )
-    
+
     if result['success']:
-        logger.info(f"✓ Successfully deprovisioned student {student_id} from shared-core")
+        logger.info(f"✓ Deprovisioned student {student_id} from shared-core (sync)")
     else:
-        logger.error(f"✗ Failed to deprovision student {student_id} from shared-core: {result['error']}")
-    
+        logger.error(f"✗ Failed to deprovision student {student_id} from shared-core (sync): {result['error']}")
+
     return {
         'success': result['success'],
         'command_id': result['command_id'],
+        'async': False,
         'message': f"Deprovision student {student_id} from shared-core",
         'details': {
             'student_id': student_id,
@@ -703,7 +777,6 @@ def get_shared_core_urls(student_id: str = '', workshop_name: str = '') -> dict:
 
 # Cache for password (to avoid repeated Secrets Manager calls)
 _password_cache = None
-_secretsmanager = None  # Reuse Secrets Manager client from above
 _template_map_cache = None
 _template_map_cache_time = None
 # Cache TTL: Reduced to 60 seconds for faster template updates during development
@@ -1293,7 +1366,6 @@ def _normalize_route53_record_name(record_name):
     # Always lowercase for DNS
     record_name = record_name.lower()
     return record_name if record_name.endswith('.') else f"{record_name}."
-    return record_name if record_name.endswith('.') else f"{record_name}."
 
 
 def _delete_route53_a_record(domain_name, strict=False, max_retries=3):
@@ -1443,90 +1515,6 @@ def setup_caddy_domain(instance_id, workshop_name, machine_name=None, domain=Non
             domains_to_create.append(f"jenkins-{final_domain}")
             domains_to_create.append(f"ide-{final_domain}")
             domains_to_create.append(f"gitea-{final_domain}")
-
-        if public_ip:
-            changes = []
-            for d in domains_to_create:
-                changes.append({
-                    'Action': 'UPSERT',
-                    'ResourceRecordSet': {
-                        'Name': d,
-                        'Type': 'A',
-                        'TTL': 300,
-                        'ResourceRecords': [{'Value': public_ip}]
-                    }
-                })
-            route53.change_resource_record_sets(
-                HostedZoneId=HTTPS_HOSTED_ZONE_ID,
-                ChangeBatch={'Changes': changes}
-            )
-            logger.info(f"Created Route53 A records: {domains_to_create} -> {public_ip}")
-        else:
-            logger.warning(f"Instance {instance_id} has no public IP yet, Route53 records will be created when IP is available")
-            logger.info(f"  Domains: {domains_to_create} (will be updated when instance gets public IP)")
-            # Note: Route53 record will be created/updated when IP becomes available
-            # The tags are already set, so setup script can use the domain immediately
-        
-        # Update instance tags (may already be set, but ensure they're correct)
-        ec2.create_tags(
-            Resources=[instance_id],
-            Tags=[
-                {'Key': 'HttpsDomain', 'Value': final_domain},
-                {'Key': 'HttpsUrl', 'Value': https_url},
-                {'Key': 'HttpsEnabled', 'Value': 'true'}
-            ]
-        )
-        logger.info(f"Updated instance tags with HTTPS domain: {final_domain}")
-        
-        return {
-            'domain': final_domain,
-            'https_url': https_url,
-            'public_ip': public_ip
-        }
-    except Exception as e:
-        logger.error(f"Error setting up Caddy domain for {instance_id}: {str(e)}", exc_info=True)
-        return None
-    
-    try:
-        # Use provided domain or construct from machine_name, fallback to instance_id
-        if domain:
-            final_domain = sanitize_domain_name(domain)
-        elif machine_name:
-            # Sanitize machine_name before using it in domain
-            sanitized_machine_name = sanitize_domain_name(machine_name)
-            final_domain = f"{sanitized_machine_name}.{workshop_name}.{HTTPS_BASE_DOMAIN}"
-        else:
-            # Fallback to instance ID (backward compatibility)
-            final_domain = f"{instance_id}.{workshop_name}.{HTTPS_BASE_DOMAIN}"
-        
-        # Ensure the final domain is sanitized (in case workshop_name or HTTPS_BASE_DOMAIN has issues)
-        final_domain = sanitize_domain_name(final_domain)
-        
-        https_url = f"https://{final_domain}"
-        
-        # Get instance public IP (with retries - instance may not have IP immediately)
-        public_ip = None
-        for attempt in range(1, 6):
-            try:
-                response = ec2.describe_instances(InstanceIds=[instance_id])
-                if response.get('Reservations') and response['Reservations'][0].get('Instances'):
-                    instance = response['Reservations'][0]['Instances'][0]
-                    public_ip = instance.get('PublicIpAddress')
-                    if public_ip:
-                        logger.info(f"Got public IP for {instance_id}: {public_ip} (attempt {attempt})")
-                        break
-            except Exception as e:
-                logger.warning(f"Error getting instance info (attempt {attempt}): {str(e)}")
-            
-            if attempt < 5:
-                time.sleep(2)
-        
-        # Create/update Route53 A records for main, jenkins, and ide subdomains
-        route53 = boto3.client('route53')
-        domains_to_create = [final_domain]
-        if str(workshop_name or '').strip().lower() == 'fellowship':
-            domains_to_create.append(f"jenkins-{final_domain}")
-            domains_to_create.append(f"ide-{final_domain}")
 
         if public_ip:
             changes = []
@@ -2010,7 +1998,6 @@ cd "$SUT_DIR"
 docker compose up -d
 log "SUT stack started."
 
-if [ -n "${JENKINS_DOMAIN:-}" ] && [ -d "$ESCAPE_ROOM_DIR" ]; then
 if [ "${SHARED_CORE_MODE:-false}" = "true" ]; then
     log "Shared-core mode enabled — skipping local DevOps Escape Room startup"
 elif [ -n "${JENKINS_DOMAIN:-}" ] && [ -d "$ESCAPE_ROOM_DIR" ]; then

@@ -199,3 +199,9 @@ variable "shared_core_gitea_url" {
   default     = ""
 }
 
+variable "shared_core_provisioning_queue_url" {
+  description = "SQS queue URL for async shared-core student provisioning. When set, instance-manager enqueues provision/deprovision requests instead of calling SSM synchronously."
+  type        = string
+  default     = ""
+}
+

@@ -3,3 +3,4 @@ pytest-asyncio
 playwright
 boto3
 python-dotenv
+requests

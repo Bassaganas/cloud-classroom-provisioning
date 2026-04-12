@@ -7,11 +7,22 @@ import json
 import logging
 import os
 from decimal import Decimal
+from typing import Optional
 
 from boto3.dynamodb.conditions import Attr
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
+
+
+REALM_STOPS = [
+    {"name": "The Shire", "x_pct": 18.0, "y_pct": 62.0},
+    {"name": "Bree", "x_pct": 31.0, "y_pct": 56.0},
+    {"name": "Rivendell", "x_pct": 43.0, "y_pct": 50.0},
+    {"name": "Moria", "x_pct": 50.0, "y_pct": 59.0},
+    {"name": "Lothlorien", "x_pct": 58.0, "y_pct": 53.0},
+    {"name": "Mount Doom", "x_pct": 82.0, "y_pct": 74.0},
+]
 
 
 def _get_dynamodb():
@@ -70,6 +81,20 @@ def _get_method(event: dict) -> str:
     return (event.get("requestContext", {}).get("http", {}).get("method") or event.get("httpMethod") or "GET").upper()
 
 
+def _map_progress_fields(completed_exercises: list) -> dict:
+    progress_count = max(0, min(len(completed_exercises), 5))
+    stop = REALM_STOPS[progress_count]
+    return {
+        "current_realm": stop["name"],
+        "map_position": {
+            "x": stop["x_pct"],
+            "y": stop["y_pct"],
+            "unit": "percent",
+            "checkpoint": progress_count,
+        },
+    }
+
+
 def _list_entries(table) -> list[dict]:
     items = []
     scan_kwargs = {
@@ -90,6 +115,7 @@ def _list_entries(table) -> list[dict]:
     )
     for index, item in enumerate(sorted_items, start=1):
         completed_exercises = _to_json_safe(item.get("completed_exercises", []))
+        map_progress = _map_progress_fields(completed_exercises)
         entries.append(
             {
                 "rank": index,
@@ -98,24 +124,27 @@ def _list_entries(table) -> list[dict]:
                 "completed_exercises": completed_exercises,
                 "progress": f"{len(completed_exercises)}/5",
                 "last_updated": item.get("last_updated"),
+                **map_progress,
             }
         )
     return entries
 
 
-def _get_student(table, student_id: str) -> dict | None:
+def _get_student(table, student_id: str) -> Optional[dict]:
     response = table.get_item(Key={"pk": f"STUDENT#{student_id}", "sk": "profile"})
     item = response.get("Item")
     if not item:
         return None
 
     completed_exercises = _to_json_safe(item.get("completed_exercises", []))
+    map_progress = _map_progress_fields(completed_exercises)
     return {
         "student_id": student_id,
         "total_points": int(_to_json_safe(item.get("total_points", 0))),
         "completed_exercises": completed_exercises,
         "progress": f"{len(completed_exercises)}/5",
         "last_updated": item.get("last_updated"),
+        **map_progress,
     }
 
 
