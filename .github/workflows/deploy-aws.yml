@@ -180,7 +180,9 @@ jobs:
           
           # Extract Lambda Function URL from Terraform outputs
           cd iac/aws
-          INSTANCE_MANAGER_URL=$(terraform output -raw instance_manager_lambda_url 2>/dev/null || echo "")
+          INSTANCE_MANAGER_URL=$(terraform output -raw instance_manager_url 2>/dev/null || true)
+          # Strip any ::error:: annotations emitted by setup-terraform wrapper
+          INSTANCE_MANAGER_URL=$(echo "$INSTANCE_MANAGER_URL" | grep -v '^::' || true)
           if [ -n "$INSTANCE_MANAGER_URL" ]; then
             echo "instance_manager_url=$INSTANCE_MANAGER_URL" >> "$GITHUB_OUTPUT"
             echo "✓ Instance Manager URL: $INSTANCE_MANAGER_URL"
