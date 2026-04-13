@@ -6,6 +6,64 @@ resource "aws_cloudfront_origin_access_control" "docs" {
   signing_protocol                  = "sigv4"
 }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Leadership Board — S3 + CloudFront + Route53
+# ─────────────────────────────────────────────────────────────────────────────
+
+module "leadership" {
+  source = "./modules/leadership"
+
+  environment = var.environment
+  owner       = var.owner
+}
+
+module "leadership_cloudfront" {
+  source = "./modules/cloudfront"
+
+  providers = {
+    aws.us_east_1 = aws.us_east_1
+  }
+
+  environment                     = var.environment
+  owner                           = var.owner
+  workshop_name                   = "leadership"
+  domain_name                     = "leadership.fellowship.testingfantasy.com"
+  s3_origin_bucket                = module.leadership.s3_bucket_name
+  s3_origin_access_control_id     = module.leadership.oac_id
+  enable_s3_path_rewrite          = true
+  wait_for_certificate_validation = var.enable_docs_dns_records
+  enable_route53_records          = var.enable_docs_dns_records
+  zone_name                       = "testingfantasy.com"
+
+  depends_on = [module.leadership]
+}
+
+resource "aws_s3_bucket_policy" "leadership" {
+  bucket = module.leadership.s3_bucket_name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Sid    = "AllowCloudFrontServicePrincipalReadOnly"
+        Effect = "Allow"
+        Principal = {
+          Service = "cloudfront.amazonaws.com"
+        }
+        Action   = "s3:GetObject"
+        Resource = "arn:aws:s3:::${module.leadership.s3_bucket_name}/*"
+        Condition = {
+          StringEquals = {
+            "AWS:SourceArn" = module.leadership_cloudfront.cloudfront_distribution_arn
+          }
+        }
+      }
+    ]
+  })
+
+  depends_on = [module.leadership_cloudfront]
+}
+
 # Docusaurus Docs CloudFront Distribution
 module "docs_cloudfront" {
   source = "./modules/cloudfront"
