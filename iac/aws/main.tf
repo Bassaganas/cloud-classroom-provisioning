@@ -252,6 +252,47 @@ module "jenkins_agent_ecs" {
   subnet_id                     = module.common.subnet_id
   shared_core_security_group_id = module.common.shared_core_security_group_id
   shared_core_ec2_role_name     = module.common.ec2_iam_role_name
+  # ECR repo is managed here (always-on) so it is never destroyed by dev CI runs
+  ecr_repository_url = aws_ecr_repository.jenkins_agent.repository_url
+}
+
+# ── ECR repository (always-on — not gated by manage_shared_core) ─────────────
+#
+# Kept outside the jenkins_agent_ecs module so that automated dev CI runs
+# (manage_shared_core=false) never destroy the repo and lose pushed images.
+resource "aws_ecr_repository" "jenkins_agent" {
+  name                 = "fellowship-jenkins-agent"
+  image_tag_mutability = "MUTABLE"
+  force_delete         = true
+
+  image_scanning_configuration {
+    scan_on_push = true
+  }
+
+  tags = {
+    Environment = var.environment
+    Owner       = var.owner
+    Project     = "classroom"
+    Component   = "jenkins-agent"
+    Company     = "TestingFantasy"
+  }
+}
+
+resource "aws_ecr_lifecycle_policy" "jenkins_agent" {
+  repository = aws_ecr_repository.jenkins_agent.name
+
+  policy = jsonencode({
+    rules = [{
+      rulePriority = 1
+      description  = "Keep last 5 images"
+      selection = {
+        tagStatus   = "any"
+        countType   = "imageCountMoreThan"
+        countNumber = 5
+      }
+      action = { type = "expire" }
+    }]
+  })
 }
 
 module "shared_core_compute" {
@@ -326,7 +367,7 @@ module "shared_core_config" {
 
   # Jenkins ECS agent pool SSM parameters
   jenkins_agent_ecs_cluster_arn         = module.jenkins_agent_ecs[0].ecs_cluster_arn
-  jenkins_agent_ecr_image               = module.jenkins_agent_ecs[0].ecr_repository_url
+  jenkins_agent_ecr_image               = aws_ecr_repository.jenkins_agent.repository_url
   jenkins_agent_ecs_security_group_id   = module.jenkins_agent_ecs[0].agent_security_group_id
   jenkins_agent_task_execution_role_arn = module.jenkins_agent_ecs[0].task_execution_role_arn
   jenkins_agent_task_role_arn           = module.jenkins_agent_ecs[0].task_role_arn

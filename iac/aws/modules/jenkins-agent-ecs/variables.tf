@@ -28,6 +28,11 @@ variable "shared_core_security_group_id" {
   type        = string
 }
 
+variable "ecr_repository_url" {
+  description = "ECR repository URL for the Jenkins agent image (managed at root level)"
+  type        = string
+}
+
 variable "shared_core_ec2_role_name" {
   description = "Name (not ARN) of the shared-core EC2 IAM role to attach ECS permissions to"
   type        = string
