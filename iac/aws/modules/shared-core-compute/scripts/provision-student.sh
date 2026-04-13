@@ -149,10 +149,17 @@ create_gitea_repo() {
 seed_jenkinsfile() {
     log "Step 2.5: Seeding Jenkinsfile into '${REPO_NAME}'..."
 
-    # Base64-encode via heredoc (avoids quoting issues with special chars)
-    local content
-    content=$(base64 << 'JFEOF' | tr -d '\n'
-pipeline {
+    # Use Python for the HTTP call — avoids bash quoting issues with base64/JSON over HTTPS
+    _REPO_NAME="${REPO_NAME}" python3 - << 'PYEOF'
+import urllib.request, urllib.error, base64, json, os
+
+gitea_url  = os.environ.get('GITEA_URL', 'http://localhost:3030')
+admin_user = os.environ.get('GITEA_ADMIN_USER', 'fellowship')
+admin_pass = os.environ.get('GITEA_ADMIN_PASSWORD', 'fellowship123')
+org_name   = os.environ.get('GITEA_ORG_NAME', 'fellowship-org')
+repo_name  = os.environ.get('_REPO_NAME', '')
+
+jenkinsfile = b"""pipeline {
     agent { label 'fellowship-agent' }
 
     stages {
@@ -181,34 +188,32 @@ pipeline {
     }
 
     post {
-        always {
-            echo "Pipeline complete"
-        }
+        always { echo "Pipeline complete" }
     }
 }
-JFEOF
-)
+"""
 
-    # Write JSON body to temp file so curl doesn't mangle base64 through shell quoting
-    local tmp_body
-    tmp_body=$(mktemp)
-    printf '{"message":"chore: seed Jenkinsfile for fellowship pipeline","content":"%s"}' "$content" > "$tmp_body"
+url = f"{gitea_url}/api/v1/repos/{org_name}/{repo_name}/contents/Jenkinsfile"
+payload = json.dumps({
+    "message": "chore: seed Jenkinsfile for fellowship pipeline",
+    "content": base64.b64encode(jenkinsfile).decode()
+}).encode()
 
-    local http_status
-    http_status=$(curl -s -o /dev/null -w "%{http_code}" \
-        -X PUT "${GITEA_URL}/api/v1/repos/${GITEA_ORG_NAME}/${REPO_NAME}/contents/Jenkinsfile" \
-        -u "${GITEA_ADMIN_USER}:${GITEA_ADMIN_PASSWORD}" \
-        -H "Content-Type: application/json" \
-        --data-binary "@${tmp_body}") || true
-    rm -f "$tmp_body"
+creds = base64.b64encode(f"{admin_user}:{admin_pass}".encode()).decode()
+req = urllib.request.Request(url, data=payload, method='POST')
+req.add_header('Authorization', f'Basic {creds}')
+req.add_header('Content-Type', 'application/json')
 
-    if [ "$http_status" = "201" ]; then
-        log "  ✓ Jenkinsfile seeded into '${REPO_NAME}'"
-    elif [ "$http_status" = "422" ]; then
-        log "  ✓ Jenkinsfile already exists in '${REPO_NAME}' (skipped)"
-    else
-        warn "Jenkinsfile seed returned HTTP ${http_status}"
-    fi
+try:
+    urllib.request.urlopen(req)
+    print(f"[provision]   \u2713 Jenkinsfile seeded into '{repo_name}'")
+except urllib.error.HTTPError as e:
+    body = e.read().decode(errors='replace')
+    if e.code == 422 and 'already exist' in body.lower():
+        print(f"[provision]   \u2713 Jenkinsfile already exists in '{repo_name}' (skipped)")
+    else:
+        print(f"[provision] WARNING: Jenkinsfile seed returned HTTP {e.code}: {body[:300]}")
+PYEOF
 }
 
 create_webhook() {
@@ -268,7 +273,7 @@ XML
 
 create_jenkins_pipeline() {
     log "Step 5: Creating Jenkins pipeline job for student '${STUDENT_ID}'..."
-    local clone_url="${GITEA_INTERNAL_URL}/${GITEA_ORG_NAME}/${REPO_NAME}.git"
+    local clone_url="${GITEA_URL}/${GITEA_ORG_NAME}/${REPO_NAME}.git"
     local job_xml
     job_xml=$(cat <<XML
 <?xml version='1.1' encoding='UTF-8'?>
@@ -327,7 +332,7 @@ print_summary() {
     log "=================================================="
     log "  Gitea repo:    ${SHARED_GITEA_URL}/${GITEA_ORG_NAME}/${REPO_NAME}"
     log "  Jenkins job:   ${SHARED_JENKINS_URL}job/${STUDENT_ID}/job/fellowship-pipeline/"
-    log "  Git clone URL: ${GITEA_INTERNAL_URL}/${GITEA_ORG_NAME}/${REPO_NAME}.git"
+    log "  Git clone URL: ${GITEA_URL}/${GITEA_ORG_NAME}/${REPO_NAME}.git"
     log "  Credentials:   ${STUDENT_ID} / ${STUDENT_PASSWORD}"
     log "=================================================="
 }

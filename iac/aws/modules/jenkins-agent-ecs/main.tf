@@ -274,7 +274,10 @@ resource "aws_iam_role_policy" "shared_core_ecs_permissions" {
           "ecs:DescribeTasks",
           "ecs:ListContainerInstances",
           "ecs:DescribeContainerInstances",
-          "ecs:ListTasks"
+          "ecs:ListTasks",
+          "ecs:TagResource",
+          "ecs:UntagResource",
+          "ecs:ListTagsForResource"
         ]
         Resource = "*"
       },
