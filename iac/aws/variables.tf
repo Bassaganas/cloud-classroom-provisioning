@@ -172,6 +172,12 @@ variable "shared_core_gitea_admin_password" {
   sensitive   = true
 }
 
+variable "manage_shared_core" {
+  description = "When true, Terraform manages the shared-core EC2 instance, IAM role, Secrets Manager bundle, SSM config parameters, and ECS agent cluster. Set to false for automated dev CI runs so that the production shared-core is not touched."
+  type        = bool
+  default     = true
+}
+
 # Common infrastructure variables
 variable "common_workshop_name" {
   description = "Workshop identifier for shared EC2 manager resources"

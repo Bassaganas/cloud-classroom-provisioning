@@ -47,6 +47,13 @@ resource "aws_instance" "shared_core_host" {
     http_put_response_hop_limit = 2
   }
 
+  # Prevent Terraform from replacing the instance when a newer Amazon Linux 2
+  # AMI is published.  The shared-core host carries persistent Docker state
+  # (Jenkins home, Gitea data) that would be lost on replacement.
+  lifecycle {
+    ignore_changes = [ami]
+  }
+
   tags = {
     Name        = "shared-core-${var.shared_core_environment}"
     Environment = var.shared_core_environment

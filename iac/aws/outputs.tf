@@ -48,18 +48,18 @@ output "tutorial_always_on_links_parameter_name" {
 }
 
 output "shared_core_github_actions_role_arn" {
-  description = "IAM role ARN for the shared-core GitHub Actions deploy workflow"
-  value       = module.shared_core_iam.github_actions_role_arn
+  description = "IAM role ARN for the shared-core GitHub Actions deploy workflow (null when manage_shared_core=false)"
+  value       = try(module.shared_core_iam[0].github_actions_role_arn, null)
 }
 
 output "shared_core_deploy_secret_name" {
-  description = "Secrets Manager secret name for shared-core deploy credentials"
-  value       = module.shared_core_secrets.deploy_secret_name
+  description = "Secrets Manager secret name for shared-core deploy credentials (null when manage_shared_core=false)"
+  value       = try(module.shared_core_secrets[0].deploy_secret_name, null)
 }
 
 output "shared_core_config_parameter_names" {
-  description = "SSM parameter names used by the shared-core deploy workflow"
-  value       = module.shared_core_config.config_parameter_names
+  description = "SSM parameter names used by the shared-core deploy workflow (null when manage_shared_core=false)"
+  value       = try(module.shared_core_config[0].config_parameter_names, null)
 }
 
 # Aggregate outputs from all modules
@@ -91,18 +91,18 @@ output "security_group_id" {
 }
 
 output "shared_core_security_group_id" {
-  description = "ID of the shared-core Jenkins and Gitea security group"
-  value       = module.shared_core_compute.security_group_id
+  description = "ID of the shared-core Jenkins and Gitea security group (null when manage_shared_core=false)"
+  value       = try(module.shared_core_compute[0].security_group_id, null)
 }
 
 output "shared_core_instance_id" {
-  description = "EC2 instance ID of the Terraform-managed shared-core host"
-  value       = module.shared_core_compute.instance_id
+  description = "EC2 instance ID of the Terraform-managed shared-core host (null when manage_shared_core=false)"
+  value       = try(module.shared_core_compute[0].instance_id, null)
 }
 
 output "shared_core_ssh_host" {
-  description = "SSH host used by the shared-core deployment workflow"
-  value       = module.shared_core_compute.ssh_host
+  description = "SSH host used by the shared-core deployment workflow (null when manage_shared_core=false)"
+  value       = try(module.shared_core_compute[0].ssh_host, null)
 }
 
 output "subnet_id" {

@@ -159,10 +159,10 @@ jobs:
           SKIP_TEMPLATE_PUBLISH: 'true'
           TF_VAR_lambda_artifact_bucket: ${{ vars.LAMBDA_ARTIFACT_BUCKET || '' }}
           TF_VAR_lambda_artifact_key: ${{ vars.LAMBDA_ARTIFACT_KEY || 'palantir/leaderboard_lambda.zip' }}
-          TF_VAR_shared_core_ssh_private_key: ${{ secrets.SHARED_CORE_SSH_PRIVATE_KEY }}
-          TF_VAR_shared_core_gh_repo_token: ${{ secrets.SHARED_CORE_GH_REPO_TOKEN }}
-          TF_VAR_shared_core_jenkins_admin_password: ${{ secrets.SHARED_CORE_JENKINS_ADMIN_PASSWORD }}
-          TF_VAR_shared_core_gitea_admin_password: ${{ secrets.SHARED_CORE_GITEA_ADMIN_PASSWORD }}
+          # Automated dev CI must never modify the production shared-core host.
+          # The shared-core group (EC2, ECS agent cluster, IAM OIDC role, Secrets Manager,
+          # SSM config params) is only managed via workflow_dispatch (deploy_manual).
+          TF_VAR_manage_shared_core: 'false'
         run: |
           SKIP_PKG_FLAG=""
           if [ "${{ steps.lambda-cache.outputs.cache-hit }}" = "true" ]; then
@@ -258,6 +258,9 @@ jobs:
           TF_VAR_shared_core_gh_repo_token: ${{ secrets.SHARED_CORE_GH_REPO_TOKEN }}
           TF_VAR_shared_core_jenkins_admin_password: ${{ secrets.SHARED_CORE_JENKINS_ADMIN_PASSWORD }}
           TF_VAR_shared_core_gitea_admin_password: ${{ secrets.SHARED_CORE_GITEA_ADMIN_PASSWORD }}
+          # manage_shared_core defaults to true in terraform.tfvars; override to false
+          # if this manual run should skip shared-core (e.g. workshop-only deploys).
+          TF_VAR_manage_shared_core: ${{ vars.MANAGE_SHARED_CORE || 'true' }}
         run: |
           EXTRA_FLAGS=""
           if [ "${{ inputs.action }}" = "destroy" ]; then
@@ -275,3 +278,222 @@ jobs:
             --environment "${{ inputs.environment }}" \
             --workshop "${{ inputs.workshop }}" \
             $EXTRA_FLAGS
+
+      - name: Check shared-core health (post-Terraform)
+        if: inputs.action != 'destroy'
+        run: |
+          set -euo pipefail
+          ENV="${{ inputs.environment }}"
+          SC_ENV="${ENV}"
+          # shared_core_environment is always "prod" in the current config
+          JENKINS_DOMAIN=$(aws ssm get-parameter \
+            --name "/classroom/shared-core/prod/jenkins-domain" \
+            --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+          GITEA_DOMAIN=$(aws ssm get-parameter \
+            --name "/classroom/shared-core/prod/gitea-domain" \
+            --query 'Parameter.Value' --output text 2>/dev/null || echo "")
+
+          if [ -z "$JENKINS_DOMAIN" ]; then
+            echo "::notice::No shared-core Jenkins domain configured in SSM. Skipping health check."
+            exit 0
+          fi
+
+          echo "Checking shared-core health..."
+          JENKINS_OK=false
+          GITEA_OK=false
+          for i in 1 2 3; do
+            if curl -sSf "https://${JENKINS_DOMAIN}/login" -o /dev/null --max-time 10 2>/dev/null; then
+              JENKINS_OK=true; break
+            fi
+            sleep 5
+          done
+          for i in 1 2 3; do
+            if curl -sSf "https://${GITEA_DOMAIN}/api/v1/version" -o /dev/null --max-time 10 2>/dev/null; then
+              GITEA_OK=true; break
+            fi
+            sleep 5
+          done
+
+          if [ "$JENKINS_OK" = "false" ] || [ "$GITEA_OK" = "false" ]; then
+            echo "::warning::Shared-core services are not healthy (Jenkins=$JENKINS_OK, Gitea=$GITEA_OK). Run the deploy-shared-core workflow in the lotr_sut repository to bootstrap Docker + services on the EC2 instance."
+          else
+            echo "✓ Shared-core healthy: Jenkins at https://${JENKINS_DOMAIN}/ and Gitea at https://${GITEA_DOMAIN}/"
+          fi
+
+  # ---------------------------------------------------------------------------
+  # Production promotion pipeline (runs only on push to main)
+  #
+  # Flow:
+  #   deploy_dev → e2e_prod_gate (E2E tests against dev URL) → deploy_prod
+  #                                                              ↗ (environment: prod)
+  #                                                              Manual approval required
+  # ---------------------------------------------------------------------------
+
+  e2e_prod_gate:
+    name: E2E Gate for Prod Promotion
+    if: github.event_name == 'push' && github.ref_name == 'main'
+    needs: [deploy_dev]
+    runs-on: ubuntu-latest
+    environment: dev
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: frontend/ec2-manager/package-lock.json
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Resolve EC2 manager password (dev)
+        run: |
+          SECRET_NAME="classroom/shared/dev/instance-manager/password"
+          echo "Resolving password from: $SECRET_NAME"
+          SECRET_VALUE=$(aws secretsmanager get-secret-value \
+            --secret-id "$SECRET_NAME" \
+            --query SecretString \
+            --output text)
+          if [ -z "$SECRET_VALUE" ] || [ "$SECRET_VALUE" = "None" ]; then
+            echo "::error::Failed to resolve EC2 manager password from $SECRET_NAME"
+            exit 1
+          fi
+          echo "::add-mask::$SECRET_VALUE"
+          echo "E2E_INSTANCE_MANAGER_PASSWORD=$SECRET_VALUE" >> "$GITHUB_ENV"
+
+      - name: Install frontend dependencies
+        working-directory: frontend/ec2-manager
+        run: npm ci
+
+      - name: Install Playwright browser + system deps
+        working-directory: frontend/ec2-manager
+        run: npx playwright install --with-deps chromium
+
+      - name: Run E2E tests against deployed dev environment
+        run: |
+          DEV_URL="${{ needs.deploy_dev.outputs.instance_manager_url }}"
+          if [ -z "$DEV_URL" ]; then
+            DEV_URL="https://ec2-management-dev.testingfantasy.com"
+            echo "⚠ No URL from deploy_dev output, using fallback: $DEV_URL"
+          fi
+          DEV_URL="${DEV_URL%/}"
+          echo "Testing: $DEV_URL"
+          cd frontend/ec2-manager
+          E2E_BASE_URL="$DEV_URL" \
+          E2E_API_URL="https://ec2-management-api-dev.testingfantasy.com/api" \
+          E2E_INSTANCE_MANAGER_PASSWORD="$E2E_INSTANCE_MANAGER_PASSWORD" \
+          npx playwright test tests/e2e/tutorial-instance-manager.spec.js \
+            --reporter=list,html \
+            --output=test-results
+
+      - name: Upload E2E test results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-prod-gate-results
+          path: frontend/ec2-manager/test-results/
+          if-no-files-found: warn
+
+  deploy_prod:
+    name: Deploy Production Infrastructure
+    if: github.event_name == 'push' && github.ref_name == 'main'
+    needs: [e2e_prod_gate]
+    runs-on: ubuntu-latest
+    # environment: prod requires a manual approval review in GitHub Environments settings.
+    # Configure the "prod" environment with required reviewers in:
+    # Repository → Settings → Environments → prod → Required reviewers
+    environment: prod
+    concurrency:
+      group: deploy-aws-prod
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.6
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Cache Lambda packages
+        id: lambda-cache
+        uses: actions/cache@v4
+        with:
+          path: functions/packages
+          key: ${{ runner.os }}-lambda-${{ hashFiles('functions/**') }}
+          restore-keys: |
+            ${{ runner.os }}-lambda-
+
+      - name: Validate leaderboard Lambda artifact
+        env:
+          LAMBDA_ARTIFACT_BUCKET: ${{ vars.LAMBDA_ARTIFACT_BUCKET }}
+          LAMBDA_ARTIFACT_KEY: ${{ vars.LAMBDA_ARTIFACT_KEY || 'palantir/leaderboard_lambda.zip' }}
+        run: |
+          if [ -z "$LAMBDA_ARTIFACT_BUCKET" ]; then
+            echo "No LAMBDA_ARTIFACT_BUCKET configured. Will use locally packaged artifact if available."
+            exit 0
+          fi
+
+          if [ "${#LAMBDA_ARTIFACT_BUCKET}" -lt 3 ]; then
+            echo "::error::Invalid LAMBDA_ARTIFACT_BUCKET '$LAMBDA_ARTIFACT_BUCKET'. Bucket name must be at least 3 characters."
+            exit 1
+          fi
+
+          aws s3api head-object --bucket "$LAMBDA_ARTIFACT_BUCKET" --key "$LAMBDA_ARTIFACT_KEY" >/dev/null
+          echo "✓ Found artifact s3://$LAMBDA_ARTIFACT_BUCKET/$LAMBDA_ARTIFACT_KEY"
+
+      - name: Deploy prod environment (shared-core + classroom infra)
+        env:
+          CLASSROOM_NAME: ${{ vars.CLASSROOM_NAME_PROD || vars.CLASSROOM_NAME || 'fellowship' }}
+          WORKSHOP: ${{ vars.WORKSHOP || 'fellowship' }}
+          SKIP_TEMPLATE_PUBLISH: 'true'
+          TF_VAR_lambda_artifact_bucket: ${{ vars.LAMBDA_ARTIFACT_BUCKET || '' }}
+          TF_VAR_lambda_artifact_key: ${{ vars.LAMBDA_ARTIFACT_KEY || 'palantir/leaderboard_lambda.zip' }}
+          TF_VAR_shared_core_ssh_private_key: ${{ secrets.SHARED_CORE_SSH_PRIVATE_KEY }}
+          TF_VAR_shared_core_gh_repo_token: ${{ secrets.SHARED_CORE_GH_REPO_TOKEN }}
+          TF_VAR_shared_core_jenkins_admin_password: ${{ secrets.SHARED_CORE_JENKINS_ADMIN_PASSWORD }}
+          TF_VAR_shared_core_gitea_admin_password: ${{ secrets.SHARED_CORE_GITEA_ADMIN_PASSWORD }}
+          TF_VAR_manage_shared_core: 'true'
+        run: |
+          SKIP_PKG_FLAG=""
+          if [ "${{ steps.lambda-cache.outputs.cache-hit }}" = "true" ]; then
+            echo "Lambda packages restored from cache – skipping repackaging"
+            SKIP_PKG_FLAG="--skip-packaging"
+          fi
+
+          ./scripts/setup_classroom.sh \
+            --name "$CLASSROOM_NAME" \
+            --cloud aws \
+            --region "${AWS_REGION}" \
+            --environment prod \
+            --workshop "$WORKSHOP" \
+            $SKIP_PKG_FLAG

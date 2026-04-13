@@ -76,7 +76,7 @@ module "docs_cloudfront" {
   owner                           = var.owner
   workshop_name                   = "docs"
   domain_name                     = "docs.fellowship.testingfantasy.com"
-  s3_origin_bucket                = "docusaurus-docs-bucket-default"
+  s3_origin_bucket                = "docusaurus-docs-bucket-${var.environment}"
   s3_origin_access_control_id     = aws_cloudfront_origin_access_control.docs.id
   wait_for_certificate_validation = var.enable_docs_dns_records
   enable_route53_records          = var.enable_docs_dns_records
@@ -84,7 +84,7 @@ module "docs_cloudfront" {
 }
 
 resource "aws_s3_bucket_policy" "docs" {
-  bucket = "docusaurus-docs-bucket-default"
+  bucket = "docusaurus-docs-bucket-${var.environment}"
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -96,7 +96,7 @@ resource "aws_s3_bucket_policy" "docs" {
           Service = "cloudfront.amazonaws.com"
         }
         Action   = "s3:GetObject"
-        Resource = "arn:aws:s3:::docusaurus-docs-bucket-default/*"
+        Resource = "arn:aws:s3:::docusaurus-docs-bucket-${var.environment}/*"
         Condition = {
           StringEquals = {
             "AWS:SourceArn" = module.docs_cloudfront.cloudfront_distribution_arn
@@ -168,7 +168,33 @@ module "common" {
   shared_core_gitea_domain           = var.shared_core_gitea_domain
 }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Shared-core group — only applied when manage_shared_core = true.
+# Automated dev CI sets manage_shared_core = false so that a routine push to
+# main never touches the production Jenkins/Gitea host or its OIDC role.
+# Use the deploy_manual workflow (workflow_dispatch, environment=prod) or a
+# local terraform apply to manage these resources intentionally.
+# ─────────────────────────────────────────────────────────────────────────────
+
+module "jenkins_agent_ecs" {
+  count = var.manage_shared_core ? 1 : 0
+
+  source = "./modules/jenkins-agent-ecs"
+
+  depends_on = [module.common]
+
+  environment                   = var.environment
+  owner                         = var.owner
+  region                        = var.region
+  vpc_id                        = module.common.vpc_id
+  subnet_id                     = module.common.subnet_id
+  shared_core_security_group_id = module.common.shared_core_security_group_id
+  shared_core_ec2_role_name     = module.common.ec2_iam_role_name
+}
+
 module "shared_core_compute" {
+  count = var.manage_shared_core ? 1 : 0
+
   source = "./modules/shared-core-compute"
 
   depends_on = [module.common]
@@ -191,6 +217,8 @@ module "shared_core_compute" {
 }
 
 module "shared_core_secrets" {
+  count = var.manage_shared_core ? 1 : 0
+
   source = "./modules/shared-core-secrets"
 
   owner                              = var.owner
@@ -202,6 +230,8 @@ module "shared_core_secrets" {
 }
 
 module "shared_core_iam" {
+  count = var.manage_shared_core ? 1 : 0
+
   source = "./modules/shared-core-iam"
 
   environment                    = var.environment
@@ -211,45 +241,34 @@ module "shared_core_iam" {
   shared_core_github_owner       = var.shared_core_github_owner
   shared_core_github_repo        = var.shared_core_github_repo
   shared_core_github_environment = var.shared_core_github_environment
-  shared_core_deploy_secret_arn  = module.shared_core_secrets.deploy_secret_arn
+  shared_core_deploy_secret_arn  = module.shared_core_secrets[0].deploy_secret_arn
 }
 
 module "shared_core_config" {
+  count = var.manage_shared_core ? 1 : 0
+
   source = "./modules/shared-core-config"
 
   owner                         = var.owner
   shared_core_environment       = var.shared_core_environment
-  shared_core_instance_id       = module.shared_core_compute.instance_id
-  shared_core_ssh_host          = module.shared_core_compute.ssh_host
+  shared_core_instance_id       = module.shared_core_compute[0].instance_id
+  shared_core_ssh_host          = module.shared_core_compute[0].ssh_host
   shared_core_jenkins_domain    = var.shared_core_jenkins_domain
   shared_core_gitea_domain      = var.shared_core_gitea_domain
-  shared_core_security_group_id = module.shared_core_compute.security_group_id
-  shared_core_hosted_zone_id    = var.shared_core_hosted_zone_id != "" ? var.shared_core_hosted_zone_id : module.shared_core_compute.hosted_zone_id
+  shared_core_security_group_id = module.shared_core_compute[0].security_group_id
+  shared_core_hosted_zone_id    = var.shared_core_hosted_zone_id != "" ? var.shared_core_hosted_zone_id : module.shared_core_compute[0].hosted_zone_id
+  shared_core_private_ip        = module.shared_core_compute[0].private_ip
   shared_core_gitea_admin_user  = var.shared_core_gitea_admin_user
   shared_core_gitea_admin_email = var.shared_core_gitea_admin_email
   shared_core_gitea_org_name    = var.shared_core_gitea_org_name
 
   # Jenkins ECS agent pool SSM parameters
-  jenkins_agent_ecs_cluster_arn         = module.jenkins_agent_ecs.ecs_cluster_arn
-  jenkins_agent_ecr_image               = module.jenkins_agent_ecs.ecr_repository_url
-  jenkins_agent_ecs_security_group_id   = module.jenkins_agent_ecs.agent_security_group_id
-  jenkins_agent_task_execution_role_arn = module.jenkins_agent_ecs.task_execution_role_arn
-  jenkins_agent_task_role_arn           = module.jenkins_agent_ecs.task_role_arn
-}
-
-# Jenkins ECS Fargate Agent Pool
-module "jenkins_agent_ecs" {
-  source = "./modules/jenkins-agent-ecs"
-
-  depends_on = [module.common]
-
-  environment                   = var.environment
-  owner                         = var.owner
-  region                        = var.region
-  vpc_id                        = module.common.vpc_id
-  subnet_id                     = module.common.subnet_id
-  shared_core_security_group_id = module.common.shared_core_security_group_id
-  shared_core_ec2_role_name     = module.common.ec2_iam_role_name
+  jenkins_agent_ecs_cluster_arn         = module.jenkins_agent_ecs[0].ecs_cluster_arn
+  jenkins_agent_ecr_image               = module.jenkins_agent_ecs[0].ecr_repository_url
+  jenkins_agent_ecs_security_group_id   = module.jenkins_agent_ecs[0].agent_security_group_id
+  jenkins_agent_task_execution_role_arn = module.jenkins_agent_ecs[0].task_execution_role_arn
+  jenkins_agent_task_role_arn           = module.jenkins_agent_ecs[0].task_role_arn
+  jenkins_agent_subnet_id               = module.common.subnet_id
 }
 
 # Fellowship Workshop Module
