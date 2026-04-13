@@ -22,6 +22,7 @@ locals {
 resource "aws_ecr_repository" "jenkins_agent" {
   name                 = "fellowship-jenkins-agent"
   image_tag_mutability = "MUTABLE"
+  force_delete         = true
 
   image_scanning_configuration {
     scan_on_push = true
