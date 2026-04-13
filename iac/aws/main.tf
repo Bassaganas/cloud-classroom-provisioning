@@ -81,10 +81,36 @@ module "docs_cloudfront" {
   wait_for_certificate_validation = var.enable_docs_dns_records
   enable_route53_records          = var.enable_docs_dns_records
   zone_name                       = "testingfantasy.com"
+
+  depends_on = [aws_s3_bucket.docs]
+}
+
+resource "aws_s3_bucket" "docs" {
+  # Name must stay in sync with DOCS_S3_BUCKET in palantir-jenkins-ai/deploy-docusaurus.yml.
+  # The docs site is environment-independent (always "prod" bucket for the live docs site),
+  # but we keep the environment suffix so dev applies can create a dev bucket without collision.
+  bucket = "docusaurus-docs-bucket-${var.environment}"
+
+  tags = {
+    Environment = var.environment
+    Owner       = var.owner
+    Project     = "classroom"
+    WorkshopID  = "docs"
+    Company     = "TestingFantasy"
+  }
+}
+
+resource "aws_s3_bucket_public_access_block" "docs" {
+  bucket = aws_s3_bucket.docs.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
 }
 
 resource "aws_s3_bucket_policy" "docs" {
-  bucket = "docusaurus-docs-bucket-${var.environment}"
+  bucket = aws_s3_bucket.docs.id
 
   policy = jsonencode({
     Version = "2012-10-17"
@@ -106,7 +132,43 @@ resource "aws_s3_bucket_policy" "docs" {
     ]
   })
 
+  depends_on = [module.docs_cloudfront, aws_s3_bucket_public_access_block.docs]
+}
+
+# Publish docs CloudFront distribution ID to SSM so palantir-jenkins-ai/deploy-docusaurus.yml
+# can read it as vars.DOCS_CF_DISTRIBUTION_ID without hardcoding a value in the workflow.
+resource "aws_ssm_parameter" "docs_cf_distribution_id" {
+  name        = "/cloud-classroom/docs/cloudfront-distribution-id"
+  description = "CloudFront distribution ID for the Docusaurus docs site (read by deploy-docusaurus.yml)"
+  type        = "String"
+  value       = module.docs_cloudfront.cloudfront_distribution_id
+  overwrite   = true
+
+  tags = {
+    Environment = var.environment
+    Owner       = var.owner
+    Project     = "classroom"
+    Company     = "TestingFantasy"
+  }
+
   depends_on = [module.docs_cloudfront]
+}
+
+resource "aws_ssm_parameter" "docs_s3_bucket" {
+  name        = "/cloud-classroom/docs/s3-bucket"
+  description = "S3 bucket name for the Docusaurus docs site (read by deploy-docusaurus.yml)"
+  type        = "String"
+  value       = aws_s3_bucket.docs.id
+  overwrite   = true
+
+  tags = {
+    Environment = var.environment
+    Owner       = var.owner
+    Project     = "classroom"
+    Company     = "TestingFantasy"
+  }
+
+  depends_on = [aws_s3_bucket.docs]
 }
 resource "aws_ssm_parameter" "tutorial_always_on_links" {
   name        = "/cloud-classroom/tutorial-always-on-links"
