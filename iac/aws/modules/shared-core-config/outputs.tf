@@ -15,5 +15,6 @@ output "config_parameter_names" {
     agent_security_group_id       = aws_ssm_parameter.jenkins_agent_ecs_security_group_id.name
     agent_task_execution_role_arn = aws_ssm_parameter.jenkins_agent_task_execution_role_arn.name
     agent_task_role_arn           = aws_ssm_parameter.jenkins_agent_task_role_arn.name
+    agent_subnet_id               = aws_ssm_parameter.jenkins_agent_subnet_id.name
   }
 }

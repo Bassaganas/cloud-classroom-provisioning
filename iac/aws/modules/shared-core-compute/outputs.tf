@@ -3,6 +3,11 @@ output "instance_id" {
   value       = aws_instance.shared_core_host.id
 }
 
+output "private_ip" {
+  description = "Private IP of the shared-core host (used for JNLP tunnel)"
+  value       = aws_instance.shared_core_host.private_ip
+}
+
 output "public_ip" {
   description = "Current public IP of the shared-core host"
   value       = aws_instance.shared_core_host.public_ip

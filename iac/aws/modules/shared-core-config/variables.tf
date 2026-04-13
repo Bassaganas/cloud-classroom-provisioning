@@ -78,3 +78,13 @@ variable "jenkins_agent_task_role_arn" {
   description = "ARN of the ECS task role"
   type        = string
 }
+
+variable "jenkins_agent_subnet_id" {
+  description = "Subnet ID where Jenkins ECS Fargate agent tasks are launched"
+  type        = string
+}
+
+variable "shared_core_private_ip" {
+  description = "Private IP address of the shared-core EC2 instance (used for JNLP tunnel)"
+  type        = string
+}

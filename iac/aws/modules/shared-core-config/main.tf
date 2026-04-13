@@ -222,3 +222,34 @@ resource "aws_ssm_parameter" "jenkins_agent_task_role_arn" {
     Company     = "TestingFantasy"
   }
 }
+
+resource "aws_ssm_parameter" "jenkins_agent_subnet_id" {
+  name        = "${local.shared_core_prefix}/agent/subnet-id"
+  description = "Subnet ID where Jenkins ECS Fargate agent tasks are launched"
+  type        = "String"
+  value       = var.jenkins_agent_subnet_id
+  tier        = "Standard"
+
+  tags = {
+    Environment = var.shared_core_environment
+    Owner       = var.owner
+    Project     = "classroom"
+    Company     = "TestingFantasy"
+  }
+}
+
+resource "aws_ssm_parameter" "jenkins_agent_jnlp_tunnel" {
+  name        = "${local.shared_core_prefix}/agent/jnlp-tunnel"
+  description = "JNLP tunnel endpoint (private_ip:50000) for ECS Fargate agents connecting to Jenkins"
+  type        = "String"
+  value       = "${var.shared_core_private_ip}:50000"
+  tier        = "Standard"
+  overwrite   = true
+
+  tags = {
+    Environment = var.shared_core_environment
+    Owner       = var.owner
+    Project     = "classroom"
+    Company     = "TestingFantasy"
+  }
+}
