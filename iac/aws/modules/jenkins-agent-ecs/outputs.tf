@@ -10,7 +10,7 @@ output "ecs_cluster_name" {
 
 output "ecr_repository_url" {
   description = "ECR repository URL for the custom Jenkins agent image"
-  value       = aws_ecr_repository.jenkins_agent.repository_url
+  value       = var.ecr_repository_url
 }
 
 output "agent_security_group_id" {

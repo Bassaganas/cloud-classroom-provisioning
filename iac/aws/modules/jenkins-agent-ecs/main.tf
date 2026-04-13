@@ -17,43 +17,6 @@ locals {
   prefix = "fellowship-jenkins-agent-${var.environment}"
 }
 
-# ── ECR repository ──────────────────────────────────────────────────────────
-
-resource "aws_ecr_repository" "jenkins_agent" {
-  name                 = "fellowship-jenkins-agent"
-  image_tag_mutability = "MUTABLE"
-  force_delete         = true
-
-  image_scanning_configuration {
-    scan_on_push = true
-  }
-
-  tags = {
-    Environment = var.environment
-    Owner       = var.owner
-    Project     = "classroom"
-    Component   = "jenkins-agent"
-    Company     = "TestingFantasy"
-  }
-}
-
-resource "aws_ecr_lifecycle_policy" "jenkins_agent" {
-  repository = aws_ecr_repository.jenkins_agent.name
-
-  policy = jsonencode({
-    rules = [{
-      rulePriority = 1
-      description  = "Keep last 5 images"
-      selection = {
-        tagStatus   = "any"
-        countType   = "imageCountMoreThan"
-        countNumber = 5
-      }
-      action = { type = "expire" }
-    }]
-  })
-}
-
 # ── ECS Cluster ─────────────────────────────────────────────────────────────
 
 resource "aws_ecs_cluster" "jenkins_agents" {
@@ -183,7 +146,8 @@ resource "aws_iam_role_policy_attachment" "task_execution_managed" {
   policy_arn = "arn:${data.aws_partition.current.partition}:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy"
 }
 
-# Allow task execution role to pull from the ECR repo
+# Allow task execution role to pull from the ECR repo (the repo is managed at
+# root level so it persists across manage_shared_core=false dev CI runs).
 resource "aws_iam_role_policy" "task_execution_ecr" {
   name = "${local.prefix}-ecr-pull"
   role = aws_iam_role.task_execution.id
