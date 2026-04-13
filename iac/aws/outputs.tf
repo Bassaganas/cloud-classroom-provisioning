@@ -1,3 +1,27 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Leadership Board CloudFront Outputs
+# ─────────────────────────────────────────────────────────────────────────────
+output "leadership_cloudfront_distribution_id" {
+  value       = module.leadership_cloudfront.cloudfront_distribution_id
+  description = "CloudFront distribution ID for Leadership Board (use as LEADERSHIP_CF_DISTRIBUTION_ID in GitHub Actions vars)"
+}
+
+output "leadership_cloudfront_domain_name" {
+  value       = module.leadership_cloudfront.cloudfront_domain
+  description = "CloudFront domain name for Leadership Board"
+}
+
+output "leadership_custom_url" {
+  value       = module.leadership_cloudfront.custom_url
+  description = "Custom URL for Leadership Board: https://leadership.fellowship.testingfantasy.com"
+}
+
+output "leadership_s3_bucket" {
+  value       = module.leadership.s3_bucket_name
+  description = "S3 bucket name for Leadership Board static assets"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Route 53 alias record output — managed by the docs_cloudfront module
 output "docs_route53_record_fqdn" {
   value       = try(module.docs_cloudfront.cloudfront_domain, null)
