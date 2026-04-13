@@ -32,7 +32,11 @@ resource "aws_instance" "shared_core_host" {
   associate_public_ip_address = true
   vpc_security_group_ids      = [local.shared_core_security_group_id]
   iam_instance_profile        = var.common_ec2_iam_instance_profile_name
-
+  user_data_base64 = base64encode(templatefile("${path.module}/templates/install-scripts.sh.tpl", {
+    provision_script   = file("${path.module}/scripts/provision-student.sh")
+    deprovision_script = file("${path.module}/scripts/deprovision-student.sh")
+  })) # Prevent instance replacement when scripts are updated — deploy script changes via SSM instead
+  user_data_replace_on_change = false
   root_block_device {
     volume_size           = 80
     volume_type           = "gp3"

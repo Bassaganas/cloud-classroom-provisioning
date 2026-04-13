@@ -129,7 +129,34 @@ publish_template_map() {
   for workshop_name in $(echo "$templates_json" | jq -r 'keys[]'); do
     workshop_template=$(echo "$templates_json" | jq --arg name "$workshop_name" '.[$name]')
     workshop_param="${templates_param}/${workshop_name}"
-    
+
+    # Preserve the existing golden ami_id if one has been baked and published to SSM.
+    # The bake-ami workflow writes a golden AMI ID (tagged Source=fellowship-sut) after
+    # each successful bake.  Publishing without this guard would overwrite that ID with
+    # the plain Amazon Linux 2 AMI resolved by the Terraform data source, causing
+    # instances to boot without Docker (the inline golden-AMI bootstrap assumes Docker
+    # is already installed).
+    existing_value=$(aws ssm get-parameter \
+      --name "$workshop_param" \
+      --region "$REGION" \
+      --query 'Parameter.Value' \
+      --output text 2>/dev/null || echo "")
+    if [ -n "$existing_value" ] && [ "$existing_value" != "None" ]; then
+      existing_ami=$(echo "$existing_value" | jq -r '.ami_id // empty' 2>/dev/null || echo "")
+      new_ami=$(echo "$workshop_template" | jq -r '.ami_id // empty' 2>/dev/null || echo "")
+      if [ -n "$existing_ami" ] && [ "$existing_ami" != "$new_ami" ]; then
+        golden_tag=$(aws ec2 describe-images --image-ids "$existing_ami" \
+          --owners self \
+          --region "$REGION" \
+          --query 'Images[0].Tags[?Key==`Source`].Value | [0]' \
+          --output text 2>/dev/null || echo "")
+        if [ "$golden_tag" = "fellowship-sut" ]; then
+          echo "  Preserving golden ami_id $existing_ami for $workshop_name"
+          workshop_template=$(echo "$workshop_template" | jq --arg ami "$existing_ami" '.ami_id = $ami')
+        fi
+      fi
+    fi
+
     # Check template size before publishing
     template_size=$(echo "$workshop_template" | wc -c)
     if [ "$template_size" -gt 8192 ]; then
