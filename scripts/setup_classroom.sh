@@ -222,7 +222,64 @@ else
   if [ "$VALIDATE_ONLY" = true ]; then
     AWS_ARGS+=("--validate-only")
   fi
+
+  # Pre-populate TF_VAR_shared_core_* from the existing Secrets Manager secret so that
+  # local re-runs do not wipe the secret when the env vars are not set in the shell.
+  _SC_SECRET_ID="/classroom/shared-core/${ENVIRONMENT}/deploy"
+  if command -v aws >/dev/null 2>&1; then
+    _SC_SECRET_JSON=$(aws secretsmanager get-secret-value \
+      --secret-id "$_SC_SECRET_ID" \
+      --query SecretString \
+      --output text 2>/dev/null || echo "")
+    if [ -n "$_SC_SECRET_JSON" ] && [ "$_SC_SECRET_JSON" != "None" ]; then
+      if [ -z "${TF_VAR_shared_core_ssh_private_key:-}" ]; then
+        _val=$(printf '%s' "$_SC_SECRET_JSON" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('ssh_private_key',''))" 2>/dev/null || echo "")
+        [ -n "$_val" ] && export TF_VAR_shared_core_ssh_private_key="$_val"
+      fi
+      if [ -z "${TF_VAR_shared_core_gh_repo_token:-}" ]; then
+        _val=$(printf '%s' "$_SC_SECRET_JSON" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('gh_repo_token',''))" 2>/dev/null || echo "")
+        [ -n "$_val" ] && export TF_VAR_shared_core_gh_repo_token="$_val"
+      fi
+      if [ -z "${TF_VAR_shared_core_jenkins_admin_password:-}" ]; then
+        _val=$(printf '%s' "$_SC_SECRET_JSON" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('jenkins_admin_password',''))" 2>/dev/null || echo "")
+        [ -n "$_val" ] && export TF_VAR_shared_core_jenkins_admin_password="$_val"
+      fi
+      if [ -z "${TF_VAR_shared_core_gitea_admin_password:-}" ]; then
+        _val=$(printf '%s' "$_SC_SECRET_JSON" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('gitea_admin_password',''))" 2>/dev/null || echo "")
+        [ -n "$_val" ] && export TF_VAR_shared_core_gitea_admin_password="$_val"
+      fi
+      echo "✓ Restored shared-core deploy secrets from Secrets Manager (${_SC_SECRET_ID})"
+    fi
+  fi
+
   ./scripts/setup_aws.sh "${AWS_ARGS[@]}"
+
+  # Post-deploy: verify the secret is fully populated and warn if not.
+  if command -v aws >/dev/null 2>&1 && [ "$ACTION" != "destroy" ]; then
+    _SC_SECRET_JSON_POST=$(aws secretsmanager get-secret-value \
+      --secret-id "$_SC_SECRET_ID" \
+      --query SecretString \
+      --output text 2>/dev/null || echo "")
+    if [ -z "$_SC_SECRET_JSON_POST" ] || [ "$_SC_SECRET_JSON_POST" = "None" ]; then
+      echo "⚠ Warning: Deploy secret '${_SC_SECRET_ID}' does not exist or has no value."
+      echo "  Set TF_VAR_shared_core_* env vars before running this script, or set the 4 GitHub"
+      echo "  secrets (SHARED_CORE_SSH_PRIVATE_KEY, SHARED_CORE_GH_REPO_TOKEN,"
+      echo "  SHARED_CORE_JENKINS_ADMIN_PASSWORD, SHARED_CORE_GITEA_ADMIN_PASSWORD)"
+      echo "  in the prod GitHub environment and run deploy-aws.yml."
+    else
+      _missing_keys=""
+      for _key in ssh_private_key gh_repo_token jenkins_admin_password gitea_admin_password; do
+        _v=$(printf '%s' "$_SC_SECRET_JSON_POST" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('$_key',''))" 2>/dev/null || echo "")
+        [ -z "$_v" ] && _missing_keys="${_missing_keys} ${_key}"
+      done
+      if [ -n "$_missing_keys" ]; then
+        echo "⚠ Warning: Deploy secret '${_SC_SECRET_ID}' is missing values for:${_missing_keys}"
+        echo "  Export TF_VAR_shared_core_* env vars and re-run, or populate via deploy-aws.yml."
+      else
+        echo "✓ Deploy secret '${_SC_SECRET_ID}' is fully populated."
+      fi
+    fi
+  fi
 fi
 
 # Final success message

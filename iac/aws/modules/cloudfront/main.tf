@@ -691,7 +691,7 @@ resource "aws_cloudfront_distribution" "distribution" {
 
     # Attach the directory-index rewrite function for S3 static sites
     dynamic "function_association" {
-      for_each = (var.s3_origin_bucket != "" || var.s3_bucket_domain != "") ? [1] : []
+      for_each = var.enable_s3_path_rewrite ? [1] : []
       content {
         event_type   = "viewer-request"
         function_arn = aws_cloudfront_function.s3_directory_index[0].arn
