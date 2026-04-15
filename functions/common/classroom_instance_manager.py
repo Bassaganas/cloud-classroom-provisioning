@@ -2383,10 +2383,9 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
         )
 
         for i, instance_index in enumerate(reserved_indices):
-            # Reset user_data to the base template for each iteration.
-            # Without this, domain exports injected for instance N accumulate
-            # into the user_data string passed to instance N+1.
+            # Reset per-iteration state so values from instance N don't bleed into instance N+1.
             user_data = base_user_data
+            effective_student_name = None  # will be set inside the HTTPS block or in the fallback below
             
             # Determine naming and tags based on type
             if instance_type == 'admin':
@@ -2500,6 +2499,18 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
                 except Exception as e:
                     logger.warning(f"Error getting latest S3 artifact: {str(e)}")
                 
+                # Pre-generate the student name here so it can be injected into user_data.
+                # The same value is reused below when tagging the instance and calling
+                # provision_student_on_shared_core(), avoiding any UUIDs mismatch.
+                effective_student_name = student_name or f"student-{uuid.uuid4().hex[:8]}"
+
+                # Derive Gitea org/repo for code-server clone.
+                # In shared-core mode the repo is per-student on the shared Gitea;
+                # in standalone mode it defaults to the local 'lotr-sut' repo.
+                _shared_core = get_shared_core_mode(workshop_name)
+                _gitea_org = 'fellowship-org'
+                _gitea_repo = f"fellowship-sut-{effective_student_name}" if _shared_core else 'lotr-sut'
+
                 # Inject domain and S3 artifact information into user_data as environment variables
                 # This ensures the domain and artifact are available immediately without needing EC2 metadata service
                 domain_exports = f"""# Domain information injected by Lambda (available immediately)
@@ -2513,9 +2524,11 @@ export ROUTE53_ZONE_ID={HTTPS_HOSTED_ZONE_ID}
 export AWS_REGION={REGION}
 export ENVIRONMENT={ENVIRONMENT}
 export EXERCISES_DIR=/opt/exercises
-export SHARED_CORE_MODE={'true' if get_shared_core_mode(workshop_name) else 'false'}
+export SHARED_CORE_MODE={'true' if _shared_core else 'false'}
 export SHARED_JENKINS_URL={SHARED_JENKINS_URL}
 export SHARED_GITEA_URL={SHARED_GITEA_URL}
+export GITEA_ORG_NAME={_gitea_org}
+export GITEA_REPO_NAME={_gitea_repo}
 """
                 
                 # Add S3 artifact information if available
@@ -2811,9 +2824,11 @@ export SHARED_GITEA_URL={SHARED_GITEA_URL}
                 logger.info("HTTPS not configured - skipping Caddy domain setup")
 
             # ── Provision student on shared-core (async via SQS when queue is configured) ──
-            # Use the provided student_name, or auto-generate a unique one per instance.
-            # The generated name is tagged on the EC2 instance so it can be retrieved later.
-            effective_student_name = student_name or f"student-{uuid.uuid4().hex[:8]}"
+            # effective_student_name was pre-generated above (before domain_exports) so the same
+            # student ID is used in user_data injection AND in the tagging/provisioning steps.
+            # Fall back to generating here only if the HTTPS block was skipped (no domain).
+            if not effective_student_name:
+                effective_student_name = student_name or f"student-{uuid.uuid4().hex[:8]}"
             # Tag the instance with the (possibly auto-generated) student name so that
             # delete_instances can deprovision it via the EC2 Student tag fallback.
             try:

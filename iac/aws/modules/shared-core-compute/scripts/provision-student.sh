@@ -281,8 +281,11 @@ seed_sut_content() {
         fi
     done
 
-    # Include any exercises docs if present (palantir-jenkins-ai/docs/exercises).
+    # Include any exercises docs if present.
+    # First check exercises/ directly in the app dir (preferred — committed to repo),
+    # then fall back to palantir-jenkins-ai/docs/exercises for legacy layouts.
     for exercises_dir in \
+        "${app_dir}/exercises" \
         "${app_dir}/palantir-jenkins-ai/docs/exercises" \
         "$(dirname "${app_dir}")/palantir-jenkins-ai/docs/exercises"; do
         if [ -d "${exercises_dir}" ]; then
