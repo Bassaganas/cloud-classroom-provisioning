@@ -462,54 +462,69 @@ def process_instance(instance_id, ec2_client, ssm_client, table):
                 if 'Item' in response:
                     # Only proceed if the instance is not assigned to a student
                     if 'student_name' not in response['Item']:
+                        # BUG FIX (2026-04-15): Initialize stop time, with fallback to launch_time
+                        # Previously, if 'last_stopped_at' key was missing, function would silently skip instance
+                        last_stopped_at = None
                         if 'last_stopped_at' in response['Item']:
                             last_stopped_at = datetime.fromisoformat(response['Item']['last_stopped_at']).replace(tzinfo=timezone.utc)
-                            now = datetime.now(timezone.utc)
-                            # For spot instances, use a shorter threshold to avoid lingering costs.
-                            # For on-demand instances, use configured terminate timeout.
-                            terminate_threshold = timedelta(
-                                minutes=(max(5, STOP_TIMEOUT_MINUTES) if is_spot else TERMINATE_TIMEOUT_MINUTES)
+                        else:
+                            # Fallback: Use launch time if last_stopped_at is missing in DynamoDB
+                            # This ensures instances eventually get terminated even if DynamoDB record is incomplete
+                            last_stopped_at = launch_time
+                            logger.warning(f"Instance {instance_id} DynamoDB record missing last_stopped_at, using launch_time as baseline")
+                        
+                        now = datetime.now(timezone.utc)
+                        # For spot instances, use a shorter threshold to avoid lingering costs.
+                        # For on-demand instances, use configured terminate timeout.
+                        terminate_threshold = timedelta(
+                            minutes=(max(5, STOP_TIMEOUT_MINUTES) if is_spot else TERMINATE_TIMEOUT_MINUTES)
+                        )
+
+                        if now - last_stopped_at > terminate_threshold:
+                            logger.info(
+                                f"Terminating stopped instance {instance_id} "
+                                f"(stopped for more than {terminate_threshold.total_seconds() / 60:.0f} minutes)"
                             )
+                            try:
+                                # BUG FIX: Non-blocking Route53 cleanup - don't block instance termination
+                                dns_cleanup = cleanup_route53_record(instance_id, tags, strict=False)
+                                if not dns_cleanup.get('success'):
+                                    logger.warning(f"Route53 cleanup incomplete for stopped instance {instance_id}: {dns_cleanup}")
 
-                            if now - last_stopped_at > terminate_threshold:
-                                logger.info(
-                                    f"Terminating stopped instance {instance_id} "
-                                    f"(stopped for more than {terminate_threshold.total_seconds() / 60:.0f} minutes)"
+                                # Properly terminate by handling spot instances
+                                terminate_instance_properly(instance_id, ec2_client, instance)
+                                logger.info(f"Terminating instance {instance_id}")
+                                waiter = ec2_client.get_waiter('instance_terminated')
+                                waiter.wait(InstanceIds=[instance_id], WaiterConfig={'Delay': 5, 'MaxAttempts': 12})
+                                ec2_client.create_tags(
+                                    Resources=[instance_id],
+                                    Tags=[
+                                        {'Key': 'Status', 'Value': 'available'},
+                                        {'Key': 'Student', 'Value': ''},
+                                        {'Key': 'Company', 'Value': 'TestingFantasy'}
+                                    ]
                                 )
+                                logger.info(f"Tags reset for instance {instance_id}")
+                                logger.info(f"Instance {instance_id} terminated")
+                                
+                                # Delete DynamoDB record
                                 try:
-                                    # BUG FIX: Non-blocking Route53 cleanup - don't block instance termination
-                                    dns_cleanup = cleanup_route53_record(instance_id, tags, strict=False)
-                                    if not dns_cleanup.get('success'):
-                                        logger.warning(f"Route53 cleanup incomplete for stopped instance {instance_id}: {dns_cleanup}")
-
-                                    # Properly terminate by handling spot instances
-                                    terminate_instance_properly(instance_id, ec2_client, instance)
-                                    logger.info(f"Terminating instance {instance_id}")
-                                    waiter = ec2_client.get_waiter('instance_terminated')
-                                    waiter.wait(InstanceIds=[instance_id], WaiterConfig={'Delay': 5, 'MaxAttempts': 12})
-                                    ec2_client.create_tags(
-                                        Resources=[instance_id],
-                                        Tags=[
-                                            {'Key': 'Status', 'Value': 'available'},
-                                            {'Key': 'Student', 'Value': ''},
-                                            {'Key': 'Company', 'Value': 'TestingFantasy'}
-                                        ]
-                                    )
-                                    logger.info(f"Tags reset for instance {instance_id}")
-                                    logger.info(f"Instance {instance_id} terminated")
-                                    
-                                    # Delete DynamoDB record
-                                    try:
-                                        table.delete_item(Key={'instance_id': instance_id})
-                                        logger.info(f"Deleted DynamoDB record for instance {instance_id}")
-                                    except Exception as e:
-                                        logger.error(f"Failed to delete DynamoDB record for instance {instance_id}: {str(e)}")
-                                        
-                                    return {'instance_id': instance_id, 'status': 'terminated'}
-                                    
+                                    table.delete_item(Key={'instance_id': instance_id})
+                                    logger.info(f"Deleted DynamoDB record for instance {instance_id}")
                                 except Exception as e:
-                                    logger.error(f"Failed to terminate instance {instance_id}: {str(e)}")
-                                    return {'instance_id': instance_id, 'status': 'error', 'error': str(e)}
+                                    logger.error(f"Failed to delete DynamoDB record for instance {instance_id}: {str(e)}")
+                                    
+                                return {'instance_id': instance_id, 'status': 'terminated'}
+                                
+                            except Exception as e:
+                                logger.error(f"Failed to terminate instance {instance_id}: {str(e)}")
+                                return {'instance_id': instance_id, 'status': 'error', 'error': str(e)}
+                        else:
+                            # BUG FIX (2026-04-15): Add else clause for when instance not yet old enough
+                            # Previously this code path had no return statement, causing silent skip
+                            time_until_terminate = terminate_threshold - (now - last_stopped_at)
+                            logger.info(f"Stopped instance {instance_id}: {time_until_terminate.total_seconds() / 60:.1f} minutes until termination")
+                            return {'instance_id': instance_id, 'status': 'skipped', 'reason': f'not yet old enough for termination ({terminate_threshold.total_seconds() / 60:.0f} min timeout)'}
                     else:
                         logger.info(f"Skipping instance {instance_id} as it is assigned to a student")
                         return {'instance_id': instance_id, 'status': 'skipped', 'reason': 'assigned to student'}

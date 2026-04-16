@@ -321,6 +321,19 @@ seed_sut_content() {
 create_webhook() {
     log "Step 3: Creating webhook for '${REPO_NAME}'..."
     local jenkins_webhook_url="${JENKINS_URL}/gitea-webhook/post"
+    
+    # NEW (2026-04-15): Validate endpoint is reachable before creating webhook
+    # This helps diagnose webhook issues where Gitea cannot reach Jenkins
+    log "  Validating Jenkins webhook endpoint reachability..."
+    if ! curl -sf --max-time 5 -o /dev/null "${jenkins_webhook_url}" >/dev/null 2>&1; then
+        warn "Jenkins webhook endpoint may not be reachable: ${jenkins_webhook_url}"
+        warn "The webhook will be created, but deliveries may fail"
+        warn "Verify that JENKINS_URL is set to the external HTTPS domain, not localhost"
+        warn "Check Jenkins logs if webhook deliveries are showing as failed in Gitea UI"
+    else
+        log "  ✓ Jenkins webhook endpoint is reachable"
+    fi
+    
     local response
     response=$(gitea_api POST "/repos/${GITEA_ORG_NAME}/${REPO_NAME}/hooks" "{
         \"type\": \"gitea\",
