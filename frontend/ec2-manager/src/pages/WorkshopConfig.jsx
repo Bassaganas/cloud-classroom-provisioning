@@ -7,7 +7,12 @@ import {
   CardContent,
   CircularProgress,
   Container,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogTitle,
   FormControlLabel,
+  Link,
   Switch,
   Stack,
   TextField,
@@ -31,6 +36,8 @@ function WorkshopConfig() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [toast, setToast] = useState({ open: false, message: '', severity: 'success' })
+  const [confirmDialog, setConfirmDialog] = useState({ open: false, resourceType: '' })
+  const [deleting, setDeleting] = useState(false)
 
   useEffect(() => {
     loadSettings()
@@ -86,6 +93,25 @@ function WorkshopConfig() {
 
   const showToast = (message, severity = 'success') => {
     setToast({ open: true, message, severity })
+  }
+
+  const handleDeleteSharedCoreResources = async () => {
+    const { resourceType } = confirmDialog
+    setConfirmDialog({ open: false, resourceType: '' })
+    setDeleting(true)
+    try {
+      const result = await api.deleteSharedCoreResources(workshopName, resourceType)
+      if (result.success) {
+        const label = resourceType === 'jenkins_folders' ? 'Jenkins folders' : 'Gitea repos'
+        showToast(`Deleted ${result.deleted_count} ${label}`, 'success')
+      } else {
+        showToast(result.error || 'Deletion failed', 'error')
+      }
+    } catch (error) {
+      showToast(error.message, 'error')
+    } finally {
+      setDeleting(false)
+    }
   }
 
   if (loading) {
@@ -173,11 +199,40 @@ function WorkshopConfig() {
                     When enabled, students are routed to shared Jenkins and Gitea instead of per-student DevOps stacks.
                   </Typography>
                   {settings.shared_core_mode && (
-                    <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>
-                      Shared Jenkins: {settings.shared_jenkins_url || 'Not configured'}
-                      <br />
-                      Shared Gitea: {settings.shared_gitea_url || 'Not configured'}
-                    </Typography>
+                    <Box sx={{ mt: 1.5 }}>
+                      <Typography variant="body2" color="text.secondary">
+                        Jenkins:{' '}
+                        {settings.shared_jenkins_url
+                          ? <Link href={settings.shared_jenkins_url} target="_blank" rel="noopener noreferrer">{settings.shared_jenkins_url}</Link>
+                          : 'Not configured'}
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                        Gitea:{' '}
+                        {settings.shared_gitea_url
+                          ? <Link href={settings.shared_gitea_url} target="_blank" rel="noopener noreferrer">{settings.shared_gitea_url}</Link>
+                          : 'Not configured'}
+                      </Typography>
+                      <Stack direction="row" spacing={1} sx={{ mt: 1.5 }}>
+                        <Button
+                          size="small"
+                          color="error"
+                          variant="outlined"
+                          disabled={deleting}
+                          onClick={() => setConfirmDialog({ open: true, resourceType: 'jenkins_folders' })}
+                        >
+                          Delete All Jenkins Folders
+                        </Button>
+                        <Button
+                          size="small"
+                          color="error"
+                          variant="outlined"
+                          disabled={deleting}
+                          onClick={() => setConfirmDialog({ open: true, resourceType: 'gitea_repos' })}
+                        >
+                          Delete All Gitea Repos
+                        </Button>
+                      </Stack>
+                    </Box>
                   )}
                 </Box>
 
@@ -198,6 +253,26 @@ function WorkshopConfig() {
         toast={toast}
         onClose={() => setToast((prev) => ({ ...prev, open: false }))}
       />
+      <Dialog open={confirmDialog.open} onClose={() => setConfirmDialog({ open: false, resourceType: '' })}>
+        <DialogTitle>
+          {confirmDialog.resourceType === 'jenkins_folders' ? 'Delete All Jenkins Folders' : 'Delete All Gitea Repos'}
+        </DialogTitle>
+        <DialogContent>
+          <Typography>
+            This will permanently delete{' '}
+            {confirmDialog.resourceType === 'jenkins_folders'
+              ? 'all top-level Jenkins folders and their pipelines'
+              : 'all Gitea repositories in the shared organisation'}{' '}
+            for workshop <strong>{workshopName}</strong>. This action cannot be undone.
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmDialog({ open: false, resourceType: '' })}>Cancel</Button>
+          <Button color="error" variant="contained" onClick={handleDeleteSharedCoreResources}>
+            Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
     </>
   )
 }

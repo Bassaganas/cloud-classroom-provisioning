@@ -248,6 +248,15 @@ else
         _val=$(printf '%s' "$_SC_SECRET_JSON" | python3 -c "import sys,json;d=json.load(sys.stdin);print(d.get('gitea_admin_password',''))" 2>/dev/null || echo "")
         [ -n "$_val" ] && export TF_VAR_shared_core_gitea_admin_password="$_val"
       fi
+      # If the secret has an SSH private key but TF_VAR_shared_core_key_name is not set,
+      # default to "shared-core-deploy" EC2 key pair (created/managed outside Terraform).
+      # This key pair is required for the deploy-shared-core workflow to SSH into the instance.
+      if [ -z "${TF_VAR_shared_core_key_name:-}" ]; then
+        _has_ssh_key=$(printf '%s' "$_SC_SECRET_JSON" | python3 -c "import sys,json;d=json.load(sys.stdin);print('ssh_private_key' in d and len(d.get('ssh_private_key','')) > 0)" 2>/dev/null || echo "false")
+        if [ "$_has_ssh_key" = "True" ]; then
+          export TF_VAR_shared_core_key_name="shared-core-deploy"
+        fi
+      fi
       echo "✓ Restored shared-core deploy secrets from Secrets Manager (${_SC_SECRET_ID})"
     fi
   fi

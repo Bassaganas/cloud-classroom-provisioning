@@ -260,6 +260,7 @@ jobs:
           TF_VAR_shared_core_gh_repo_token: ${{ secrets.SHARED_CORE_GH_REPO_TOKEN }}
           TF_VAR_shared_core_jenkins_admin_password: ${{ secrets.SHARED_CORE_JENKINS_ADMIN_PASSWORD }}
           TF_VAR_shared_core_gitea_admin_password: ${{ secrets.SHARED_CORE_GITEA_ADMIN_PASSWORD }}
+          TF_VAR_shared_core_key_name: shared-core-deploy
           # manage_shared_core defaults to true in terraform.tfvars; override to false
           # if this manual run should skip shared-core (e.g. workshop-only deploys).
           TF_VAR_manage_shared_core: ${{ vars.MANAGE_SHARED_CORE || 'true' }}
@@ -484,6 +485,7 @@ jobs:
           TF_VAR_shared_core_gh_repo_token: ${{ secrets.SHARED_CORE_GH_REPO_TOKEN }}
           TF_VAR_shared_core_jenkins_admin_password: ${{ secrets.SHARED_CORE_JENKINS_ADMIN_PASSWORD }}
           TF_VAR_shared_core_gitea_admin_password: ${{ secrets.SHARED_CORE_GITEA_ADMIN_PASSWORD }}
+          TF_VAR_shared_core_key_name: shared-core-deploy
           TF_VAR_manage_shared_core: 'true'
         run: |
           SKIP_PKG_FLAG=""

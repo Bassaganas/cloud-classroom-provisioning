@@ -671,6 +671,8 @@ terraform init -reconfigure
 export TF_VAR_shared_core_gh_repo_token="${TF_VAR_shared_core_gh_repo_token:-${_tf_sc_gh_token}}"
 export TF_VAR_shared_core_jenkins_admin_password="${TF_VAR_shared_core_jenkins_admin_password:-${_tf_sc_jenkins_pw}}"
 export TF_VAR_shared_core_gitea_admin_password="${TF_VAR_shared_core_gitea_admin_password:-${_tf_sc_gitea_pw}}"
+# Ensure EC2 key pair name is set if already configured (e.g., from setup_classroom.sh or env var)
+export TF_VAR_shared_core_key_name="${TF_VAR_shared_core_key_name:-}"
 
 # Determine target flags for partial deployments
 TARGET_FLAGS=""

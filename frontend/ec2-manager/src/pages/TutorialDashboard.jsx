@@ -404,6 +404,10 @@ function TutorialDashboard() {
         instance.instance_id || '',
         instance.public_ip || '',
         instance.https_domain || '',
+        instance.tags?.HttpsDomain || '',
+        instance.tags?.JenkinsDomain || '',
+        instance.tags?.IdeDomain || '',
+        instance.tags?.GiteaDomain || '',
         instance.state || '',
         type,
         instance.assigned_to || ''
@@ -721,7 +725,6 @@ function TutorialDashboard() {
                     const resolvedHttpsDomain = instance.https_domain || instance.tags?.HttpsDomain
                     const resolvedHttpsUrl = resolvedHttpsDomain ? `https://${resolvedHttpsDomain}` : (instance.https_url || instance.tags?.HttpsUrl)
                     const visitUrl = resolvedHttpsUrl || (instance.public_ip ? `http://${instance.public_ip}` : null)
-                    const endpointLabel = resolvedHttpsDomain || instance.public_ip || 'Pending...'
                     return (
                       <TableRow key={instance.instance_id} hover>
                         <TableCell padding="checkbox">
@@ -742,11 +745,39 @@ function TutorialDashboard() {
                           />
                         </TableCell>
                         <TableCell>
-                          {visitUrl ? (
-                            <Link href={visitUrl} target="_blank" rel="noopener noreferrer">
-                              {endpointLabel}
-                            </Link>
-                          ) : 'Pending...'}
+                          <Stack spacing={0.5}>
+                            {visitUrl && (
+                              <Link href={visitUrl} target="_blank" rel="noopener noreferrer" sx={{ fontSize: '0.875rem' }}>
+                                SUT
+                              </Link>
+                            )}
+                            {instance.tags?.JenkinsDomain && (
+                              <Link href={`https://${instance.tags.JenkinsDomain}`} target="_blank" rel="noopener noreferrer" sx={{ fontSize: '0.875rem' }}>
+                                Jenkins
+                              </Link>
+                            )}
+                            {instance.jenkins_job_url && !instance.tags?.JenkinsDomain && (
+                              <Link href={instance.jenkins_job_url} target="_blank" rel="noopener noreferrer" sx={{ fontSize: '0.875rem' }}>
+                                Jenkins
+                              </Link>
+                            )}
+                            {instance.tags?.IdeDomain && (
+                              <Link href={`https://${instance.tags.IdeDomain}`} target="_blank" rel="noopener noreferrer" sx={{ fontSize: '0.875rem' }}>
+                                IDE
+                              </Link>
+                            )}
+                            {instance.tags?.GiteaDomain && (
+                              <Link href={`https://${instance.tags.GiteaDomain}`} target="_blank" rel="noopener noreferrer" sx={{ fontSize: '0.875rem' }}>
+                                Gitea
+                              </Link>
+                            )}
+                            {instance.gitea_repo_url && !instance.tags?.GiteaDomain && (
+                              <Link href={instance.gitea_repo_url} target="_blank" rel="noopener noreferrer" sx={{ fontSize: '0.875rem' }}>
+                                Gitea
+                              </Link>
+                            )}
+                            {!visitUrl && !instance.tags?.JenkinsDomain && !instance.tags?.IdeDomain && !instance.tags?.GiteaDomain && !instance.jenkins_job_url && !instance.gitea_repo_url && 'Pending...'}
+                          </Stack>
                         </TableCell>
                         <TableCell>{instance.assigned_to || '-'}</TableCell>
                         <TableCell>

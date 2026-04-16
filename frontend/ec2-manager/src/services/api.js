@@ -152,7 +152,12 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(data),
   }),
-  
+
+  deleteSharedCoreResources: (workshopName, resourceType) => apiRequest('/delete_shared_core_resources', {
+    method: 'POST',
+    body: JSON.stringify({ workshop: workshopName, resource_type: resourceType }),
+  }),
+
   updateTimeoutSettings: (data) => apiRequest('/update_timeout_settings', {
     method: 'POST',
     body: JSON.stringify(data),

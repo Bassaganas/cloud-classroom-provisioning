@@ -248,7 +248,7 @@ resource "aws_iam_policy" "lambda_secretsmanager_policy" {
           Action = [
             "secretsmanager:GetSecretValue"
           ]
-          Resource = var.instance_manager_password_secret_arn
+          Resource = "*"
         }
       ] : []
     )
