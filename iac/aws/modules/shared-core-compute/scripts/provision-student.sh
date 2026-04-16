@@ -320,7 +320,7 @@ seed_sut_content() {
 
 create_webhook() {
     log "Step 3: Creating webhook for '${REPO_NAME}'..."
-    local jenkins_webhook_url="${JENKINS_URL}/gitea-webhook/post"
+local jenkins_webhook_url="${SHARED_JENKINS_URL%/}/gitea-webhook/post"
     
     # NEW (2026-04-15): Validate endpoint is reachable before creating webhook
     # This helps diagnose webhook issues where Gitea cannot reach Jenkins
