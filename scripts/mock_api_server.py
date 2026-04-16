@@ -50,21 +50,49 @@ class MockAPIHandler(http.server.SimpleHTTPRequestHandler):
                 }
             })
         elif path == '/api/list':
+            # Return mock instances with Jenkins/Gitea URLs for assigned instances
+            tutorial_session_id = query_params.get('tutorial_session_id', [None])[0]
             self.send_json_response({
                 'success': True,
                 'instances': [
                     {
-                        'instance_id': 'i-mock123',
-                        'workshop': 'testus_patronus',
+                        'instance_id': 'i-mock-assigned-1',
+                        'workshop': 'fellowship',
+                        'tutorial_session_id': 'tutorial1',
                         'type': 'pool',
                         'state': 'running',
                         'public_ip': '1.2.3.4',
-                        'assigned': None
+                        'private_ip': '10.0.0.5',
+                        'instance_type': 't3.medium',
+                        'assigned_to': 'student1',
+                        'assignment_status': 'active',
+                        'https_url': 'https://student1-fellowship.testingfantasy.com',
+                        'jenkins_job_url': 'https://jenkins.fellowship.testingfantasy.com/job/student1/job/fellowship-pipeline/',
+                        'gitea_repo_url': 'https://gitea.fellowship.testingfantasy.com/fellowship-org/fellowship-sut-student1',
+                        'hourly_rate_estimate_usd': 0.0416,
+                        'estimated_cost_usd': 1.0,
+                        'purchase_type': 'on-demand'
+                    },
+                    {
+                        'instance_id': 'i-mock-unassigned-1',
+                        'workshop': 'fellowship',
+                        'tutorial_session_id': 'tutorial1',
+                        'type': 'pool',
+                        'state': 'running',
+                        'public_ip': '1.2.3.5',
+                        'private_ip': '10.0.0.6',
+                        'instance_type': 't3.medium',
+                        'assigned_to': None,
+                        'https_url': None,
+                        'hourly_rate_estimate_usd': 0.0416,
+                        'estimated_cost_usd': 1.0,
+                        'purchase_type': 'on-demand'
                     }
                 ],
+                'count': 2,
                 'summary': {
-                    'total': 1,
-                    'pool': {'total': 1, 'running': 1, 'stopped': 0, 'assigned': 0},
+                    'total': 2,
+                    'pool': {'total': 2, 'running': 2, 'stopped': 0, 'assigned': 1, 'available': 1},
                     'admin': {'total': 0, 'running': 0, 'stopped': 0}
                 }
             })
@@ -84,6 +112,30 @@ class MockAPIHandler(http.server.SimpleHTTPRequestHandler):
                     'hard_terminate_timeout': 45,
                     'admin_cleanup_days': 7
                 }
+            })
+        elif path == '/api/shared_core_settings':
+            workshop = query_params.get('workshop', ['fellowship'])[0]
+            self.send_json_response({
+                'success': True,
+                'settings': {
+                    'shared_core_mode': True,
+                    'shared_jenkins_url': 'https://jenkins.fellowship.testingfantasy.com',
+                    'shared_gitea_url': 'https://gitea.fellowship.testingfantasy.com'
+                }
+            })
+        elif path == '/api/tutorial_sessions':
+            workshop = query_params.get('workshop', ['fellowship'])[0]
+            self.send_json_response({
+                'success': True,
+                'sessions': [
+                    {
+                        'session_id': 'tutorial1',
+                        'workshop': workshop,
+                        'name': 'Tutorial Session 1',
+                        'created_at': datetime.now().isoformat(),
+                        'description': 'Mock tutorial session for testing'
+                    }
+                ]
             })
         else:
             self.send_error(404, 'Not found')
@@ -152,6 +204,25 @@ class MockAPIHandler(http.server.SimpleHTTPRequestHandler):
             self.send_json_response({
                 'success': True,
                 'domain': 'https://mock-domain.testingfantasy.com'
+            })
+        elif path == '/api/update_shared_core_settings':
+            workshop = data.get('workshop', 'fellowship')
+            shared_core_mode = data.get('shared_core_mode', False)
+            self.send_json_response({
+                'success': True,
+                'message': f'Mock: Updated shared-core mode to {shared_core_mode} for {workshop}'
+            })
+        elif path == '/api/delete_shared_core_resources':
+            resource_type = data.get('resource_type', 'jenkins_folders')
+            workshop = data.get('workshop', 'fellowship')
+            deleted_count = 3 if resource_type == 'jenkins_folders' else 5
+            deleted_items = [f'item{i}' for i in range(1, deleted_count + 1)]
+            self.send_json_response({
+                'success': True,
+                'deleted': deleted_items,
+                'deleted_count': deleted_count,
+                'errors': [],
+                'message': f'Mock: Deleted {deleted_count} {resource_type} from {workshop}'
             })
         else:
             self.send_error(404, 'Not found')

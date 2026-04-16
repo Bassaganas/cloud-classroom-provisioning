@@ -5,6 +5,7 @@ import os
 import sys
 import logging
 import time
+import socket
 import urllib.request
 import urllib.error
 from botocore.exceptions import ClientError
@@ -773,6 +774,297 @@ def get_shared_core_urls(student_id: str = '', workshop_name: str = '') -> dict:
         )
 
     return result
+
+
+def delete_shared_core_resources(workshop_name: str, resource_type: str) -> dict:
+    """Delete all Jenkins folders or Gitea repositories for a workshop in shared-core mode.
+
+    resource_type must be 'jenkins_folders' or 'gitea_repos'.
+    Admin credentials are read from Secrets Manager secret
+    ``{workshop_name}/shared_core_credentials``.
+    """
+    import urllib.request as _urllib_req
+    import urllib.error as _urllib_err
+    import http.cookiejar as _cookiejar
+    import base64 as _base64
+
+    if not get_shared_core_mode(workshop_name):
+        return {'success': False, 'error': 'Shared-core mode is not enabled for this workshop'}
+
+    base_jenkins = SHARED_JENKINS_URL.rstrip('/')
+    base_gitea = SHARED_GITEA_URL.rstrip('/')
+
+    if not base_jenkins or not base_gitea:
+        return {'success': False, 'error': 'SHARED_JENKINS_URL or SHARED_GITEA_URL is not configured'}
+
+    # Read admin credentials from Secrets Manager
+    # Use the shared-core deploy secret like setup_classroom.sh does: /classroom/shared-core/{ENVIRONMENT}/deploy
+    # Fall back to prod if env-specific secret doesn't exist (useful for dev/staging environments)
+    env = os.environ.get('ENVIRONMENT', 'dev')
+    secret_name = f"/classroom/shared-core/{env}/deploy"
+    fallback_secret_name = "/classroom/shared-core/prod/deploy"
+    
+    creds = None
+    try:
+        secret_resp = secretsmanager.get_secret_value(SecretId=secret_name)
+        creds = json.loads(secret_resp['SecretString'])
+        logger.info(f"Loaded shared-core credentials from {secret_name}")
+    except secretsmanager.exceptions.ResourceNotFoundException:
+        # Fallback to prod if env-specific secret doesn't exist
+        logger.warning(f"Secret {secret_name} not found, falling back to {fallback_secret_name}")
+        try:
+            secret_resp = secretsmanager.get_secret_value(SecretId=fallback_secret_name)
+            creds = json.loads(secret_resp['SecretString'])
+            logger.info(f"Loaded shared-core credentials from fallback {fallback_secret_name}")
+        except Exception as fallback_e:
+            logger.error(f"Failed to read shared_core_credentials from both {secret_name} and {fallback_secret_name}: {fallback_e}")
+            return {'success': False, 'error': f'Could not read credentials from {secret_name} or {fallback_secret_name}: {str(fallback_e)}'}
+    except Exception as e:
+        logger.error(f"Failed to read shared_core_credentials secret '{secret_name}': {e}")
+        return {'success': False, 'error': f'Could not read credentials: {str(e)}'}
+    
+    if creds is None:
+        return {'success': False, 'error': 'No credentials loaded'}
+    
+    jenkins_user = creds.get('jenkins_admin_user', 'fellowship')
+    jenkins_password = creds.get('jenkins_admin_password', 'fellowship123')
+    gitea_token = creds.get('gitea_admin_token', '')
+    gitea_user = creds.get('gitea_admin_user', 'fellowship')
+    gitea_password = creds.get('gitea_admin_password', 'fellowship123')
+
+    deleted = []
+    errors = []
+
+    if resource_type == 'jenkins_folders':
+        # List top-level Jenkins items and delete folders
+        # Use cookie jar to maintain session state for Jenkins CSRF protection
+        cookie_jar = _cookiejar.CookieJar()
+        opener = _urllib_req.build_opener(_urllib_req.HTTPCookieProcessor(cookie_jar))
+        
+        jenkins_auth = _base64.b64encode(f"{jenkins_user}:{jenkins_password}".encode()).decode()
+        jenkins_url = f"{base_jenkins}/api/json?tree=jobs[name,_class]"
+        logger.info(f"Attempting to list Jenkins folders from: {base_jenkins}")
+        logger.info(f"Jenkins credentials: user={jenkins_user}, password_len={len(jenkins_password)}")
+        
+        try:
+            logger.info(f"Creating request for: {jenkins_url}")
+            req = _urllib_req.Request(
+                jenkins_url,
+                headers={
+                    'Authorization': f'Basic {jenkins_auth}',
+                    'Accept': 'application/json'
+                }
+            )
+            logger.info(f"Executing HTTP GET...")
+            
+            try:
+                with opener.open(req, timeout=5) as resp:
+                    logger.info(f"✓ Connected to Jenkins, status: {resp.status}")
+                    response_data = resp.read()
+                    logger.info(f"✓ Received {len(response_data)} bytes from Jenkins")
+                    data = json.loads(response_data)
+                    logger.info(f"✓ Parsed JSON successfully")
+            except socket.timeout:
+                error_msg = f'Timeout (5s) connecting to Jenkins at {base_jenkins}'
+                logger.error(error_msg)
+                return {'success': False, 'error': error_msg}
+            
+            folders = [j['name'] for j in data.get('jobs', []) if 'Folder' in j.get('_class', '')]
+            logger.info(f"Found {len(folders)} Jenkins folders: {folders}")
+            
+            if not folders:
+                logger.info("No Jenkins folders found to delete")
+                return {'success': True, 'deleted': [], 'deleted_count': 0, 'errors': []}
+            
+            # Get CSRF crumb ONCE at the start and reuse it for all deletions
+            logger.info("Fetching CSRF crumb (will reuse for all folder deletions)...")
+            crumb_url = f"{base_jenkins}/crumbIssuer/api/json"
+            crumb_req = _urllib_req.Request(
+                crumb_url,
+                headers={'Authorization': f'Basic {jenkins_auth}'}
+            )
+            
+            try:
+                with opener.open(crumb_req, timeout=5) as cr:
+                    crumb_response = cr.read()
+                    logger.info(f"✓ CSRF crumb response received ({len(crumb_response)} bytes)")
+                    crumb_data = json.loads(crumb_response)
+            except Exception as crumb_err:
+                error_msg = f'Failed to get CSRF crumb from Jenkins: {type(crumb_err).__name__}: {str(crumb_err)}'
+                logger.error(error_msg)
+                # Try deletion without crumb (some Jenkins configs allow it)
+                logger.warning("Attempting deletion without CSRF crumb...")
+                crumb_field = None
+                crumb_value = None
+            else:
+                crumb_field = crumb_data.get('crumbRequestField', 'Jenkins-Crumb')
+                crumb_value = crumb_data.get('crumb', '')
+                logger.info(f"✓ Crumb field: {crumb_field}, value: {crumb_value[:30] if crumb_value else 'EMPTY'}...")
+            
+            for folder in folders:
+                try:
+                    logger.info(f"Deleting Jenkins folder: {folder}")
+                    
+                    # Build headers for deletion
+                    del_headers = {'Authorization': f'Basic {jenkins_auth}'}
+                    if crumb_field and crumb_value:
+                        del_headers[crumb_field] = crumb_value
+                    
+                    del_url = f"{base_jenkins}/job/{folder}/doDelete"
+                    del_req = _urllib_req.Request(
+                        del_url,
+                        data=b'',
+                        method='POST',
+                        headers=del_headers
+                    )
+                    logger.info(f"POST {del_url} with headers: {list(del_headers.keys())}")
+                    
+                    try:
+                        with opener.open(del_req, timeout=5) as resp:
+                            logger.info(f"✓ Deletion response received, status: {resp.status}")
+                    except socket.timeout:
+                        error_msg = f"Jenkins folder '{folder}': Timeout (5s) during deletion"
+                        logger.error(error_msg)
+                        errors.append(error_msg)
+                        continue
+                    
+                    deleted.append(folder)
+                    logger.info(f"✓ Successfully deleted Jenkins folder: {folder}")
+                    
+                except _urllib_err.HTTPError as http_err:
+                    error_msg = f"Jenkins folder '{folder}': HTTP {http_err.code} {http_err.reason}"
+                    try:
+                        error_body = http_err.read().decode('utf-8')[:200]
+                        error_msg += f" - {error_body}"
+                    except:
+                        pass
+                    logger.error(error_msg)
+                    errors.append(error_msg)
+                except _urllib_err.URLError as url_err:
+                    error_msg = f"Jenkins folder '{folder}': Network error {str(url_err.reason)}"
+                    logger.error(error_msg)
+                    errors.append(error_msg)
+                except socket.timeout:
+                    error_msg = f"Jenkins folder '{folder}': Socket timeout"
+                    logger.error(error_msg)
+                    errors.append(error_msg)
+                except Exception as e:
+                    error_msg = f"Jenkins folder '{folder}': {type(e).__name__}: {str(e)}"
+                    logger.error(error_msg, exc_info=True)
+                    errors.append(error_msg)
+        
+        except _urllib_err.HTTPError as http_err:
+            error_msg = f'Failed to list Jenkins jobs: HTTP {http_err.code} {http_err.reason} from {jenkins_url}'
+            logger.error(error_msg)
+            try:
+                error_body = http_err.read().decode('utf-8')
+                logger.error(f"Jenkins error body: {error_body}")
+            except:
+                pass
+            return {'success': False, 'error': error_msg}
+        except _urllib_err.URLError as url_err:
+            error_msg = f'Failed to reach Jenkins at {base_jenkins}: {str(url_err.reason)}'
+            logger.error(error_msg)
+            return {'success': False, 'error': error_msg}
+        except Exception as e:
+            error_msg = f'Failed to list Jenkins jobs: {type(e).__name__}: {str(e)}'
+            logger.error(error_msg, exc_info=True)
+            return {'success': False, 'error': error_msg}
+
+    elif resource_type == 'gitea_repos':
+        org = os.environ.get('GITEA_ORG_NAME', 'fellowship-org')
+        # Use token auth if available, else basic auth
+        if gitea_token:
+            auth_header = f'token {gitea_token}'
+            logger.info(f"Using Gitea token auth for org: {org}")
+        else:
+            gitea_auth = _base64.b64encode(f"{gitea_user}:{gitea_password}".encode()).decode()
+            auth_header = f'Basic {gitea_auth}'
+            logger.info(f"Using Gitea basic auth for org: {org}")
+        
+        logger.info(f"Attempting to list Gitea repos from: {base_gitea}")
+        page = 1
+        all_repos = []
+        
+        while True:
+            try:
+                gitea_list_url = f"{base_gitea}/api/v1/orgs/{org}/repos?limit=50&page={page}"
+                logger.info(f"Fetching Gitea repos page {page}: {gitea_list_url}")
+                
+                req = _urllib_req.Request(
+                    gitea_list_url,
+                    headers={'Authorization': auth_header}
+                )
+                with _urllib_req.urlopen(req, timeout=10) as resp:
+                    repos = json.loads(resp.read())
+                
+                if not repos:
+                    logger.info(f"No more repos at page {page}, stopping pagination")
+                    break
+                
+                logger.info(f"Retrieved {len(repos)} repos from page {page}")
+                all_repos.extend(repos)
+                page += 1
+                
+            except _urllib_err.HTTPError as http_err:
+                error_msg = f'Failed to list Gitea repos page {page}: HTTP {http_err.code} {http_err.reason}'
+                logger.error(error_msg)
+                try:
+                    error_body = http_err.read().decode('utf-8')
+                    logger.error(f"Gitea error body: {error_body}")
+                except:
+                    pass
+                return {'success': False, 'error': error_msg}
+            except _urllib_err.URLError as url_err:
+                error_msg = f'Failed to reach Gitea at {base_gitea}: {str(url_err.reason)}'
+                logger.error(error_msg)
+                return {'success': False, 'error': error_msg}
+            except Exception as e:
+                error_msg = f'Failed to list Gitea repos: {type(e).__name__}: {str(e)}'
+                logger.error(error_msg, exc_info=True)
+                return {'success': False, 'error': error_msg}
+        
+        logger.info(f"Total repos found: {len(all_repos)}")
+        
+        for repo in all_repos:
+            repo_name = repo.get('name', '')
+            owner = repo.get('owner', {}).get('login', org)
+            try:
+                del_url = f"{base_gitea}/api/v1/repos/{owner}/{repo_name}"
+                logger.info(f"Deleting Gitea repo: DELETE {del_url}")
+                
+                del_req = _urllib_req.Request(
+                    del_url,
+                    method='DELETE',
+                    headers={'Authorization': auth_header}
+                )
+                with _urllib_req.urlopen(del_req, timeout=10) as resp:
+                    logger.info(f"Deletion response status: {resp.status}")
+                
+                deleted.append(repo_name)
+                logger.info(f"✓ Successfully deleted Gitea repo: {repo_name}")
+                
+            except _urllib_err.HTTPError as http_err:
+                error_msg = f"Gitea repo '{repo_name}': HTTP {http_err.code} {http_err.reason}"
+                logger.error(error_msg)
+                errors.append(error_msg)
+            except _urllib_err.URLError as url_err:
+                error_msg = f"Gitea repo '{repo_name}': Network error {str(url_err.reason)}"
+                logger.error(error_msg)
+                errors.append(error_msg)
+            except Exception as e:
+                error_msg = f"Gitea repo '{repo_name}': {type(e).__name__}: {str(e)}"
+                logger.error(error_msg)
+                errors.append(error_msg)
+    else:
+        return {'success': False, 'error': f"Unknown resource_type '{resource_type}'. Use 'jenkins_folders' or 'gitea_repos'"}
+
+    return {
+        'success': len(errors) == 0,
+        'deleted': deleted,
+        'deleted_count': len(deleted),
+        'errors': errors,
+    }
 
 
 # Cache for password (to avoid repeated Secrets Manager calls)
@@ -2383,10 +2675,9 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
         )
 
         for i, instance_index in enumerate(reserved_indices):
-            # Reset user_data to the base template for each iteration.
-            # Without this, domain exports injected for instance N accumulate
-            # into the user_data string passed to instance N+1.
+            # Reset per-iteration state so values from instance N don't bleed into instance N+1.
             user_data = base_user_data
+            effective_student_name = None  # will be set inside the HTTPS block or in the fallback below
             
             # Determine naming and tags based on type
             if instance_type == 'admin':
@@ -2500,6 +2791,18 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
                 except Exception as e:
                     logger.warning(f"Error getting latest S3 artifact: {str(e)}")
                 
+                # Pre-generate the student name here so it can be injected into user_data.
+                # The same value is reused below when tagging the instance and calling
+                # provision_student_on_shared_core(), avoiding any UUIDs mismatch.
+                effective_student_name = student_name or f"student-{uuid.uuid4().hex[:8]}"
+
+                # Derive Gitea org/repo for code-server clone.
+                # In shared-core mode the repo is per-student on the shared Gitea;
+                # in standalone mode it defaults to the local 'lotr-sut' repo.
+                _shared_core = get_shared_core_mode(workshop_name)
+                _gitea_org = 'fellowship-org'
+                _gitea_repo = f"fellowship-sut-{effective_student_name}" if _shared_core else 'lotr-sut'
+
                 # Inject domain and S3 artifact information into user_data as environment variables
                 # This ensures the domain and artifact are available immediately without needing EC2 metadata service
                 domain_exports = f"""# Domain information injected by Lambda (available immediately)
@@ -2513,9 +2816,11 @@ export ROUTE53_ZONE_ID={HTTPS_HOSTED_ZONE_ID}
 export AWS_REGION={REGION}
 export ENVIRONMENT={ENVIRONMENT}
 export EXERCISES_DIR=/opt/exercises
-export SHARED_CORE_MODE={'true' if get_shared_core_mode(workshop_name) else 'false'}
+export SHARED_CORE_MODE={'true' if _shared_core else 'false'}
 export SHARED_JENKINS_URL={SHARED_JENKINS_URL}
 export SHARED_GITEA_URL={SHARED_GITEA_URL}
+export GITEA_ORG_NAME={_gitea_org}
+export GITEA_REPO_NAME={_gitea_repo}
 """
                 
                 # Add S3 artifact information if available
@@ -2811,9 +3116,11 @@ export SHARED_GITEA_URL={SHARED_GITEA_URL}
                 logger.info("HTTPS not configured - skipping Caddy domain setup")
 
             # ── Provision student on shared-core (async via SQS when queue is configured) ──
-            # Use the provided student_name, or auto-generate a unique one per instance.
-            # The generated name is tagged on the EC2 instance so it can be retrieved later.
-            effective_student_name = student_name or f"student-{uuid.uuid4().hex[:8]}"
+            # effective_student_name was pre-generated above (before domain_exports) so the same
+            # student ID is used in user_data injection AND in the tagging/provisioning steps.
+            # Fall back to generating here only if the HTTPS block was skipped (no domain).
+            if not effective_student_name:
+                effective_student_name = student_name or f"student-{uuid.uuid4().hex[:8]}"
             # Tag the instance with the (possibly auto-generated) student name so that
             # delete_instances can deprovision it via the EC2 Student tag fallback.
             try:
@@ -3028,7 +3335,22 @@ def list_instances(include_terminated=False, tutorial_session_id=None, include_h
                     instance_info['health_checked_at'] = health_checked_at
                     if health_error:
                         instance_info['health_error'] = health_error
-                
+
+                # Enrich pool instances with shared-core Jenkins/Gitea URLs
+                # For assigned instances: include student-specific job/repo URLs
+                # For unassigned instances: include base Jenkins/Gitea URLs from shared-core
+                if instance_type == 'pool':
+                    student_name = assignment.get('student_name')
+                    sc_urls = get_shared_core_urls(student_name or '', workshop_value)
+                    if sc_urls.get('shared_core_mode'):
+                        # Always include base shared-core URLs when shared-core is enabled
+                        instance_info['jenkins_url'] = sc_urls.get('jenkins_url')
+                        instance_info['gitea_url'] = sc_urls.get('gitea_url')
+                        # Include student-specific URLs only if assigned
+                        if student_name:
+                            instance_info['jenkins_job_url'] = sc_urls.get('jenkins_job_url')
+                            instance_info['gitea_repo_url'] = sc_urls.get('gitea_repo_url')
+
                 instances.append(instance_info)
 
         actual_cost_result = {
@@ -4657,7 +4979,25 @@ def lambda_handler(event, context):
                 'headers': get_cors_headers(),
                 'body': json.dumps(result)
             }
-        
+
+        elif api_path == '/delete_shared_core_resources' and http_method == 'POST':
+            workshop_name = body.get('workshop') or WORKSHOP_NAME
+            resource_type = body.get('resource_type')
+
+            if not resource_type:
+                return {
+                    'statusCode': 400,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({'success': False, 'error': 'resource_type is required (jenkins_folders or gitea_repos)'})
+                }
+
+            result = delete_shared_core_resources(workshop_name, resource_type)
+            return {
+                'statusCode': 200 if result['success'] else 500,
+                'headers': get_cors_headers(),
+                'body': json.dumps(result)
+            }
+
         elif api_path == '/update_timeout_settings' and http_method == 'POST':
             workshop_name = body.get('workshop')
             stop_timeout = body.get('stop_timeout')

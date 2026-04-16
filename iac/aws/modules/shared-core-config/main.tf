@@ -8,6 +8,7 @@ resource "aws_ssm_parameter" "shared_core_instance_id" {
   type        = "String"
   value       = var.shared_core_instance_id
   tier        = "Standard"
+  overwrite   = true
 
   tags = {
     Environment = var.shared_core_environment
@@ -23,6 +24,7 @@ resource "aws_ssm_parameter" "shared_core_ssh_host" {
   type        = "String"
   value       = var.shared_core_ssh_host
   tier        = "Standard"
+  overwrite   = true
 
   tags = {
     Environment = var.shared_core_environment
@@ -40,6 +42,7 @@ resource "aws_ssm_parameter" "shared_core_jenkins_domain" {
   type        = "String"
   value       = var.shared_core_jenkins_domain
   tier        = "Standard"
+  overwrite   = true
 
   tags = {
     Environment = var.shared_core_environment
@@ -57,6 +60,7 @@ resource "aws_ssm_parameter" "shared_core_gitea_domain" {
   type        = "String"
   value       = var.shared_core_gitea_domain
   tier        = "Standard"
+  overwrite   = true
 
   tags = {
     Environment = var.shared_core_environment
@@ -72,6 +76,7 @@ resource "aws_ssm_parameter" "shared_core_security_group_id" {
   type        = "String"
   value       = var.shared_core_security_group_id
   tier        = "Standard"
+  overwrite   = true
 
   tags = {
     Environment = var.shared_core_environment
@@ -105,6 +110,7 @@ resource "aws_ssm_parameter" "shared_core_gitea_admin_user" {
   type        = "String"
   value       = var.shared_core_gitea_admin_user
   tier        = "Standard"
+  overwrite   = true
 
   tags = {
     Environment = var.shared_core_environment
@@ -120,6 +126,7 @@ resource "aws_ssm_parameter" "shared_core_gitea_admin_email" {
   type        = "String"
   value       = var.shared_core_gitea_admin_email
   tier        = "Standard"
+  overwrite   = true
 
   tags = {
     Environment = var.shared_core_environment
@@ -135,6 +142,7 @@ resource "aws_ssm_parameter" "shared_core_gitea_org_name" {
   type        = "String"
   value       = var.shared_core_gitea_org_name
   tier        = "Standard"
+  overwrite   = true
 
   tags = {
     Environment = var.shared_core_environment
@@ -154,6 +162,7 @@ resource "aws_ssm_parameter" "jenkins_agent_ecs_cluster_arn" {
   type        = "String"
   value       = var.jenkins_agent_ecs_cluster_arn
   tier        = "Standard"
+  overwrite   = true
 
   tags = {
     Environment = var.shared_core_environment
@@ -169,6 +178,7 @@ resource "aws_ssm_parameter" "jenkins_agent_ecr_image" {
   type        = "String"
   value       = "${var.jenkins_agent_ecr_image}:latest"
   tier        = "Standard"
+  overwrite   = true
 
   tags = {
     Environment = var.shared_core_environment
@@ -184,6 +194,7 @@ resource "aws_ssm_parameter" "jenkins_agent_ecs_security_group_id" {
   type        = "String"
   value       = var.jenkins_agent_ecs_security_group_id
   tier        = "Standard"
+  overwrite   = true
 
   tags = {
     Environment = var.shared_core_environment
@@ -199,6 +210,7 @@ resource "aws_ssm_parameter" "jenkins_agent_task_execution_role_arn" {
   type        = "String"
   value       = var.jenkins_agent_task_execution_role_arn
   tier        = "Standard"
+  overwrite   = true
 
   tags = {
     Environment = var.shared_core_environment
@@ -214,6 +226,7 @@ resource "aws_ssm_parameter" "jenkins_agent_task_role_arn" {
   type        = "String"
   value       = var.jenkins_agent_task_role_arn
   tier        = "Standard"
+  overwrite   = true
 
   tags = {
     Environment = var.shared_core_environment
@@ -229,6 +242,7 @@ resource "aws_ssm_parameter" "jenkins_agent_subnet_id" {
   type        = "String"
   value       = var.jenkins_agent_subnet_id
   tier        = "Standard"
+  overwrite   = true
 
   tags = {
     Environment = var.shared_core_environment

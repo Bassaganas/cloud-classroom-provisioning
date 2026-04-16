@@ -315,7 +315,7 @@ resource "aws_lambda_event_source_mapping" "cloudfront_logs" {
 # Required because S3 only serves DefaultRootObject at the true root; sub-paths
 # using directory-style URLs must explicitly resolve to their index.html.
 resource "aws_cloudfront_function" "s3_directory_index" {
-  count = var.s3_origin_bucket != "" || var.s3_bucket_domain != "" ? 1 : 0
+  count = var.enable_s3_path_rewrite ? 1 : 0
 
   name    = "s3-dir-index-${var.environment}-${replace(replace(var.domain_name, ".testingfantasy.com", ""), ".", "-")}"
   runtime = "cloudfront-js-2.0"
@@ -691,7 +691,7 @@ resource "aws_cloudfront_distribution" "distribution" {
 
     # Attach the directory-index rewrite function for S3 static sites
     dynamic "function_association" {
-      for_each = (var.s3_origin_bucket != "" || var.s3_bucket_domain != "") ? [1] : []
+      for_each = var.enable_s3_path_rewrite ? [1] : []
       content {
         event_type   = "viewer-request"
         function_arn = aws_cloudfront_function.s3_directory_index[0].arn

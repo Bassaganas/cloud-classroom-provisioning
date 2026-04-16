@@ -144,14 +144,18 @@ create_gitea_repo() {
     log "  ✓ Student '${STUDENT_ID}' added as collaborator"
 }
 
-# ── Step 2.5: Seed Jenkinsfile into student repo ─────────────────────────────
+# ── Step 2.5: Seed SUT content into student repo ────────────────────────────
+# Seeds sut/, tests/, Jenkinsfile, and pytest.ini from the deployed app directory
+# via a single git commit/push.  Falls back to a minimal stub Jenkinsfile when
+# the source tree is unavailable (e.g. during testing without a full deploy).
 
-seed_jenkinsfile() {
-    log "Step 2.5: Seeding Jenkinsfile into '${REPO_NAME}'..."
+_seed_stub_jenkinsfile() {
+    # Fallback: seed a minimal Jenkinsfile via the Gitea REST API.
+    # Used only when the SUT source directory is unavailable on this host.
+    log "  Falling back to stub Jenkinsfile (SUT source not found on this host)"
 
-    # Use Python for the HTTP call — avoids bash quoting issues with base64/JSON over HTTPS
     _REPO_NAME="${REPO_NAME}" python3 - << 'PYEOF'
-import urllib.request, urllib.error, base64, json, os
+import urllib.request, urllib.error, base64, json, os, ssl
 
 gitea_url  = os.environ.get('GITEA_URL', 'http://localhost:3030')
 admin_user = os.environ.get('GITEA_ADMIN_USER', 'fellowship')
@@ -195,9 +199,15 @@ jenkinsfile = b"""pipeline {
 
 url = f"{gitea_url}/api/v1/repos/{org_name}/{repo_name}/contents/Jenkinsfile"
 payload = json.dumps({
-    "message": "chore: seed Jenkinsfile for fellowship pipeline",
+    "message": "chore: seed stub Jenkinsfile for fellowship pipeline",
     "content": base64.b64encode(jenkinsfile).decode()
 }).encode()
+
+# Disable SSL cert verification only when talking to localhost/internal URLs
+ctx = ssl.create_default_context()
+if 'localhost' in gitea_url or '127.0.0.1' in gitea_url:
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
 
 creds = base64.b64encode(f"{admin_user}:{admin_pass}".encode()).decode()
 req = urllib.request.Request(url, data=payload, method='POST')
@@ -205,8 +215,8 @@ req.add_header('Authorization', f'Basic {creds}')
 req.add_header('Content-Type', 'application/json')
 
 try:
-    urllib.request.urlopen(req)
-    print(f"[provision]   \u2713 Jenkinsfile seeded into '{repo_name}'")
+    urllib.request.urlopen(req, context=ctx)
+    print(f"[provision]   \u2713 Stub Jenkinsfile seeded into '{repo_name}'")
 except urllib.error.HTTPError as e:
     body = e.read().decode(errors='replace')
     if e.code == 422 and 'already exist' in body.lower():
@@ -216,9 +226,114 @@ except urllib.error.HTTPError as e:
 PYEOF
 }
 
+seed_sut_content() {
+    log "Step 2.5: Seeding SUT content into '${REPO_NAME}'..."
+
+    # Locate the deployed app directory that contains sut/ and tests/.
+    # The deploy-shared-core workflow clones the app into /home/ec2-user/fellowship-sut.
+    local app_dir=""
+    for candidate in /home/ec2-user/fellowship-sut /opt/fellowship-sut /home/ec2-user; do
+        if [ -d "${candidate}/sut" ] && [ -f "${candidate}/Jenkinsfile" ]; then
+            app_dir="${candidate}"
+            break
+        fi
+    done
+
+    if [ -z "${app_dir}" ]; then
+        warn "SUT source directory (sut/ + Jenkinsfile) not found — using stub Jenkinsfile"
+        _seed_stub_jenkinsfile
+        return 0
+    fi
+
+    log "  SUT source: ${app_dir}"
+
+    # Build an authenticated clone URL so we can git push without a credential helper.
+    local auth_url
+    auth_url=$(printf '%s' "${GITEA_URL}" | \
+        sed "s|https://|https://${GITEA_ADMIN_USER}:${GITEA_ADMIN_PASSWORD}@|g" | \
+        sed "s|http://|http://${GITEA_ADMIN_USER}:${GITEA_ADMIN_PASSWORD}@|g")
+    auth_url="${auth_url}/${GITEA_ORG_NAME}/${REPO_NAME}.git"
+
+    local tmp_dir
+    tmp_dir=$(mktemp -d)
+    # shellcheck disable=SC2064
+    trap "rm -rf '${tmp_dir}'" RETURN
+
+    if ! git clone --quiet "${auth_url}" "${tmp_dir}/repo" 2>/dev/null; then
+        warn "git clone of '${REPO_NAME}' failed — falling back to stub Jenkinsfile"
+        _seed_stub_jenkinsfile
+        return 0
+    fi
+
+    cd "${tmp_dir}/repo" || { warn "cd into clone failed"; return 0; }
+    git config user.email "${GITEA_ADMIN_USER}@fellowship.local"
+    git config user.name "Gandalf the Grey"
+
+    # Copy each SUT asset into the repo working tree.
+    local items_copied=0
+    for item in sut tests Jenkinsfile pytest.ini; do
+        if [ -e "${app_dir}/${item}" ]; then
+            cp -a "${app_dir}/${item}" .
+            items_copied=$((items_copied + 1))
+            log "  ✓ Included ${item}"
+        else
+            warn "  ${item} not found in ${app_dir} — skipping"
+        fi
+    done
+
+    # Include any exercises docs if present.
+    # First check exercises/ directly in the app dir (preferred — committed to repo),
+    # then fall back to palantir-jenkins-ai/docs/exercises for legacy layouts.
+    for exercises_dir in \
+        "${app_dir}/exercises" \
+        "${app_dir}/palantir-jenkins-ai/docs/exercises" \
+        "$(dirname "${app_dir}")/palantir-jenkins-ai/docs/exercises"; do
+        if [ -d "${exercises_dir}" ]; then
+            mkdir -p exercises
+            cp -a "${exercises_dir}/." exercises/
+            log "  ✓ Included exercises"
+            break
+        fi
+    done
+
+    if [ "${items_copied}" -eq 0 ]; then
+        warn "No SUT content copied — falling back to stub Jenkinsfile"
+        cd /
+        _seed_stub_jenkinsfile
+        return 0
+    fi
+
+    git add -A
+    if git diff --cached --quiet; then
+        log "  ✓ SUT content already present in '${REPO_NAME}' (nothing to commit)"
+    else
+        git commit -q -m "feat: seed Fellowship SUT (sut/, tests/, Jenkinsfile) for ${STUDENT_ID}"
+        if git push -q origin main; then
+            log "  ✓ SUT content pushed to '${REPO_NAME}'"
+        else
+            warn "git push failed — students may need to pull manually"
+        fi
+    fi
+
+    cd /
+}
+
 create_webhook() {
     log "Step 3: Creating webhook for '${REPO_NAME}'..."
-    local jenkins_webhook_url="${JENKINS_URL}/gitea-webhook/post"
+local jenkins_webhook_url="${SHARED_JENKINS_URL%/}/gitea-webhook/post"
+    
+    # NEW (2026-04-15): Validate endpoint is reachable before creating webhook
+    # This helps diagnose webhook issues where Gitea cannot reach Jenkins
+    log "  Validating Jenkins webhook endpoint reachability..."
+    if ! curl -sf --max-time 5 -o /dev/null "${jenkins_webhook_url}" >/dev/null 2>&1; then
+        warn "Jenkins webhook endpoint may not be reachable: ${jenkins_webhook_url}"
+        warn "The webhook will be created, but deliveries may fail"
+        warn "Verify that JENKINS_URL is set to the external HTTPS domain, not localhost"
+        warn "Check Jenkins logs if webhook deliveries are showing as failed in Gitea UI"
+    else
+        log "  ✓ Jenkins webhook endpoint is reachable"
+    fi
+    
     local response
     response=$(gitea_api POST "/repos/${GITEA_ORG_NAME}/${REPO_NAME}/hooks" "{
         \"type\": \"gitea\",
@@ -343,7 +458,7 @@ main() {
     log "Provisioning student '${STUDENT_ID}' on shared-core stack..."
     create_gitea_user
     create_gitea_repo
-    seed_jenkinsfile
+    seed_sut_content
     create_webhook
     create_jenkins_folder
     create_jenkins_pipeline
