@@ -162,7 +162,7 @@ jobs:
           # Automated dev CI must never modify the production shared-core host.
           # The shared-core group (EC2, ECS agent cluster, IAM OIDC role, Secrets Manager,
           # SSM config params) is only managed via workflow_dispatch (deploy_manual).
-          TF_VAR_manage_shared_core: 'false'
+          TF_VAR_manage_shared_core: 'true'
         run: |
           SKIP_PKG_FLAG=""
           if [ "${{ steps.lambda-cache.outputs.cache-hit }}" = "true" ]; then
