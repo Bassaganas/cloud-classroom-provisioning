@@ -520,6 +520,15 @@ resource "aws_api_gateway_domain_name" "api_domain" {
   }
 
   depends_on = [aws_acm_certificate_validation.api_domain_cert]
+
+  # Allow management of pre-existing domain names without conflict
+  lifecycle {
+    ignore_changes = [
+      certificate_arn,
+      regional_certificate_arn,
+      tags
+    ]
+  }
 }
 
 # Base Path Mapping (maps root path to stage)

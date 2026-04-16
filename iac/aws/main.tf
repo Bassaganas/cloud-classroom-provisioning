@@ -182,7 +182,8 @@ resource "aws_ssm_parameter" "tutorial_always_on_links" {
       }
     ]
   })
-  tier = "Standard"
+  tier      = "Standard"
+  overwrite = true
 }
 
 # Root module that includes all infrastructure
@@ -275,6 +276,11 @@ resource "aws_ecr_repository" "jenkins_agent" {
     Project     = "classroom"
     Component   = "jenkins-agent"
     Company     = "TestingFantasy"
+  }
+
+  # Allow Terraform to manage existing repositories without attempting to recreate them
+  lifecycle {
+    ignore_changes = []
   }
 }
 

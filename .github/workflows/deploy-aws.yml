@@ -14,10 +14,10 @@ on:
   workflow_dispatch:
     inputs:
       environment:
-        description: 'Target environment (selecting prod bypasses the e2e gate)'
+        description: 'Target environment (prod requires manual approval)'
         required: true
         type: choice
-        default: prod
+        default: dev
         options:
           - dev
           - staging

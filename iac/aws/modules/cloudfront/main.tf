@@ -516,17 +516,10 @@ resource "null_resource" "cleanup_existing_cloudfront" {
       DIST_ID=$(aws cloudfront list-distributions --query "DistributionList.Items[?Aliases.Items[?@=='${var.domain_name}']].Id" --output text 2>/dev/null | head -n1)
       
       if [ ! -z "$DIST_ID" ] && [ "$DIST_ID" != "None" ]; then
-        echo "Found existing CloudFront distribution $DIST_ID with alias ${var.domain_name}"
-        echo "Note: CloudFront distributions must be disabled manually before deletion"
-        echo "Please disable distribution $DIST_ID in AWS Console or use:"
-        echo "  aws cloudfront get-distribution-config --id $DIST_ID > /tmp/dist-config.json"
-        echo "  # Edit /tmp/dist-config.json to set Enabled: false"
-        echo "  aws cloudfront update-distribution --id $DIST_ID --if-match <ETag> --distribution-config file:///tmp/dist-config.json"
-        echo "Then wait for deployment and delete with:"
-        echo "  aws cloudfront delete-distribution --id $DIST_ID --if-match <ETag>"
-        exit 1
+        echo "ℹ Found existing CloudFront distribution $DIST_ID with alias ${var.domain_name} - Terraform will manage it"
+        echo "  (Existing distributions are adopted by Terraform if created with matching state)"
       else
-        echo "No existing CloudFront distribution found with alias ${var.domain_name}, proceeding with creation"
+        echo "✓ No existing CloudFront distribution with alias ${var.domain_name} - proceeding with creation"
       fi
     EOT
   }

@@ -18,7 +18,11 @@ locals {
 resource "aws_dynamodb_table" "instance_assignments" {
   name         = "dynamodb-instance-assignments-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "instance_id"
+
+  key_schema {
+    attribute_name = "instance_id"
+    key_type       = "HASH"
+  }
 
   attribute {
     name = "instance_id"
@@ -159,7 +163,11 @@ resource "random_password" "instance_manager_password" {
 resource "aws_dynamodb_table" "tutorial_sessions" {
   name         = "dynamodb-tutorial-sessions-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "session_id"
+
+  key_schema {
+    attribute_name = "session_id"
+    key_type       = "HASH"
+  }
 
   attribute {
     name = "session_id"

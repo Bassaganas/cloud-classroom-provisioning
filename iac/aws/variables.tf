@@ -39,7 +39,7 @@ variable "github_actions_oidc_thumbprint" {
 variable "shared_core_environment" {
   description = "Environment key used for shared-core SSM and Secrets Manager paths"
   type        = string
-  default     = "prod"
+  default     = "dev"
 }
 
 variable "shared_core_github_owner" {
