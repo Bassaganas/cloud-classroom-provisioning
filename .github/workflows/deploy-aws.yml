@@ -288,12 +288,12 @@ jobs:
           set -euo pipefail
           ENV="${{ inputs.environment }}"
           SC_ENV="${ENV}"
-          # shared_core_environment is always "prod" in the current config
+          # shared_core_environment now respects the selected environment (dev/staging/prod)
           JENKINS_DOMAIN=$(aws ssm get-parameter \
-            --name "/classroom/shared-core/prod/jenkins-domain" \
+            --name "/classroom/shared-core/${SC_ENV}/jenkins-domain" \
             --query 'Parameter.Value' --output text 2>/dev/null || echo "")
           GITEA_DOMAIN=$(aws ssm get-parameter \
-            --name "/classroom/shared-core/prod/gitea-domain" \
+            --name "/classroom/shared-core/${SC_ENV}/gitea-domain" \
             --query 'Parameter.Value' --output text 2>/dev/null || echo "")
 
           if [ -z "$JENKINS_DOMAIN" ]; then
