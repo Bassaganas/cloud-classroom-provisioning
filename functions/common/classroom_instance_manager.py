@@ -376,12 +376,47 @@ def provision_student_on_shared_core(student_id, workshop_name=None, student_pas
     if not student_password:
         student_password = 'fellowship123'
 
+    # ── Retrieve shared-core domains from SSM for webhook configuration ──
+    # (2026-04-17 fix: Missing JENKINS_URL and GITEA_URL was causing webhooks
+    #  to be created with localhost URLs that Gitea container cannot reach)
+    workshop = workshop_name or WORKSHOP_NAME
+    env = ENVIRONMENT
+    
+    jenkins_domain = ''
+    gitea_domain = ''
+    try:
+        jenkins_response = ssm.get_parameter(
+            Name=f"/classroom/shared-core/{env}/jenkins-domain",
+            WithDecryption=False
+        )
+        jenkins_domain = jenkins_response['Parameter']['Value']
+        logger.info(f"Retrieved Jenkins domain for webhook config: {jenkins_domain}")
+    except Exception as e:
+        logger.warning(f"Could not retrieve Jenkins domain from SSM: {str(e)}")
+    
+    try:
+        gitea_response = ssm.get_parameter(
+            Name=f"/classroom/shared-core/{env}/gitea-domain",
+            WithDecryption=False
+        )
+        gitea_domain = gitea_response['Parameter']['Value']
+        logger.info(f"Retrieved Gitea domain for webhook config: {gitea_domain}")
+    except Exception as e:
+        logger.warning(f"Could not retrieve Gitea domain from SSM: {str(e)}")
+
     environment_vars = {
         'GITEA_ADMIN_USER': credentials.get('gitea_admin_user', 'fellowship'),
         'GITEA_ADMIN_PASSWORD': credentials.get('gitea_admin_password', 'fellowship123'),
         'GITEA_ORG_NAME': credentials.get('gitea_org_name', 'fellowship-org'),
         'JENKINS_ADMIN_USER': credentials.get('jenkins_admin_user', 'fellowship'),
         'JENKINS_ADMIN_PASSWORD': credentials.get('jenkins_admin_password', 'fellowship123'),
+        # Critical: Webhook configuration requires external HTTPS URLs for Gitea to POST to Jenkins
+        # If domains are not configured in SSM, fallback to localhost (local development)
+        'JENKINS_URL': f'https://{jenkins_domain}/' if jenkins_domain else 'http://localhost:8080',
+        'SHARED_JENKINS_URL': f'https://{jenkins_domain}/' if jenkins_domain else 'http://localhost:8080',
+        'GITEA_URL': f'https://{gitea_domain}/' if gitea_domain else 'http://localhost:3030',
+        'SHARED_GITEA_URL': f'https://{gitea_domain}/' if gitea_domain else 'http://localhost:3030',
+        'GITEA_INTERNAL_URL': 'http://gitea:3000',  # Docker-internal URL for Jenkins to clone repos
     }
 
     result = invoke_ssm_command(
@@ -443,12 +478,42 @@ def deprovision_student_on_shared_core(student_id, workshop_name=None, force=Fal
         }
 
     credentials = get_shared_core_credentials()
+    
+    # ── Retrieve shared-core domains from SSM for API calls ──
+    # (Same fix as provision_student_on_shared_core: ensure external URLs are used)
+    workshop = workshop_name or WORKSHOP_NAME
+    env = ENVIRONMENT
+    
+    jenkins_domain = ''
+    gitea_domain = ''
+    try:
+        jenkins_response = ssm.get_parameter(
+            Name=f"/classroom/shared-core/{env}/jenkins-domain",
+            WithDecryption=False
+        )
+        jenkins_domain = jenkins_response['Parameter']['Value']
+        logger.info(f"Retrieved Jenkins domain for deprovisioning: {jenkins_domain}")
+    except Exception as e:
+        logger.warning(f"Could not retrieve Jenkins domain from SSM: {str(e)}")
+    
+    try:
+        gitea_response = ssm.get_parameter(
+            Name=f"/classroom/shared-core/{env}/gitea-domain",
+            WithDecryption=False
+        )
+        gitea_domain = gitea_response['Parameter']['Value']
+        logger.info(f"Retrieved Gitea domain for deprovisioning: {gitea_domain}")
+    except Exception as e:
+        logger.warning(f"Could not retrieve Gitea domain from SSM: {str(e)}")
+    
     environment_vars = {
         'GITEA_ADMIN_USER': credentials.get('gitea_admin_user', 'fellowship'),
         'GITEA_ADMIN_PASSWORD': credentials.get('gitea_admin_password', 'fellowship123'),
         'GITEA_ORG_NAME': credentials.get('gitea_org_name', 'fellowship-org'),
         'JENKINS_ADMIN_USER': credentials.get('jenkins_admin_user', 'fellowship'),
         'JENKINS_ADMIN_PASSWORD': credentials.get('jenkins_admin_password', 'fellowship123'),
+        'JENKINS_URL': f'https://{jenkins_domain}/' if jenkins_domain else 'http://localhost:8080',
+        'GITEA_URL': f'https://{gitea_domain}/' if gitea_domain else 'http://localhost:3030',
     }
 
     result = invoke_ssm_command(
@@ -2460,7 +2525,45 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
                     stop_timeout=None, terminate_timeout=None, hard_terminate_timeout=None,
                     tutorial_session_id=None, purchase_type='on-demand', spot_duration_hours=2,
                     spot_max_price=None, idempotency_key=None, fallback_to_on_demand=False,
-                    ec2_instance_type=None, student_name=None):
+                    ec2_instance_type=None,                     #!/bin/bash
+                    set -euo pipefail
+                    
+                    SSH_HOST="18.202.77.18"
+                    SSH_USER="ec2-user"
+                    SSH_KEY="/tmp/shared-core-ssh-key.pem"
+                    
+                    echo "=== WEBHOOK DIAGNOSTIC SCRIPT ==="
+                    
+                    ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "${SSH_USER}@${SSH_HOST}" << 'REMOTE'
+                    set -euo pipefail
+                    cd /home/ec2-user/fellowship-sut/core
+                    
+                    echo "1. Jenkins CASC aliasUrl:"
+                    docker compose exec -T jenkins cat /var/jenkins_home/jenkins.yaml | grep -A 2 "aliasUrl" || echo "NOT FOUND"
+                    
+                    echo ""
+                    echo "2. Fresh Jenkins logs (last 20 webhook-related lines):"
+                    docker compose logs jenkins 2>&1 | grep -i "gitea\|webhook\|trigger" | tail -20 || echo "NO MATCHES"
+                    
+                    echo ""
+                    echo "3. Student job config (GiteaPushTrigger check):"
+                    curl -s -u fellowship:fellowship123 \
+                      http://localhost:8080/job/student-231eef13/job/fellowship-pipeline/config.xml \
+                      | grep -i "GiteaPushTrigger" || echo "TRIGGER NOT FOUND!"
+                    
+                    echo ""
+                    echo "4. Jenkins jobs (student folders):"
+                    curl -s -u fellowship:fellowship123 \
+                      http://localhost:8080/api/json \
+                      | jq '.jobs[] | select(.name | startswith("student")) | {name, url}' || echo "NO STUDENT JOBS"
+                    
+                    echo ""
+                    echo "5. Gitea webhook for repo:"
+                    curl -s -u fellowship:fellowship123 \
+                      http://localhost:3000/api/v1/repos/fellowship-org/fellowship-sut-student-231eef13/hooks \
+                      | jq '.[0] | {id, type, url: .config.url, active}' || echo "NO HOOKS"
+                    
+                    REMOTE=None):
     """Create EC2 instance(s) for a workshop template
     
     Args:
@@ -2757,9 +2860,9 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
                     tags.append({'Key': 'Route53ZoneId', 'Value': HTTPS_HOSTED_ZONE_ID})
                 
                 # Derive jenkins/ide subdomains (mirrors what setup_fellowship.sh does at boot)
-                jenkins_domain = f"jenkins-{domain}"
+                jenkins_domain = f"https://jenkins.fellowship.testingfantasy.com/job/fellowship-pipeline/{student_name}"
                 ide_domain = f"ide-{domain}"
-                gitea_domain = f"gitea-{domain}"
+                gitea_domain = f"https://gitea.fellowship.testingfantasy.com/fellowship-org/fellowship-sut-{student_name}"
                 tags.append({'Key': 'GiteaDomain', 'Value': gitea_domain})
                 tags.append({'Key': 'JenkinsDomain', 'Value': jenkins_domain})
                 tags.append({'Key': 'IdeDomain', 'Value': ide_domain})

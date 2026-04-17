@@ -52,6 +52,7 @@ resource "aws_ecs_cluster_capacity_providers" "jenkins_agents" {
 resource "aws_cloudwatch_log_group" "jenkins_agents" {
   name              = "/jenkins/agents/fellowship"
   retention_in_days = 7
+  skip_destroy      = false
 
   tags = {
     Environment = var.environment
@@ -59,6 +60,15 @@ resource "aws_cloudwatch_log_group" "jenkins_agents" {
     Project     = "classroom"
     Component   = "jenkins-agent"
     Company     = "TestingFantasy"
+  }
+
+  # Allow idempotent re-runs: if the log group already exists, don't fail
+  # Import existing log group: terraform import module.jenkins_agent_ecs[0].aws_cloudwatch_log_group.jenkins_agents /jenkins/agents/fellowship
+  lifecycle {
+    ignore_changes = [
+      tags,
+      retention_in_days
+    ]
   }
 }
 

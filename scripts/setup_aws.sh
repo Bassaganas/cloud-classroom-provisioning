@@ -674,6 +674,44 @@ export TF_VAR_shared_core_gitea_admin_password="${TF_VAR_shared_core_gitea_admin
 # Ensure EC2 key pair name is set if already configured (e.g., from setup_classroom.sh or env var)
 export TF_VAR_shared_core_key_name="${TF_VAR_shared_core_key_name:-}"
 
+# Create shared-core deploy secret in AWS Secrets Manager if TF_VAR_* env vars are set
+# This allows the deploy-shared-core workflow to retrieve the secret without manual setup
+if [ -n "${TF_VAR_shared_core_ssh_private_key:-}" ] && [ -n "${TF_VAR_shared_core_gh_repo_token:-}" ]; then
+  _DEPLOY_SECRET_ID="/classroom/shared-core/${ENVIRONMENT}/deploy"
+  echo "Creating/updating deploy secret: $_DEPLOY_SECRET_ID"
+  
+  # Build the JSON secret from env vars
+  _SECRET_JSON=$(python3 << 'PYSCRIPT'
+import json, os
+secret = {
+  "ssh_private_key": os.environ.get("TF_VAR_shared_core_ssh_private_key", ""),
+  "gh_repo_token": os.environ.get("TF_VAR_shared_core_gh_repo_token", ""),
+  "jenkins_admin_password": os.environ.get("TF_VAR_shared_core_jenkins_admin_password", ""),
+  "gitea_admin_password": os.environ.get("TF_VAR_shared_core_gitea_admin_password", "")
+}
+print(json.dumps(secret))
+PYSCRIPT
+)
+  
+  # Create or update the secret (overwrite=true)
+  if aws secretsmanager put-secret-value \
+    --secret-id "$_DEPLOY_SECRET_ID" \
+    --secret-string "$_SECRET_JSON" \
+    --region "$REGION" >/dev/null 2>&1; then
+    echo "✓ Deploy secret updated: $_DEPLOY_SECRET_ID"
+  else
+    # If secret doesn't exist, create it first
+    if aws secretsmanager create-secret \
+      --name "$_DEPLOY_SECRET_ID" \
+      --secret-string "$_SECRET_JSON" \
+      --region "$REGION" >/dev/null 2>&1; then
+      echo "✓ Deploy secret created: $_DEPLOY_SECRET_ID"
+    else
+      echo "⚠ Warning: Could not create/update deploy secret. deploy-shared-core workflow will fail unless the secret is manually populated."
+    fi
+  fi
+fi
+
 # Determine target flags for partial deployments
 TARGET_FLAGS=""
 if [ "$ONLY_COMMON" = true ]; then
