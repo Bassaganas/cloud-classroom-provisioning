@@ -2563,10 +2563,13 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
         
         workshop_name = workshop_name or WORKSHOP_NAME
         
-        # Generate student_name with UUID if not provided (for consistency across instance creation)
-        if not student_name:
-            student_name = f"student-{uuid.uuid4().hex[:8]}"
-            logger.info(f"Auto-generated student_name: {student_name}")
+        # Track whether student_name was user-provided (shared across all instances)
+        # or should be auto-generated per instance (one unique student per instance)
+        student_name_is_user_provided = bool(student_name)
+        if student_name_is_user_provided:
+            logger.info(f"User provided student_name: {student_name} (will be shared across {count} instance(s))")
+        else:
+            logger.info(f"No student_name provided; will auto-generate unique student per instance (one of {count} total)")
         idempotency_item_key = None
         if idempotency_key:
             idempotency_item_key = _build_create_request_item_key(
@@ -2756,7 +2759,13 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
             # For shared-core provisioning, each instance gets its own student_name
             # (either the one passed in, or a generated UUID per instance if needed).
             user_data = base_user_data
-            instance_student_name = student_name  # Use the base student_name for this instance
+            
+            # Generate unique student_name per instance if not user-provided
+            if student_name_is_user_provided:
+                instance_student_name = student_name
+            else:
+                instance_student_name = f"student-{uuid.uuid4().hex[:8]}"
+                logger.info(f"[Instance {i+1}/{count}] Auto-generated student_name: {instance_student_name}")
             
             # Determine naming and tags based on type
             if instance_type == 'admin':
