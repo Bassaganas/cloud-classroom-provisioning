@@ -820,23 +820,28 @@ def get_shared_core_urls(student_id: str = '', workshop_name: str = '') -> dict:
         )
         return {'shared_core_mode': False}
 
-    base_jenkins = SHARED_JENKINS_URL.rstrip('/')
-    base_gitea = SHARED_GITEA_URL.rstrip('/')
+    def strip_protocol(url):
+        if url.startswith('http://'):
+            return url[len('http://'):]
+        if url.startswith('https://'):
+            return url[len('https://'):]
+        return url
+
+    base_jenkins = strip_protocol(SHARED_JENKINS_URL.rstrip('/'))
+    base_gitea = strip_protocol(SHARED_GITEA_URL.rstrip('/'))
     org = os.environ.get('GITEA_ORG_NAME', 'fellowship-org')
 
     result: dict = {
         'shared_core_mode': True,
-        'jenkins_url': base_jenkins + '/',
-        'gitea_url': base_gitea + '/',
+        'jenkins_url': f"https://{base_jenkins}/",
+        'gitea_url': f"https://{base_gitea}/",
     }
 
     if student_id:
-        result['jenkins_job_url'] = (
-            f"{base_jenkins}/job/{student_id}/job/fellowship-pipeline/"
-        )
-        result['gitea_repo_url'] = (
-            f"{base_gitea}/{org}/fellowship-sut-{student_id}"
-        )
+        # Jenkins job URL: https://jenkins-domain/job/{student_id}/
+        result['jenkins_job_url'] = f"https://{base_jenkins}/job/{student_id}/"
+        # Gitea repo URL: https://gitea-domain/org/fellowship-sut-{student_id}
+        result['gitea_repo_url'] = f"https://{base_gitea}/{org}/fellowship-sut-{student_id}"
 
     return result
 
@@ -2525,7 +2530,7 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
                     stop_timeout=None, terminate_timeout=None, hard_terminate_timeout=None,
                     tutorial_session_id=None, purchase_type='on-demand', spot_duration_hours=2,
                     spot_max_price=None, idempotency_key=None, fallback_to_on_demand=False,
-                    ec2_instance_type=None):
+                    ec2_instance_type=None, student_name=None):
     """Create EC2 instance(s) for a workshop template
     
     Args:
@@ -2541,6 +2546,8 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
         spot_duration_hours: Deprecated, ignored for regular Spot instances
         spot_max_price: Optional maximum Spot price in USD/hour (string or Decimal)
         fallback_to_on_demand: If True, retry with on-demand instances if Spot capacity is exhausted (default: False)
+        ec2_instance_type: Override EC2 instance type (optional)
+        student_name: Student identifier for shared-core provisioning (optional, auto-generated with UUID if not provided)
     """
     try:
         if purchase_type == 'spot':
@@ -2555,6 +2562,11 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
                     spot_max_price = None
         
         workshop_name = workshop_name or WORKSHOP_NAME
+        
+        # Generate student_name with UUID if not provided (for consistency across instance creation)
+        if not student_name:
+            student_name = f"student-{uuid.uuid4().hex[:8]}"
+            logger.info(f"Auto-generated student_name: {student_name}")
         idempotency_item_key = None
         if idempotency_key:
             idempotency_item_key = _build_create_request_item_key(
@@ -2741,8 +2753,10 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
 
         for i, instance_index in enumerate(reserved_indices):
             # Reset per-iteration state so values from instance N don't bleed into instance N+1.
+            # For shared-core provisioning, each instance gets its own student_name
+            # (either the one passed in, or a generated UUID per instance if needed).
             user_data = base_user_data
-            effective_student_name = None  # will be set inside the HTTPS block or in the fallback below
+            instance_student_name = student_name  # Use the base student_name for this instance
             
             # Determine naming and tags based on type
             if instance_type == 'admin':
@@ -2856,17 +2870,15 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
                 except Exception as e:
                     logger.warning(f"Error getting latest S3 artifact: {str(e)}")
                 
-                # Pre-generate the student name here so it can be injected into user_data.
-                # The same value is reused below when tagging the instance and calling
-                # provision_student_on_shared_core(), avoiding any UUIDs mismatch.
-                effective_student_name = student_name or f"student-{uuid.uuid4().hex[:8]}"
+                # Student name is already generated at the start of the function,
+                # ensuring consistent UUIDs throughout the instance creation process.
 
                 # Derive Gitea org/repo for code-server clone.
                 # In shared-core mode the repo is per-student on the shared Gitea;
                 # in standalone mode it defaults to the local 'lotr-sut' repo.
                 _shared_core = get_shared_core_mode(workshop_name)
                 _gitea_org = 'fellowship-org'
-                _gitea_repo = f"fellowship-sut-{effective_student_name}" if _shared_core else 'lotr-sut'
+                _gitea_repo = f"fellowship-sut-{student_name}" if _shared_core else 'lotr-sut'
 
                 # Inject domain and S3 artifact information into user_data as environment variables
                 # This ensures the domain and artifact are available immediately without needing EC2 metadata service
@@ -3181,38 +3193,33 @@ export GITEA_REPO_NAME={_gitea_repo}
                 logger.info("HTTPS not configured - skipping Caddy domain setup")
 
             # ── Provision student on shared-core (async via SQS when queue is configured) ──
-            # effective_student_name was pre-generated above (before domain_exports) so the same
-            # student ID is used in user_data injection AND in the tagging/provisioning steps.
-            # Fall back to generating here only if the HTTPS block was skipped (no domain).
-            if not effective_student_name:
-                effective_student_name = student_name or f"student-{uuid.uuid4().hex[:8]}"
-            # Tag the instance with the (possibly auto-generated) student name so that
-            # delete_instances can deprovision it via the EC2 Student tag fallback.
+            # instance_student_name is set at the start of the loop and available for shared-core provisioning
+            # Tag the instance with the student name
             try:
                 ec2.create_tags(
                     Resources=[instance_id],
-                    Tags=[{'Key': 'Student', 'Value': effective_student_name}]
+                    Tags=[{'Key': 'Student', 'Value': instance_student_name}]
                 )
             except Exception as tag_e:
-                logger.warning(f"[{instance_id}] Could not tag instance with Student={effective_student_name}: {tag_e}")
+                logger.warning(f"[{instance_id}] Could not tag instance with Student={instance_student_name}: {tag_e}")
             try:
                 provision_result = provision_student_on_shared_core(
-                    student_id=effective_student_name,
+                    student_id=instance_student_name,
                     workshop_name=workshop_name
                 )
                 if provision_result['success']:
                     logger.info(
                         f"[{instance_id}] Enqueued shared-core provision for student "
-                        f"{effective_student_name} (request_id={provision_result.get('request_id') or provision_result.get('command_id', '')})"
+                        f"{instance_student_name} (request_id={provision_result.get('request_id') or provision_result.get('command_id', '')})"
                     )
                 else:
                     logger.warning(
-                        f"[{instance_id}] Shared-core provision for {effective_student_name} failed: "
+                        f"[{instance_id}] Shared-core provision for {instance_student_name} failed: "
                         f"{provision_result.get('message', '')}"
                     )
                 instances[-1]['shared_core_provision'] = {
-                    'student_name': effective_student_name,
-                    'auto_generated': student_name is None,
+                    'student_name': instance_student_name,
+                    'auto_generated': not student_name,
                     'success': provision_result['success'],
                     'async': provision_result.get('async', False),
                     'request_id': provision_result.get('request_id') or provision_result.get('command_id', ''),

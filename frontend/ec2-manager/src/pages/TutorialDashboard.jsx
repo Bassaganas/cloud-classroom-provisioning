@@ -751,8 +751,13 @@ function TutorialDashboard() {
                                 SUT
                               </Link>
                             )}
-                            {instance.tags?.JenkinsDomain && (
-                              <Link href={`https://${instance.tags.JenkinsDomain}`} target="_blank" rel="noopener noreferrer" sx={{ fontSize: '0.875rem' }}>
+                            {instance.tags?.JenkinsDomain && instance.tags?.Student && (
+                              <Link
+                                href={`https://${stripProtocol(instance.tags.JenkinsDomain)}/job/${instance.tags.Student}/`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                sx={{ fontSize: '0.875rem' }}
+                              >
                                 Jenkins
                               </Link>
                             )}
@@ -766,11 +771,22 @@ function TutorialDashboard() {
                                 IDE
                               </Link>
                             )}
-                            {instance.tags?.GiteaDomain && (
-                              <Link href={`https://${instance.tags.GiteaDomain}`} target="_blank" rel="noopener noreferrer" sx={{ fontSize: '0.875rem' }}>
+                            {instance.tags?.GiteaDomain && instance.tags?.Student && instance.tags?.GiteaOrg && (
+                              <Link
+                                href={`https://${stripProtocol(instance.tags.GiteaDomain)}/${instance.tags.GiteaOrg}/fellowship-sut-${instance.tags.Student}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                sx={{ fontSize: '0.875rem' }}
+                              >
                                 Gitea
                               </Link>
                             )}
+
+                            // Utility to strip protocol from a domain string
+                            function stripProtocol(url) {
+                              if (!url) return '';
+                              return url.replace(/^https?:\/\//, '');
+                            }
                             {instance.gitea_repo_url && !instance.tags?.GiteaDomain && (
                               <Link href={instance.gitea_repo_url} target="_blank" rel="noopener noreferrer" sx={{ fontSize: '0.875rem' }}>
                                 Gitea
