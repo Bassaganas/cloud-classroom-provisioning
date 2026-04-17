@@ -100,6 +100,11 @@ function formatUsd(value, digits = 4) {
   return `$${Number(value).toFixed(digits)}`
 }
 
+function stripProtocol(url) {
+  if (!url) return ''
+  return url.replace(/^https?:\/\//, '')
+}
+
 function TutorialDashboard() {
   const { workshop, sessionId } = useParams()
   const navigate = useNavigate()
@@ -782,11 +787,6 @@ function TutorialDashboard() {
                               </Link>
                             )}
 
-                            // Utility to strip protocol from a domain string
-                            function stripProtocol(url) {
-                              if (!url) return '';
-                              return url.replace(/^https?:\/\//, '');
-                            }
                             {instance.gitea_repo_url && !instance.tags?.GiteaDomain && (
                               <Link href={instance.gitea_repo_url} target="_blank" rel="noopener noreferrer" sx={{ fontSize: '0.875rem' }}>
                                 Gitea
