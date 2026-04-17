@@ -2525,45 +2525,7 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
                     stop_timeout=None, terminate_timeout=None, hard_terminate_timeout=None,
                     tutorial_session_id=None, purchase_type='on-demand', spot_duration_hours=2,
                     spot_max_price=None, idempotency_key=None, fallback_to_on_demand=False,
-                    ec2_instance_type=None,                     #!/bin/bash
-                    set -euo pipefail
-                    
-                    SSH_HOST="18.202.77.18"
-                    SSH_USER="ec2-user"
-                    SSH_KEY="/tmp/shared-core-ssh-key.pem"
-                    
-                    echo "=== WEBHOOK DIAGNOSTIC SCRIPT ==="
-                    
-                    ssh -i "$SSH_KEY" -o StrictHostKeyChecking=no "${SSH_USER}@${SSH_HOST}" << 'REMOTE'
-                    set -euo pipefail
-                    cd /home/ec2-user/fellowship-sut/core
-                    
-                    echo "1. Jenkins CASC aliasUrl:"
-                    docker compose exec -T jenkins cat /var/jenkins_home/jenkins.yaml | grep -A 2 "aliasUrl" || echo "NOT FOUND"
-                    
-                    echo ""
-                    echo "2. Fresh Jenkins logs (last 20 webhook-related lines):"
-                    docker compose logs jenkins 2>&1 | grep -i "gitea\|webhook\|trigger" | tail -20 || echo "NO MATCHES"
-                    
-                    echo ""
-                    echo "3. Student job config (GiteaPushTrigger check):"
-                    curl -s -u fellowship:fellowship123 \
-                      http://localhost:8080/job/student-231eef13/job/fellowship-pipeline/config.xml \
-                      | grep -i "GiteaPushTrigger" || echo "TRIGGER NOT FOUND!"
-                    
-                    echo ""
-                    echo "4. Jenkins jobs (student folders):"
-                    curl -s -u fellowship:fellowship123 \
-                      http://localhost:8080/api/json \
-                      | jq '.jobs[] | select(.name | startswith("student")) | {name, url}' || echo "NO STUDENT JOBS"
-                    
-                    echo ""
-                    echo "5. Gitea webhook for repo:"
-                    curl -s -u fellowship:fellowship123 \
-                      http://localhost:3000/api/v1/repos/fellowship-org/fellowship-sut-student-231eef13/hooks \
-                      | jq '.[0] | {id, type, url: .config.url, active}' || echo "NO HOOKS"
-                    
-                    REMOTE=None):
+                    ec2_instance_type=None):
     """Create EC2 instance(s) for a workshop template
     
     Args:
