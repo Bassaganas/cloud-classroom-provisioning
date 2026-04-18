@@ -2847,31 +2847,45 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
             # This eliminates timing issues - domain is known immediately
             machine_name = name  # Use the same name as the instance name
             if HTTPS_BASE_DOMAIN and HTTPS_HOSTED_ZONE_ID:
-                # Sanitize machine_name to ensure valid DNS characters
-                sanitized_machine_name = sanitize_domain_name(machine_name)
-                domain = f"{sanitized_machine_name}.{workshop_name}.{HTTPS_BASE_DOMAIN}"
-                # Sanitize the entire domain to be safe
-                domain = sanitize_domain_name(domain)
-                https_url = f"https://{domain}"
+                # Use workshop-specific domain patterns to match wildcard cert (*.testingfantasy.com)
+                # Testus Patronus uses dify-{instance_id}.testingfantasy.com (single level = coverage by wildcard)
+                # Fellowship uses {machine_name}.{workshop_name}.testingfantasy.com (multi-service)
+                if str(workshop_name or '').strip().lower() == 'testus_patronus':
+                    # Pass domain=None so setup_caddy_domain() constructs the correct pattern:
+                    # dify-{instance_id}.testingfantasy.com
+                    # This matches wildcard cert *.testingfantasy.com
+                    domain = None
+                    https_url = None
+                else:
+                    # Fellowship and other workshops: use machine_name-based domain
+                    sanitized_machine_name = sanitize_domain_name(machine_name)
+                    domain = f"{sanitized_machine_name}.{workshop_name}.{HTTPS_BASE_DOMAIN}"
+                    # Sanitize the entire domain to be safe
+                    domain = sanitize_domain_name(domain)
+                    https_url = f"https://{domain}"
                 
                 # Add domain tags BEFORE instance creation
                 # This ensures setup script can read them immediately
-                tags.append({'Key': 'HttpsDomain', 'Value': domain})
-                tags.append({'Key': 'HttpsUrl', 'Value': https_url})
+                # For testus_patronus, domain is None here — setup_caddy_domain() will set HttpsDomain
+                # after the instance is created (as it needs the instance_id for the domain pattern).
                 tags.append({'Key': 'HttpsEnabled', 'Value': 'true'})
                 tags.append({'Key': 'MachineName', 'Value': machine_name})  # Keep original for reference
                 if HTTPS_HOSTED_ZONE_ID:
                     tags.append({'Key': 'Route53ZoneId', 'Value': HTTPS_HOSTED_ZONE_ID})
-                
-                # Derive jenkins/ide subdomains (mirrors what setup_fellowship.sh does at boot)
+                if domain:
+                    tags.append({'Key': 'HttpsDomain', 'Value': domain})
+                    tags.append({'Key': 'HttpsUrl', 'Value': https_url})
+
+                # Derive jenkins/ide subdomains only for fellowship (not testus_patronus)
                 jenkins_domain = f"https://jenkins.fellowship.testingfantasy.com/job/fellowship-pipeline/{student_name}"
-                ide_domain = f"ide-{domain}"
+                ide_domain = f"ide-{domain}" if domain else ''
                 gitea_domain = f"https://gitea.fellowship.testingfantasy.com/fellowship-org/fellowship-sut-{student_name}"
-                tags.append({'Key': 'GiteaDomain', 'Value': gitea_domain})
-                tags.append({'Key': 'JenkinsDomain', 'Value': jenkins_domain})
-                tags.append({'Key': 'IdeDomain', 'Value': ide_domain})
-                
-                logger.info(f"Generated domain name BEFORE instance creation: {domain} (sanitized from machine_name: {machine_name})")
+                if str(workshop_name or '').strip().lower() != 'testus_patronus':
+                    tags.append({'Key': 'GiteaDomain', 'Value': gitea_domain})
+                    tags.append({'Key': 'JenkinsDomain', 'Value': jenkins_domain})
+                    tags.append({'Key': 'IdeDomain', 'Value': ide_domain})
+
+                logger.info(f"Generated domain name BEFORE instance creation: {domain or '(deferred to setup_caddy_domain)'} (machine_name: {machine_name})")
                 
                 # Get S3 bucket and latest artifact for instance setup
                 s3_bucket_name = None
@@ -2910,11 +2924,10 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
 
                 # Inject domain and S3 artifact information into user_data as environment variables
                 # This ensures the domain and artifact are available immediately without needing EC2 metadata service
+                # For testus_patronus, CADDY_DOMAIN is NOT injected here (domain=None);
+                # setup_caddy_domain() will tag the instance AFTER creation with the correct dify-{id}.testingfantasy.com domain,
+                # and the setup script will fall back to reading the HttpsDomain tag from EC2 metadata.
                 domain_exports = f"""# Domain information injected by Lambda (available immediately)
-export CADDY_DOMAIN={domain}
-export JENKINS_DOMAIN={jenkins_domain}
-export GITEA_DOMAIN={gitea_domain}
-export IDE_DOMAIN={ide_domain}
 export MACHINE_NAME={machine_name}
 export WORKSHOP_NAME={workshop_name}
 export ROUTE53_ZONE_ID={HTTPS_HOSTED_ZONE_ID}
@@ -2927,6 +2940,12 @@ export SHARED_GITEA_URL={SHARED_GITEA_URL}
 export GITEA_ORG_NAME={_gitea_org}
 export GITEA_REPO_NAME={_gitea_repo}
 """
+                # Only inject CADDY_DOMAIN when it is known pre-creation (not for testus_patronus)
+                if domain:
+                    domain_exports += f"export CADDY_DOMAIN={domain}\n"
+                    domain_exports += f"export JENKINS_DOMAIN={jenkins_domain}\n"
+                    domain_exports += f"export GITEA_DOMAIN={gitea_domain}\n"
+                    domain_exports += f"export IDE_DOMAIN={ide_domain}\n"
                 
                 # Add S3 artifact information if available
                 if s3_bucket_name:
@@ -2958,7 +2977,7 @@ export GITEA_REPO_NAME={_gitea_repo}
                     # Insert domain exports
                     lines.insert(insert_pos, domain_exports.rstrip())
                     user_data = '\n'.join(lines)
-                    logger.info(f"Injected domain information into user_data: CADDY_DOMAIN={domain}, JENKINS_DOMAIN={jenkins_domain}, IDE_DOMAIN={ide_domain}, MACHINE_NAME={machine_name}, GITEA_DOMAIN={gitea_domain}")
+                    logger.info(f"Injected domain information into user_data: CADDY_DOMAIN={domain or '(deferred)'}, MACHINE_NAME={machine_name}, WORKSHOP_NAME={workshop_name}")
                 else:
                     # No shebang, prepend
                     user_data = domain_exports + user_data

@@ -207,6 +207,8 @@ else
         log "  The domain will be set automatically when Lambda retries, then restart Caddy: sudo systemctl restart caddy"
         CADDY_DOMAIN="localhost"
     fi
+fi  # Close outer if/else block for domain source selection (PRIORITY 1: env var vs PRIORITY 2: EC2 tags)
+
 # Create Caddy directory and fetch pre-issued wildcard certificate from Secrets Manager
 mkdir -p /home/ec2-user/caddy/certs
 log "Fetching pre-issued wildcard certificate from Secrets Manager..."
