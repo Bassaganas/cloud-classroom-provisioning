@@ -127,6 +127,7 @@ def cleanup_route53_record(instance_id: str, tags: Dict, strict: bool = True, ma
     Returns:
         dict: {success, deleted, skipped, reason, attempts}
     """
+    logger.info(f"Starting Route53 cleanup for instance {instance_id} with tags {tags}")
     if not HTTPS_HOSTED_ZONE_ID:
         return {'success': True, 'deleted': False, 'skipped': True, 'reason': 'hosted-zone-not-configured', 'attempts': 0}
 
@@ -146,6 +147,7 @@ def cleanup_route53_record(instance_id: str, tags: Dict, strict: bool = True, ma
                 StartRecordType='A',
                 MaxItems='10'
             )
+            logger.info(f"Route53 list_resource_record_sets response for {normalized_domain}: {response}")
 
             record_to_delete = None
             for record in response.get('ResourceRecordSets', []):
