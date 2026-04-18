@@ -2570,10 +2570,9 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
         
         workshop_name = workshop_name or WORKSHOP_NAME
         
-        # Generate student_name with UUID if not provided (for consistency across instance creation)
-        if not student_name:
-            student_name = f"student-{uuid.uuid4().hex[:8]}"
-            logger.info(f"Auto-generated student_name: {student_name}")
+        # Store whether student_name was explicitly provided (if not, generate unique ones per instance)
+        student_name_provided = bool(student_name)
+        
         idempotency_item_key = None
         if idempotency_key:
             idempotency_item_key = _build_create_request_item_key(
@@ -2760,10 +2759,16 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
 
         for i, instance_index in enumerate(reserved_indices):
             # Reset per-iteration state so values from instance N don't bleed into instance N+1.
-            # For shared-core provisioning, each instance gets its own student_name
-            # (either the one passed in, or a generated UUID per instance if needed).
+            # For shared-core provisioning, each instance gets its own student_name:
+            # - If student_name was explicitly provided by caller, use it for all instances
+            # - If student_name was not provided, generate a UNIQUE UUID for each instance
             user_data = base_user_data
-            instance_student_name = student_name  # Use the base student_name for this instance
+            if student_name_provided:
+                instance_student_name = student_name  # Use the provided name for all instances
+            else:
+                # Generate unique student name for each instance in the pool
+                instance_student_name = f"student-{uuid.uuid4().hex[:8]}"
+                logger.info(f"Auto-generated unique student_name for instance {i+1}/{count}: {instance_student_name}")
             
             # Determine naming and tags based on type
             if instance_type == 'admin':
