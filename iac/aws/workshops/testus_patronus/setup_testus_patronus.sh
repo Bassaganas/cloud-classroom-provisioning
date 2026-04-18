@@ -207,118 +207,71 @@ else
         log "  The domain will be set automatically when Lambda retries, then restart Caddy: sudo systemctl restart caddy"
         CADDY_DOMAIN="localhost"
     fi
+# Create Caddy directory and fetch pre-issued wildcard certificate from Secrets Manager
+mkdir -p /home/ec2-user/caddy/certs
+log "Fetching pre-issued wildcard certificate from Secrets Manager..."
+
+# Retrieve certificate from Secrets Manager (issued once by issue-wildcard-cert workflow)
+# Secret format: {"cert": "<PEM fullchain>", "key": "<PEM private key>", "expires": "<date>"}
+SECRET_JSON=$(aws secretsmanager get-secret-value \
+  --secret-id "/classroom/wildcard-cert/root" \
+  --query SecretString \
+  --output text \
+  --region "${AWS_REGION}" 2>&1)
+
+if [ $? -ne 0 ] || [ -z "$SECRET_JSON" ]; then
+    log "ERROR: Failed to fetch wildcard certificate from Secrets Manager"
+    log "  Expected secret: /classroom/wildcard-cert/root"
+    log "  AWS Region: ${AWS_REGION}"
+    log "  Error: $SECRET_JSON"
+    exit 1
 fi
 
-# Create Caddy directory and Caddyfile
-mkdir -p /home/ec2-user/caddy
-cat > /home/ec2-user/caddy/Caddyfile << EOF
-# Caddyfile for Testus Patronus (Dify)
-# Domain is set from instance tags at startup
-# Caddy automatically provisions Let's Encrypt certificate via HTTP-01 challenge
+# Extract certificate and private key from JSON
+CERT_PEM=$(echo "$SECRET_JSON" | python3 -c "import sys, json; print(json.load(sys.stdin)['cert'])" 2>/dev/null)
+KEY_PEM=$(echo "$SECRET_JSON" | python3 -c "import sys, json; print(json.load(sys.stdin)['key'])" 2>/dev/null)
 
-${CADDY_DOMAIN} {
-    # Automatic HTTPS via HTTP-01 challenge (default, no config needed)
-    # Caddy automatically provisions Let's Encrypt certificate when domain is set
-    # Just needs port 80 accessible (already is via security group)
-    
+if [ -z "$CERT_PEM" ] || [ -z "$KEY_PEM" ]; then
+    log "ERROR: Certificate or key missing from Secrets Manager secret"
+    exit 1
+fi
+
+# Write certificate and key to files
+echo "$CERT_PEM" > /home/ec2-user/caddy/certs/wildcard.crt
+echo "$KEY_PEM" > /home/ec2-user/caddy/certs/wildcard.key
+chmod 600 /home/ec2-user/caddy/certs/wildcard.key
+chown -R ec2-user:ec2-user /home/ec2-user/caddy/certs
+log "✓ Wildcard certificate fetched and written to /home/ec2-user/caddy/certs/"
+
+# Create Caddyfile using pre-issued certificate
+cat > /home/ec2-user/caddy/Caddyfile << EOF
+# Caddyfile for Testus Patronus (Dify) — PRE-ISSUED WILDCARD CERTIFICATE
+# Domain: \${CADDY_DOMAIN} (e.g., dify-{instance-id}.testingfantasy.com)
+#
+# Uses the shared *.testingfantasy.com wildcard certificate stored in AWS Secrets Manager
+# and issued once by the issue-wildcard-cert GitHub Actions workflow.
+#
+# WHY A SHARED WILDCARD CERT:
+#   Let's Encrypt limits issuance to 50 certificates/week per registered domain.
+#   Issuing one wildcard cert covers unlimited instances for 90 days, avoiding rate limits.
+#
+# Certificate Details:
+#   - Issued for: *.testingfantasy.com + testingfantasy.com
+#   - Location: /home/ec2-user/caddy/certs/wildcard.{crt,key}
+#   - Valid for: 90 days
+#   - Renewal: Automatic monthly via GitHub Actions workflow
+
+\${CADDY_DOMAIN} {
+    # Load the pre-issued wildcard certificate
+    # The wildcard *.testingfantasy.com covers all instances and workshops
+    tls /home/ec2-user/caddy/certs/wildcard.crt /home/ec2-user/caddy/certs/wildcard.key
+
     # Proxy all traffic to Dify (runs on localhost:80)
     reverse_proxy localhost:80
 }
 EOF
 chown -R ec2-user:ec2-user /home/ec2-user/caddy
-log "✓ Caddyfile created with domain: ${CADDY_DOMAIN}"
-
-# Create script to update Caddyfile when domain becomes available
-cat > /home/ec2-user/caddy/update-domain.sh << 'SCRIPT_EOF'
-#!/bin/bash
-# Script to update Caddyfile when HttpsDomain tag becomes available
-IMDS_BASE_URL="http://169.254.169.254/latest"
-IMDS_TOKEN=""
-
-get_imds_token() {
-    if [ -n "$IMDS_TOKEN" ]; then
-        echo "$IMDS_TOKEN"
-        return 0
-    fi
-
-    IMDS_TOKEN=$(curl -s --max-time 5 --connect-timeout 2 -X PUT "${IMDS_BASE_URL}/api/token" \
-        -H "X-aws-ec2-metadata-token-ttl-seconds: 21600" 2>/dev/null || echo "")
-
-    if [ -n "$IMDS_TOKEN" ]; then
-        echo "$IMDS_TOKEN"
-        return 0
-    fi
-
-    return 1
-}
-
-get_instance_metadata() {
-    local path="$1"
-    local token
-    token=$(get_imds_token 2>/dev/null || echo "")
-
-    if [ -n "$token" ]; then
-        curl -s --max-time 5 --connect-timeout 2 -H "X-aws-ec2-metadata-token: ${token}" \
-            "${IMDS_BASE_URL}/meta-data/${path}" 2>/dev/null || echo ""
-    else
-        curl -s --max-time 5 --connect-timeout 2 "${IMDS_BASE_URL}/meta-data/${path}" 2>/dev/null || echo ""
-    fi
-}
-
-INSTANCE_ID=$(get_instance_metadata "instance-id")
-AWS_REGION=$(get_instance_metadata "placement/region")
-[ -z "$AWS_REGION" ] && AWS_REGION="eu-west-3"
-
-if [ -z "$INSTANCE_ID" ]; then
-    exit 1
-fi
-
-CADDY_DOMAIN=$(aws ec2 describe-tags --region "${AWS_REGION}" --filters "Name=resource-id,Values=${INSTANCE_ID}" "Name=key,Values=HttpsDomain" --query "Tags[0].Value" --output text 2>/dev/null || echo "")
-
-if [ -n "$CADDY_DOMAIN" ] && [ "$CADDY_DOMAIN" != "None" ] && [ "$CADDY_DOMAIN" != "" ] && [ "$CADDY_DOMAIN" != "localhost" ]; then
-    # Check if Caddyfile already has this domain
-    if ! grep -q "^${CADDY_DOMAIN} {" /home/ec2-user/caddy/Caddyfile; then
-        echo "Updating Caddyfile with domain: $CADDY_DOMAIN"
-        sed -i "s/^localhost {/${CADDY_DOMAIN} {/" /home/ec2-user/caddy/Caddyfile
-        # Reload Caddy configuration
-        sudo systemctl reload caddy || sudo systemctl restart caddy
-        echo "✓ Caddy updated and reloaded with domain: $CADDY_DOMAIN"
-    fi
-fi
-SCRIPT_EOF
-chmod +x /home/ec2-user/caddy/update-domain.sh
-chown ec2-user:ec2-user /home/ec2-user/caddy/update-domain.sh
-log "✓ Domain update script created"
-
-# Create systemd timer to periodically check for domain updates
-cat > /etc/systemd/system/caddy-domain-update.service << 'EOF'
-[Unit]
-Description=Update Caddy domain from instance tags
-After=network.target
-
-[Service]
-Type=oneshot
-User=ec2-user
-ExecStart=/home/ec2-user/caddy/update-domain.sh
-EOF
-
-cat > /etc/systemd/system/caddy-domain-update.timer << 'EOF'
-[Unit]
-Description=Timer to update Caddy domain periodically
-After=network.target
-
-[Timer]
-OnBootSec=2min
-OnUnitActiveSec=5min
-
-[Install]
-WantedBy=timers.target
-EOF
-
-systemctl daemon-reload
-systemctl enable caddy-domain-update.timer
-systemctl start caddy-domain-update.timer
-log "✓ Domain update timer enabled (checks every 5 minutes)"
+log "✓ Caddyfile created with pre-issued certificate for domain: ${CADDY_DOMAIN}"
 
 # Create systemd service for Caddy
 cat > /etc/systemd/system/caddy.service << 'EOF'

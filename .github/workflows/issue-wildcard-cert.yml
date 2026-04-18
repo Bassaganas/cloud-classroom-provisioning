@@ -1,0 +1,352 @@
+name: Issue Wildcard TLS Certificate
+
+# Manually triggered workflow that issues (or renews) the shared wildcard certificate
+# *.testingfantasy.com (root domain) once, stores it in AWS Secrets Manager, and makes it
+# available to every classroom EC2 instance (both fellowship and testus_patronus) at bootstrap.
+#
+# WHY A SHARED WILDCARD CERT:
+#   Let's Encrypt limits issuance to 50 certificates/week per registered domain.
+#   With unlimited instances each requesting their own cert, the limit is hit after ~50 deploys.
+#   Issuing one wildcard cert here covers unlimited instances for 90 days — instances fetch it
+#   from Secrets Manager instead of calling ACME per-instance.
+#
+# HOW TO USE:
+#   1. Workflow runs automatically on the 7th of each month (2 AM UTC).
+#      Renewal is skipped if the cert is still valid (>30 days remaining).
+#   2. To renew manually or test with staging: run from the Actions tab with
+#      force_renew=true or dry_run=true.
+#   3. New instances provisioned after a successful run will auto-fetch the stored cert.
+#
+# REQUIRED GITHUB SECRETS:
+#   AWS_ACCESS_KEY_ID        — IAM credentials with the permissions below
+#   AWS_SECRET_ACCESS_KEY    — (same IAM user)
+#
+# REQUIRED IAM PERMISSIONS FOR THE GITHUB ACTIONS IAM USER:
+#   route53:ListHostedZonesByName
+#   route53:ChangeResourceRecordSets
+#   route53:ListResourceRecordSets
+#   route53:GetChange
+#   secretsmanager:DescribeSecret
+#   secretsmanager:CreateSecret
+#   secretsmanager:UpdateSecret
+#   secretsmanager:GetSecretValue    ← also needed by EC2 instances at bootstrap
+#
+# STORED SECRET FORMAT  (JSON, at /classroom/wildcard-cert/root):
+#   { "cert": "<PEM fullchain>", "key": "<PEM private key>", "expires": "<RFC2822 date>" }
+
+on:
+  # Automatic renewal: run monthly (roughly every 30 days).
+  # The cert validity check will skip renewal if >30 days remain, so this won't waste quota.
+  schedule:
+    - cron: '0 2 7 * *'  # 2 AM UTC on the 7th of every month
+  # Manual trigger for on-demand renewal or dry-run testing.
+  workflow_dispatch:
+    inputs:
+      force_renew:
+        description: 'Renew even if the stored certificate is still valid (>30 days left)'
+        type: boolean
+        default: false
+      dry_run:
+        description: 'Use Let''s Encrypt STAGING — validates the process without consuming quota'
+        type: boolean
+        default: false
+
+concurrency:
+  group: issue-wildcard-cert
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: eu-west-1
+  SECRET_ID: /classroom/wildcard-cert/root
+  CERT_NAME: testingfantasy.com
+  WILDCARD_DOMAIN: '*.testingfantasy.com'
+  APEX_DOMAIN: testingfantasy.com
+  CERTBOT_EMAIL: 'devops-tutorial@testingfantasy.com'
+  AWS_ROLE_ARN_EFFECTIVE: ${{ vars.AWS_ROLE_ARN != '' && vars.AWS_ROLE_ARN || secrets.AWS_ROLE_ARN }}
+
+jobs:
+  issue-cert:
+    name: Issue Wildcard Certificate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Configure AWS credentials with OIDC (preferred)
+        if: env.AWS_ROLE_ARN_EFFECTIVE != ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN_EFFECTIVE }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Configure AWS credentials with static keys (fallback)
+        if: env.AWS_ROLE_ARN_EFFECTIVE == ''
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      # ── Check whether the stored certificate is still healthy ────────────────
+      - name: Check existing certificate validity
+        id: check_cert
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ inputs.force_renew }}" == "true" ]]; then
+            echo "Force-renew requested — skipping validity check"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          SECRET_JSON=$(aws secretsmanager get-secret-value \
+            --secret-id "$SECRET_ID" \
+            --query SecretString --output text 2>/dev/null || echo "")
+
+          if [[ -z "$SECRET_JSON" ]]; then
+            echo "No existing secret found — will issue new certificate"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          CERT_PEM=$(echo "$SECRET_JSON" | python3 -c \
+            "import sys, json; print(json.load(sys.stdin)['cert'])" 2>/dev/null || echo "")
+
+          if [[ -z "$CERT_PEM" ]]; then
+            echo "Secret exists but 'cert' field is missing — will re-issue"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          EXPIRY=$(echo "$CERT_PEM" | openssl x509 -noout -enddate 2>/dev/null \
+            | cut -d= -f2 || echo "")
+
+          if [[ -z "$EXPIRY" ]]; then
+            echo "Could not parse certificate expiry — will re-issue"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          EXPIRY_EPOCH=$(date -d "$EXPIRY" +%s)
+          NOW_EPOCH=$(date +%s)
+          DAYS_LEFT=$(( (EXPIRY_EPOCH - NOW_EPOCH) / 86400 ))
+
+          echo "Existing certificate expires in ${DAYS_LEFT} days (${EXPIRY})"
+
+          if (( DAYS_LEFT > 30 )); then
+            echo "Certificate is still healthy — no renewal needed"
+            echo "skip=true"  >> "$GITHUB_OUTPUT"
+            echo "days_left=${DAYS_LEFT}" >> "$GITHUB_OUTPUT"
+          else
+            echo "Certificate expires in ≤30 days — renewal required"
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ── Install certbot ──────────────────────────────────────────────────────
+      - name: Install certbot with Route53 DNS plugin
+        if: steps.check_cert.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          pip install --quiet --upgrade certbot certbot-dns-route53
+
+      # ── Issue the certificate ────────────────────────────────────────────────
+      - name: Issue certificate (Let's Encrypt production)
+        if: steps.check_cert.outputs.skip != 'true' && inputs.dry_run == false
+        run: |
+          set -euo pipefail
+          certbot certonly \
+            --dns-route53 \
+            --config-dir /tmp/certbot/config \
+            --work-dir /tmp/certbot/work \
+            --logs-dir /tmp/certbot/logs \
+            --cert-name "$CERT_NAME" \
+            -d "$WILDCARD_DOMAIN" \
+            -d "$APEX_DOMAIN" \
+            --email "$CERTBOT_EMAIL" \
+            --agree-tos \
+            --non-interactive
+
+      - name: Issue certificate (Let's Encrypt STAGING — dry run)
+        if: steps.check_cert.outputs.skip != 'true' && inputs.dry_run == true
+        run: |
+          set -euo pipefail
+          certbot certonly \
+            --dns-route53 \
+            --config-dir /tmp/certbot/config \
+            --work-dir /tmp/certbot/work \
+            --logs-dir /tmp/certbot/logs \
+            --cert-name "$CERT_NAME" \
+            -d "$WILDCARD_DOMAIN" \
+            -d "$APEX_DOMAIN" \
+            --email "$CERTBOT_EMAIL" \
+            --agree-tos \
+            --non-interactive \
+            --staging
+
+      # ── Store the certificate in AWS Secrets Manager ─────────────────────────
+      - name: Store certificate in Secrets Manager
+        id: store_secret
+        if: steps.check_cert.outputs.skip != 'true' 
+        run: |
+          set -euo pipefail
+
+          LIVE_DIR="/tmp/certbot/config/live/${CERT_NAME}"
+
+          EXPIRES=$(openssl x509 -noout -enddate \
+            -in "${LIVE_DIR}/cert.pem" | cut -d= -f2)
+
+          # Build the JSON payload using Python to avoid shell quoting pitfalls
+          PAYLOAD=$(python3 - <<PYEOF
+          import json
+          payload = {
+              "cert":    open("${LIVE_DIR}/fullchain.pem").read(),
+              "key":     open("${LIVE_DIR}/privkey.pem").read(),
+              "expires": "${EXPIRES}",
+          }
+          print(json.dumps(payload))
+          PYEOF
+          )
+
+          # Try to update existing secret; if it doesn't exist (ResourceNotFound), create it.
+          UPDATE_OUTPUT=$(aws secretsmanager update-secret \
+            --secret-id "$SECRET_ID" \
+            --secret-string "$PAYLOAD" \
+            --region "$AWS_REGION" 2>&1 || true)
+
+          # Check result but don't fail immediately — we'll report status and upload artifacts
+          if echo "$UPDATE_OUTPUT" | grep -q "ResourceNotFoundException"; then
+            # Secret doesn't exist, create it
+            CREATE_OUTPUT=$(aws secretsmanager create-secret \
+              --name "$SECRET_ID" \
+              --description "Shared wildcard TLS certificate for *.testingfantasy.com — covers all workshops and instances — managed by issue-wildcard-cert workflow" \
+              --secret-string "$PAYLOAD" \
+              --region "$AWS_REGION" 2>&1 || true)
+            if echo "$CREATE_OUTPUT" | grep -q "error\|Error\|ERROR"; then
+              echo "⚠  Failed to create secret"
+              echo "$CREATE_OUTPUT"
+              echo "status=failed" >> "$GITHUB_OUTPUT"
+            else
+              echo "✓ Created new secret: ${SECRET_ID}"
+              echo "status=created" >> "$GITHUB_OUTPUT"
+            fi
+          elif echo "$UPDATE_OUTPUT" | grep -q "AccessDenied\|error\|Error\|ERROR"; then
+            # Error occurred; report it but don't exit (artifacts will be uploaded)
+            echo "⚠  Failed to update secret (will upload artifacts for manual recovery)"
+            echo "$UPDATE_OUTPUT"
+            echo "status=failed" >> "$GITHUB_OUTPUT"
+          else
+            # Update succeeded
+            echo "✓ Updated existing secret: ${SECRET_ID}"
+            echo "status=updated" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "expires=${EXPIRES}" >> "$GITHUB_OUTPUT"
+
+      # ── Print certificate details and subject ────────────────────────────────
+      - name: Log certificate details
+        if: steps.check_cert.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          LIVE_DIR="/tmp/certbot/config/live/${CERT_NAME}"
+          
+          echo "══════════════════════════════════════════════════════════════"
+          echo "CERTIFICATE DETAILS"
+          echo "══════════════════════════════════════════════════════════════"
+          echo ""
+          echo "File: ${LIVE_DIR}/fullchain.pem"
+          echo ""
+          echo "--- Subject & Issuer ---"
+          openssl x509 -noout -subject -issuer -in "${LIVE_DIR}/cert.pem"
+          echo ""
+          echo "--- Validity Period ---"
+          openssl x509 -noout -dates -in "${LIVE_DIR}/cert.pem"
+          echo ""
+          echo "--- Subject Alternative Names (SANs) ---"
+          openssl x509 -noout -text -in "${LIVE_DIR}/cert.pem" | grep -A1 "Subject Alternative Name" || echo "No SANs found"
+          echo ""
+          echo "--- Thumbprint (SHA-256) ---"
+          openssl x509 -noout -fingerprint -sha256 -in "${LIVE_DIR}/cert.pem"
+          echo ""
+          echo "═══════════════════════════════════════════════════════════════"
+
+      # ── Upload certificate files as artifacts (always, regardless of secret store result) ──
+      - name: Upload certificates as artifacts
+        if: steps.check_cert.outputs.skip != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: wildcard-certificate
+          path: |
+            /tmp/certbot/config/live/${{ env.CERT_NAME }}/cert.pem
+            /tmp/certbot/config/live/${{ env.CERT_NAME }}/privkey.pem
+            /tmp/certbot/config/live/${{ env.CERT_NAME }}/fullchain.pem
+            /tmp/certbot/config/live/${{ env.CERT_NAME }}/chain.pem
+          retention-days: 30
+          if-no-files-found: warn
+
+      # ── Report final status ──────────────────────────────────────────────────
+      - name: Report certificate status
+        if: steps.check_cert.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          
+          STORE_STATUS="${{ steps.store_secret.outputs.status }}"
+          EXPIRES="${{ steps.store_secret.outputs.expires }}"
+          
+          echo ""
+          echo "═══════════════════════════════════════════════════════════════"
+          echo "CERTIFICATE STATUS REPORT"
+          echo "═══════════════════════════════════════════════════════════════"
+          echo ""
+          
+          case "$STORE_STATUS" in
+            created)
+              echo "✓ SUCCESS: Certificate created in Secrets Manager"
+              echo "  Secret:  ${SECRET_ID}"
+              echo "  Expires: ${EXPIRES}"
+              ;;
+            updated)
+              echo "✓ SUCCESS: Certificate updated in Secrets Manager"
+              echo "  Secret:  ${SECRET_ID}"
+              echo "  Expires: ${EXPIRES}"
+              ;;
+            failed)
+              echo "⚠ WARNING: Certificate NOT stored in Secrets Manager"
+              echo "  Action:  Artifacts uploaded for manual recovery"
+              echo "  Secret:  ${SECRET_ID}"
+              echo "  Expires: ${EXPIRES}"
+              echo ""
+              echo "  To manually upload the certificate:"
+              echo "  1. Download the wildcard-certificate artifact from this run"
+              echo "  2. Run: aws secretsmanager update-secret --secret-id ${SECRET_ID} --secret-string '{...}'"
+              echo "  3. See GitHub Actions logs for detailed error messages"
+              ;;
+          esac
+          
+          echo ""
+          echo "Domains: ${WILDCARD_DOMAIN}, ${APEX_DOMAIN}"
+          echo "Workshops covered: fellowship, testus_patronus, and future workshops"
+          echo "═══════════════════════════════════════════════════════════════"
+
+      # ── Fail if secret store failed ───────────────────────────────────────────
+      - name: Fail if secret store failed
+        if: steps.check_cert.outputs.skip != 'true' && steps.store_secret.outputs.status == 'failed'
+        run: |
+          echo "❌ Certificate was not stored in Secrets Manager"
+          echo "   Artifacts are available for manual upload"
+          exit 1
+
+      # ── Print summary for skipped runs ───────────────────────────────────────
+      - name: Certificate still valid — no action taken
+        if: steps.check_cert.outputs.skip == 'true'
+        run: |
+          echo "✓ Stored certificate is still valid"
+          echo "  Days remaining: ${{ steps.check_cert.outputs.days_left }}"
+          echo "  To renew anyway, re-run with force_renew=true."
+
+      # ── Print dry-run reminder ────────────────────────────────────────────────
+      - name: Dry-run notice
+        if: steps.check_cert.outputs.skip != 'true' && inputs.dry_run == true
+        run: |
+          echo "DRY RUN complete — staging certificate was issued but NOT stored."
+          echo "Re-run with dry_run=false to issue the production certificate."
