@@ -444,7 +444,7 @@ seed_sut_content() {
 
     # Copy each SUT asset into the repo working tree.
     local items_copied=0
-    for item in sut tests scripts Jenkinsfile pytest.ini; do
+    for item in sut tests scripts Jenkinsfile pytest.ini package.json package-lock.json playwright.config.ts; do
         if [ -e "${app_dir}/${item}" ]; then
             cp -a "${app_dir}/${item}" .
             items_copied=$((items_copied + 1))
@@ -574,18 +574,16 @@ create_jenkins_pipeline() {
   <description>SUT pipeline for student ${STUDENT_ID}</description>
   <keepDependencies>false</keepDependencies>
   <properties>
-    <EnvInjectJobProperty plugin="envinject">
-      <info>
-        <propertiesContent>DEPLOYED_SUT_URL=${DEPLOYED_SUT_URL}</propertiesContent>
-        <loadFilesUnused>false</loadFilesUnused>
-        <secretsLoadedFromFilesUnused>false</secretsLoadedFromFilesUnused>
-        <hideSecretsLoadedFromFilesUnused>false</hideSecretsLoadedFromFilesUnused>
-      </info>
-      <on>true</on>
-      <keepJenkinsSystemVariables>true</keepJenkinsSystemVariables>
-      <keepBuildVariables>true</keepBuildVariables>
-      <override>false</override>
-    </EnvInjectJobProperty>
+    <hudson.model.ParametersDefinitionProperty>
+      <parameterDefinitions>
+        <hudson.model.StringParameterDefinition>
+          <name>DEPLOYED_SUT_URL</name>
+          <description>Base URL of this student's deployed SUT instance. Pre-configured at provisioning time; can be overridden per build.</description>
+          <defaultValue>${DEPLOYED_SUT_URL}</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+      </parameterDefinitions>
+    </hudson.model.ParametersDefinitionProperty>
   </properties>
   <definition class="org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition" plugin="workflow-cps">
     <scm class="hudson.plugins.git.GitSCM" plugin="git">
@@ -626,15 +624,23 @@ XML
     elif [ "$http_status" = "400" ]; then
         log "  Pipeline job already exists in folder '${STUDENT_ID}', checking if update is needed..."
         
-        # Check if the existing job has the old ParametersDefinitionProperty with DEPLOYED_SUT_URL
-        # If so, update it to use the new EnvInjectJobProperty approach
+        # Update the job if it is missing the DEPLOYED_SUT_URL string parameter
+        # (covers old EnvInjectJobProperty approach and legacy jobs without the parameter).
         local existing_config
         existing_config=$(curl -s "${JENKINS_URL}/job/${STUDENT_ID}/job/fellowship-pipeline/config.xml" \
             -u "${JENKINS_ADMIN_USER}:${JENKINS_ADMIN_PASSWORD}" \
             -c "${JENKINS_COOKIE_JAR}" -b "${JENKINS_COOKIE_JAR}" 2>/dev/null || echo "")
-        
-        if echo "$existing_config" | grep -q "ParametersDefinitionProperty"; then
-            log "  Detected old parameterized job configuration, updating to use environment variables..."
+
+        local needs_update=0
+        if echo "$existing_config" | grep -q "EnvInjectJobProperty"; then
+            log "  Detected legacy EnvInjectJobProperty (envinject plugin not installed) — migrating to StringParameterDefinition..."
+            needs_update=1
+        elif ! echo "$existing_config" | grep -q "DEPLOYED_SUT_URL"; then
+            log "  Job lacks DEPLOYED_SUT_URL parameter — updating..."
+            needs_update=1
+        fi
+
+        if [ "$needs_update" = "1" ]; then
             crumb=$(jenkins_crumb)
             update_status=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
                 "${JENKINS_URL}/job/${STUDENT_ID}/job/fellowship-pipeline/config.xml" \
@@ -643,9 +649,9 @@ XML
                 ${crumb:+-H "$crumb"} \
                 -H "Content-Type: application/xml" \
                 --data-binary "$job_xml") || true
-            
+
             if [ "$update_status" = "200" ] || [ "$update_status" = "302" ]; then
-                log "  ✓ Pipeline job updated with new configuration (EnvInjectJobProperty)"
+                log "  ✓ Pipeline job updated with StringParameterDefinition for DEPLOYED_SUT_URL"
             else
                 warn "  Pipeline job update returned HTTP ${update_status}"
             fi
