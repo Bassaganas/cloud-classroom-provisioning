@@ -45,6 +45,11 @@ SHARED_GITEA_URL="${SHARED_GITEA_URL:-${GITEA_URL}}"
 # Passed by the provisioner so the Jenkins pipeline job is pre-configured
 # and students don't need to set it manually.
 DEPLOYED_SUT_URL="${DEPLOYED_SUT_URL:-}"
+# Can be pre-provisioned and passed via JENKINS_WEBHOOK_API_TOKEN env var.
+# If not set, will be created on demand via the Jenkins API.
+JENKINS_WEBHOOK_API_TOKEN="${JENKINS_WEBHOOK_API_TOKEN:-}"
+
+# Jenkins CSRF: session cookie jar shared across all Jenkins API calls
 JENKINS_COOKIE_JAR="/tmp/jenkins-cookies-$$.txt"
 
 REPO_NAME="fellowship-sut-${STUDENT_ID}"
@@ -96,6 +101,32 @@ jenkins_api() {
         curl -sf -X "$method" "${JENKINS_URL}${path}" \
             -u "${JENKINS_ADMIN_USER}:${JENKINS_ADMIN_PASSWORD}" \
             ${crumb_header:+-H "$crumb"}
+    fi
+}
+
+# Ensure JENKINS_WEBHOOK_API_TOKEN is set, creating one via the Jenkins API if needed.
+# Jenkins API tokens allow authenticated POST requests to bypass CSRF protection,
+# which is required for Gitea webhook deliveries (Gitea always sends POST).
+ensure_jenkins_webhook_token() {
+    if [ -n "${JENKINS_WEBHOOK_API_TOKEN:-}" ]; then
+        return 0
+    fi
+    log "  Creating Jenkins API token for webhook authentication..."
+    local crumb
+    crumb=$(jenkins_crumb)
+    local response
+    response=$(curl -sf \
+        -u "${JENKINS_ADMIN_USER}:${JENKINS_ADMIN_PASSWORD}" \
+        -c "${JENKINS_COOKIE_JAR}" -b "${JENKINS_COOKIE_JAR}" \
+        ${crumb:+-H "$crumb"} \
+        -X POST "${JENKINS_URL}/user/${JENKINS_ADMIN_USER}/descriptorByName/jenkins.security.ApiTokenProperty/generateNewToken" \
+        --data-urlencode "newTokenName=gitea-webhook-trigger" 2>/dev/null) || true
+    if echo "$response" | grep -q '"tokenValue"'; then
+        JENKINS_WEBHOOK_API_TOKEN=$(echo "$response" | grep -o '"tokenValue":"[^"]*"' | cut -d'"' -f4)
+        log "  ✓ Jenkins API token created"
+    else
+        warn "Could not create Jenkins API token; webhook POST may be rejected by CSRF filter"
+        JENKINS_WEBHOOK_API_TOKEN="${JENKINS_ADMIN_PASSWORD}"
     fi
 }
 
@@ -462,18 +493,23 @@ seed_sut_content() {
 
 create_webhook() {
     log "Step 3: Creating webhook for '${REPO_NAME}'..."
-local jenkins_webhook_url="${SHARED_JENKINS_URL%/}/gitea-webhook/post"
-    
-    # NEW (2026-04-15): Validate endpoint is reachable before creating webhook
-    # This helps diagnose webhook issues where Gitea cannot reach Jenkins
-    log "  Validating Jenkins webhook endpoint reachability..."
-    if ! curl -sf --max-time 5 -o /dev/null "${jenkins_webhook_url}" >/dev/null 2>&1; then
-        warn "Jenkins webhook endpoint may not be reachable: ${jenkins_webhook_url}"
+    # Use Jenkins authToken remote build trigger to avoid GiteaPushTrigger NPE bug
+    # (GiteaRepository.getOwner() returns null for org-owned repos in Gitea plugin v273).
+    # Gitea sends POST; Jenkins rejects unauthenticated POST due to CSRF, so we embed
+    # a Jenkins API token in the URL for Basic Auth — this bypasses the CSRF filter.
+    ensure_jenkins_webhook_token
+    # Build the webhook URL with credentials embedded: https://user:token@host/job/...
+    local jenkins_base="${SHARED_JENKINS_URL%/}"
+    local jenkins_auth_url="${jenkins_base/https:\/\//https://${JENKINS_ADMIN_USER}:${JENKINS_WEBHOOK_API_TOKEN}@}"
+    local jenkins_webhook_url="${jenkins_auth_url}/job/${STUDENT_ID}/job/fellowship-pipeline/build?token=${STUDENT_ID}"
+
+    # Validate Jenkins is reachable
+    log "  Validating Jenkins reachability..."
+    if ! curl -sf --max-time 5 -o /dev/null "${jenkins_base}/" >/dev/null 2>&1; then
+        warn "Jenkins may not be reachable: ${SHARED_JENKINS_URL}"
         warn "The webhook will be created, but deliveries may fail"
-        warn "Verify that JENKINS_URL is set to the external HTTPS domain, not localhost"
-        warn "Check Jenkins logs if webhook deliveries are showing as failed in Gitea UI"
     else
-        log "  ✓ Jenkins webhook endpoint is reachable"
+        log "  ✓ Jenkins is reachable"
     fi
     
     local response
@@ -488,7 +524,7 @@ local jenkins_webhook_url="${SHARED_JENKINS_URL%/}/gitea-webhook/post"
     }") || true
 
     if echo "$response" | grep -q '"id"'; then
-        log "  ✓ Webhook created → ${jenkins_webhook_url}"
+        log "  ✓ Webhook created → /job/${STUDENT_ID}/job/fellowship-pipeline/build?token=${STUDENT_ID}"
     else
         warn "Webhook may already exist or creation failed: $response"
     fi
@@ -538,16 +574,18 @@ create_jenkins_pipeline() {
   <description>SUT pipeline for student ${STUDENT_ID}</description>
   <keepDependencies>false</keepDependencies>
   <properties>
-    <hudson.model.ParametersDefinitionProperty>
-      <parameterDefinitions>
-        <hudson.model.StringParameterDefinition>
-          <name>DEPLOYED_SUT_URL</name>
-          <description>Base URL of this student's deployed SUT instance. Pre-configured at provisioning time; can be overridden per build.</description>
-          <defaultValue>${DEPLOYED_SUT_URL}</defaultValue>
-          <trim>true</trim>
-        </hudson.model.StringParameterDefinition>
-      </parameterDefinitions>
-    </hudson.model.ParametersDefinitionProperty>
+    <EnvInjectJobProperty plugin="envinject">
+      <info>
+        <propertiesContent>DEPLOYED_SUT_URL=${DEPLOYED_SUT_URL}</propertiesContent>
+        <loadFilesUnused>false</loadFilesUnused>
+        <secretsLoadedFromFilesUnused>false</secretsLoadedFromFilesUnused>
+        <hideSecretsLoadedFromFilesUnused>false</hideSecretsLoadedFromFilesUnused>
+      </info>
+      <on>true</on>
+      <keepJenkinsSystemVariables>true</keepJenkinsSystemVariables>
+      <keepBuildVariables>true</keepBuildVariables>
+      <override>false</override>
+    </EnvInjectJobProperty>
   </properties>
   <definition class="org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition" plugin="workflow-cps">
     <scm class="hudson.plugins.git.GitSCM" plugin="git">
@@ -567,9 +605,8 @@ create_jenkins_pipeline() {
     <scriptPath>Jenkinsfile</scriptPath>
     <lightweight>true</lightweight>
   </definition>
-  <triggers>
-    <com.cloudbees.jenkins.plugins.gitea.GiteaPushTrigger plugin="gitea"/>
-  </triggers>
+  <triggers/>
+  <authToken>${STUDENT_ID}</authToken>
 </org.jenkinsci.plugins.workflow.job.WorkflowJob>
 XML
 )
@@ -587,7 +624,34 @@ XML
     if [ "$http_status" = "200" ] || [ "$http_status" = "302" ]; then
         log "  ✓ Pipeline job created in folder '${STUDENT_ID}'"
     elif [ "$http_status" = "400" ]; then
-        log "  ✓ Pipeline job already exists in folder '${STUDENT_ID}' (skipped)"
+        log "  Pipeline job already exists in folder '${STUDENT_ID}', checking if update is needed..."
+        
+        # Check if the existing job has the old ParametersDefinitionProperty with DEPLOYED_SUT_URL
+        # If so, update it to use the new EnvInjectJobProperty approach
+        local existing_config
+        existing_config=$(curl -s "${JENKINS_URL}/job/${STUDENT_ID}/job/fellowship-pipeline/config.xml" \
+            -u "${JENKINS_ADMIN_USER}:${JENKINS_ADMIN_PASSWORD}" \
+            -c "${JENKINS_COOKIE_JAR}" -b "${JENKINS_COOKIE_JAR}" 2>/dev/null || echo "")
+        
+        if echo "$existing_config" | grep -q "ParametersDefinitionProperty"; then
+            log "  Detected old parameterized job configuration, updating to use environment variables..."
+            crumb=$(jenkins_crumb)
+            update_status=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+                "${JENKINS_URL}/job/${STUDENT_ID}/job/fellowship-pipeline/config.xml" \
+                -u "${JENKINS_ADMIN_USER}:${JENKINS_ADMIN_PASSWORD}" \
+                -c "${JENKINS_COOKIE_JAR}" -b "${JENKINS_COOKIE_JAR}" \
+                ${crumb:+-H "$crumb"} \
+                -H "Content-Type: application/xml" \
+                --data-binary "$job_xml") || true
+            
+            if [ "$update_status" = "200" ] || [ "$update_status" = "302" ]; then
+                log "  ✓ Pipeline job updated with new configuration (EnvInjectJobProperty)"
+            else
+                warn "  Pipeline job update returned HTTP ${update_status}"
+            fi
+        else
+            log "  ✓ Pipeline job already has the correct configuration (skipped)"
+        fi
     else
         warn "Pipeline job creation returned HTTP ${http_status}"
     fi
