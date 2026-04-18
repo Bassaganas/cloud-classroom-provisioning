@@ -41,7 +41,10 @@ JENKINS_ADMIN_PASSWORD="${JENKINS_ADMIN_PASSWORD:-fellowship123}"
 SHARED_JENKINS_URL="${SHARED_JENKINS_URL:-${JENKINS_URL}}"
 SHARED_GITEA_URL="${SHARED_GITEA_URL:-${GITEA_URL}}"
 
-# Jenkins CSRF: session cookie jar shared across all Jenkins API calls
+# URL of the student's deployed SUT EC2 instance.
+# Passed by the provisioner so the Jenkins pipeline job is pre-configured
+# and students don't need to set it manually.
+DEPLOYED_SUT_URL="${DEPLOYED_SUT_URL:-}"
 JENKINS_COOKIE_JAR="/tmp/jenkins-cookies-$$.txt"
 
 REPO_NAME="fellowship-sut-${STUDENT_ID}"
@@ -527,6 +530,18 @@ create_jenkins_pipeline() {
 <org.jenkinsci.plugins.workflow.job.WorkflowJob plugin="workflow-job">
   <description>SUT pipeline for student ${STUDENT_ID}</description>
   <keepDependencies>false</keepDependencies>
+  <properties>
+    <hudson.model.ParametersDefinitionProperty>
+      <parameterDefinitions>
+        <hudson.model.StringParameterDefinition>
+          <name>DEPLOYED_SUT_URL</name>
+          <description>Base URL of this student's deployed SUT instance. Pre-configured at provisioning time; can be overridden per build.</description>
+          <defaultValue>${DEPLOYED_SUT_URL}</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
+      </parameterDefinitions>
+    </hudson.model.ParametersDefinitionProperty>
+  </properties>
   <definition class="org.jenkinsci.plugins.workflow.cps.CpsScmFlowDefinition" plugin="workflow-cps">
     <scm class="hudson.plugins.git.GitSCM" plugin="git">
       <configVersion>2</configVersion>

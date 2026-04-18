@@ -24,11 +24,12 @@ Status is tracked in a DynamoDB table so the caller can poll by request_id:
 
 SQS message body (JSON):
   {
-    "request_id":   "<uuid>",
-    "action":       "provision" | "deprovision",
-    "student_id":   "<student-id>",
-    "workshop_name":"<workshop>",
-    "student_password": "<password>"   # only for provision
+    "request_id":       "<uuid>",
+    "action":           "provision" | "deprovision",
+    "student_id":       "<student-id>",
+    "workshop_name":    "<workshop>",
+    "student_password": "<password>",        # only for provision
+    "deployed_sut_url": "<https-url>"        # only for provision; pre-fills Jenkins parameter
   }
 """
 
@@ -274,8 +275,8 @@ def _invoke_ssm_command(
 
 # ── Core provisioning logic ───────────────────────────────────────────────────
 
-def _provision(request_id: str, student_id: str, workshop_name: str, student_password: str):
-    logger.info(f"[{request_id}] provision student={student_id} workshop={workshop_name}")
+def _provision(request_id: str, student_id: str, workshop_name: str, student_password: str, deployed_sut_url: str = ""):
+    logger.info(f"[{request_id}] provision student={student_id} workshop={workshop_name} sut_url={deployed_sut_url or '(not set)'}")
     _update_status(
         request_id,
         "running",
@@ -302,6 +303,7 @@ def _provision(request_id: str, student_id: str, workshop_name: str, student_pas
         "JENKINS_ADMIN_PASSWORD": credentials["jenkins_admin_password"],
         "SHARED_GITEA_URL": credentials["gitea_url"],
         "SHARED_JENKINS_URL": credentials["jenkins_url"],
+        "DEPLOYED_SUT_URL": deployed_sut_url or "",
     }
     logger.info(f"[{request_id}] using GITEA_URL={credentials['gitea_url']} JENKINS_URL={credentials['jenkins_url']}")
 
@@ -392,6 +394,7 @@ def lambda_handler(event, context):
         student_id = body.get("student_id", "")
         workshop_name = body.get("workshop_name", "")
         student_password = body.get("student_password", "fellowship123")
+        deployed_sut_url = body.get("deployed_sut_url", "")
 
         if not student_id or not action:
             logger.error(f"[{request_id}] Missing student_id or action in message: {body}")
@@ -400,7 +403,7 @@ def lambda_handler(event, context):
 
         try:
             if action == "provision":
-                _provision(request_id, student_id, workshop_name, student_password)
+                _provision(request_id, student_id, workshop_name, student_password, deployed_sut_url)
             elif action == "deprovision":
                 _deprovision(request_id, student_id, workshop_name)
             else:

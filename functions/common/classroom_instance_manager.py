@@ -292,7 +292,7 @@ def invoke_ssm_command(instance_id, script_path, parameters, environment_vars=No
 SHARED_CORE_PROVISIONING_QUEUE_URL = os.environ.get('SHARED_CORE_PROVISIONING_QUEUE_URL', '')
 
 
-def _enqueue_provisioning_request(action, student_id, workshop_name, student_password=None):
+def _enqueue_provisioning_request(action, student_id, workshop_name, student_password=None, deployed_sut_url=None):
     """Send a provisioning/deprovisioning request to SQS.
 
     Returns:
@@ -307,6 +307,8 @@ def _enqueue_provisioning_request(action, student_id, workshop_name, student_pas
     }
     if student_password:
         message['student_password'] = student_password
+    if deployed_sut_url:
+        message['deployed_sut_url'] = deployed_sut_url
 
     try:
         sqs.send_message(
@@ -338,7 +340,7 @@ def _enqueue_provisioning_request(action, student_id, workshop_name, student_pas
         }
 
 
-def provision_student_on_shared_core(student_id, workshop_name=None, student_password=None):
+def provision_student_on_shared_core(student_id, workshop_name=None, student_password=None, deployed_sut_url=None):
     """Provision a student on the shared-core stack (Gitea user, repo, Jenkins job).
 
     When SHARED_CORE_PROVISIONING_QUEUE_URL is set the request is enqueued to SQS
@@ -349,6 +351,9 @@ def provision_student_on_shared_core(student_id, workshop_name=None, student_pas
         student_id: Student username/ID
         workshop_name: Workshop identifier (defaults to WORKSHOP_NAME)
         student_password: Student password (optional, defaults to 'fellowship123')
+        deployed_sut_url: HTTPS URL of the student's deployed SUT instance
+                          (e.g. https://fellowship-tutorial-admin-1.fellowship.testingfantasy.com).
+                          Used to pre-configure DEPLOYED_SUT_URL in the Jenkins pipeline job.
 
     Returns:
         dict with keys: success (bool), request_id|command_id (str), message (str),
@@ -357,7 +362,8 @@ def provision_student_on_shared_core(student_id, workshop_name=None, student_pas
     # ── Async path (preferred) ────────────────────────────────────────────────
     if SHARED_CORE_PROVISIONING_QUEUE_URL:
         return _enqueue_provisioning_request(
-            'provision', student_id, workshop_name, student_password or 'fellowship123'
+            'provision', student_id, workshop_name, student_password or 'fellowship123',
+            deployed_sut_url=deployed_sut_url
         )
 
     # ── Synchronous fallback (no queue configured) ────────────────────────────
@@ -417,6 +423,7 @@ def provision_student_on_shared_core(student_id, workshop_name=None, student_pas
         'GITEA_URL': f'https://{gitea_domain}/' if gitea_domain else 'http://localhost:3030',
         'SHARED_GITEA_URL': f'https://{gitea_domain}/' if gitea_domain else 'http://localhost:3030',
         'GITEA_INTERNAL_URL': 'http://gitea:3000',  # Docker-internal URL for Jenkins to clone repos
+        'DEPLOYED_SUT_URL': deployed_sut_url or '',
     }
 
     result = invoke_ssm_command(
@@ -2563,13 +2570,10 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
         
         workshop_name = workshop_name or WORKSHOP_NAME
         
-        # Track whether student_name was user-provided (shared across all instances)
-        # or should be auto-generated per instance (one unique student per instance)
-        student_name_is_user_provided = bool(student_name)
-        if student_name_is_user_provided:
-            logger.info(f"User provided student_name: {student_name} (will be shared across {count} instance(s))")
-        else:
-            logger.info(f"No student_name provided; will auto-generate unique student per instance (one of {count} total)")
+        # Generate student_name with UUID if not provided (for consistency across instance creation)
+        if not student_name:
+            student_name = f"student-{uuid.uuid4().hex[:8]}"
+            logger.info(f"Auto-generated student_name: {student_name}")
         idempotency_item_key = None
         if idempotency_key:
             idempotency_item_key = _build_create_request_item_key(
@@ -2759,13 +2763,7 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
             # For shared-core provisioning, each instance gets its own student_name
             # (either the one passed in, or a generated UUID per instance if needed).
             user_data = base_user_data
-            
-            # Generate unique student_name per instance if not user-provided
-            if student_name_is_user_provided:
-                instance_student_name = student_name
-            else:
-                instance_student_name = f"student-{uuid.uuid4().hex[:8]}"
-                logger.info(f"[Instance {i+1}/{count}] Auto-generated student_name: {instance_student_name}")
+            instance_student_name = student_name  # Use the base student_name for this instance
             
             # Determine naming and tags based on type
             if instance_type == 'admin':
@@ -3214,7 +3212,8 @@ export GITEA_REPO_NAME={_gitea_repo}
             try:
                 provision_result = provision_student_on_shared_core(
                     student_id=instance_student_name,
-                    workshop_name=workshop_name
+                    workshop_name=workshop_name,
+                    deployed_sut_url=instances[-1].get('https_url', '')
                 )
                 if provision_result['success']:
                     logger.info(
@@ -4850,9 +4849,13 @@ def lambda_handler(event, context):
                 logger.info(f"Manually assigned instance {instance_id} to {student_name}")
                 
                 # Provision student on shared-core if enabled
+                # Pass instance HTTPS URL so the Jenkins pipeline job is pre-configured
+                # with DEPLOYED_SUT_URL pointing at this student's instance.
+                instance_https_url = tags.get('HttpsUrl', '')
                 provision_result = provision_student_on_shared_core(
                     student_id=student_name,
-                    workshop_name=workshop_name or WORKSHOP_NAME
+                    workshop_name=workshop_name or WORKSHOP_NAME,
+                    deployed_sut_url=instance_https_url
                 )
                 
                 response_body = {
