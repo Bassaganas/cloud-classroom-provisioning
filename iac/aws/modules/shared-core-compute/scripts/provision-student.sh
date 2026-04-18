@@ -187,78 +187,90 @@ GROOVY
 
 setup_jenkins_folder_permissions() {
     log "Step 0.5b: Setting up folder permissions for student '${STUDENT_ID}'..."
-    
-    # Use Jenkins Role-Based Strategy plugin to create folder-level role
-    # This allows the student to access only their own folder
+
+    # Use the Role-Based Strategy plugin (role-strategy) to scope the student user
+    # to their own Jenkins folder only.
+    #
+    # IMPORTANT — substitution note:
+    #   The string STUDENT_ID_PLACEHOLDER below is replaced by the actual student ID
+    #   via bash parameter expansion AFTER the heredoc is read.  It must appear only
+    #   inside Groovy double-quoted string literals so the substituted value (which
+    #   contains hyphens, e.g. "student-285f3dc1") remains syntactically valid Groovy.
     local groovy_script
     groovy_script=$(cat <<'GROOVY'
-import hudson.security.AuthorizationStrategy
+import jenkins.model.Jenkins
 import com.cloudbees.hudson.plugins.rolestrategy.RoleBasedAuthorizationStrategy
 import com.cloudbees.hudson.plugins.rolestrategy.Role
-import org.jenkinsci.plugins.matrixauth.authorization.PermissionEntry
-import jenkins.model.Jenkins
+import hudson.security.Permission
 
-def jenkins = Jenkins.getInstance()
-def rbac = jenkins.getAuthorizationStrategy()
+def jenkins  = Jenkins.getInstance()
+def strategy = jenkins.getAuthorizationStrategy()
 
-if (rbac instanceof RoleBasedAuthorizationStrategy) {
-    def folderRoles = rbac.getRoles(RoleBasedAuthorizationStrategy.FOLDER)
-    def studentRoleName = "student-" + STUDENT_ID
-    
-    // Check if role already exists
-    def roleExists = folderRoles.any { it.name == studentRoleName }
-    
-    if (!roleExists) {
-        // Create folder-level role for this student
-        def permissions = [
-            new PermissionEntry(PermissionEntry.Type.USER, "jenkins.model.Item.Discover"),
-            new PermissionEntry(PermissionEntry.Type.USER, "hudson.model.Item.Workspace"),
-            new PermissionEntry(PermissionEntry.Type.USER, "hudson.model.Item.Build"),
-            new PermissionEntry(PermissionEntry.Type.USER, "hudson.model.Item.Cancel"),
-            new PermissionEntry(PermissionEntry.Type.USER, "hudson.model.Item.Move"),
-            new PermissionEntry(PermissionEntry.Type.USER, "hudson.model.Item.Configure"),
-            new PermissionEntry(PermissionEntry.Type.USER, "hudson.model.Item.Delete"),
-            new PermissionEntry(PermissionEntry.Type.USER, "hudson.model.Item.Read"),
-            new PermissionEntry(PermissionEntry.Type.USER, "hudson.model.Item.Extended")
-        ]
-        
-        def newRole = new Role(studentRoleName, permissions)
-        folderRoles.add(newRole)
-        rbac.addRole(RoleBasedAuthorizationStrategy.FOLDER, newRole)
-        println("Folder role " + studentRoleName + " created")
-    } else {
-        println("Folder role " + studentRoleName + " already exists")
-    }
-    
-    // Assign the role to the student on their folder
-    def folderMapping = rbac.getRoleMap(RoleBasedAuthorizationStrategy.FOLDER)
-    if (folderMapping != null) {
-        folderMapping.put(STUDENT_ID, [studentRoleName].toSet())
-        println("Role assignment completed for folder " + STUDENT_ID)
-    }
-    
-    jenkins.save()
-} else {
-    println("WARNING: Jenkins does not have Role-Based Strategy plugin")
+if (!(strategy instanceof RoleBasedAuthorizationStrategy)) {
+    println("WARNING: Jenkins is not using RoleBasedAuthorizationStrategy — per-student folder isolation skipped")
+    return
 }
+
+// Values injected by provision-student.sh (see STUDENT_ID_PLACEHOLDER substitution below)
+def studentUser = "STUDENT_ID_PLACEHOLDER"
+def roleName    = "folder-role-STUDENT_ID_PLACEHOLDER"
+// Pattern matches the student's top-level folder and every item inside it
+def pattern     = "STUDENT_ID_PLACEHOLDER(/.*)*"
+
+Set<Permission> permissions = [
+    hudson.model.Item.BUILD,
+    hudson.model.Item.CANCEL,
+    hudson.model.Item.CONFIGURE,
+    hudson.model.Item.DELETE,
+    hudson.model.Item.DISCOVER,
+    hudson.model.Item.READ,
+    hudson.model.Item.WORKSPACE,
+    hudson.model.Run.UPDATE,
+] as Set
+
+def roleMap = strategy.getRoleMap(RoleBasedAuthorizationStrategy.PROJECT)
+def role    = roleMap.getRoles().find { it.getName() == roleName }
+
+if (role == null) {
+    role = new Role(roleName, pattern, permissions)
+    strategy.addRole(RoleBasedAuthorizationStrategy.PROJECT, role)
+    println("Created folder role " + roleName + " with pattern " + pattern)
+} else {
+    println("Folder role " + roleName + " already exists")
+}
+
+strategy.assignRole(RoleBasedAuthorizationStrategy.PROJECT, role, studentUser)
+jenkins.save()
+println("Role " + roleName + " assigned to " + studentUser + " — done")
 GROOVY
     )
-    
-    # Substitute variables
-    groovy_script="${groovy_script//STUDENT_ID/$STUDENT_ID}"
-    
-    local response crumb
+
+    # Safe substitution: STUDENT_ID_PLACEHOLDER only appears inside Groovy string
+    # literals above, so the substituted value is always syntactically valid Groovy.
+    groovy_script="${groovy_script//STUDENT_ID_PLACEHOLDER/$STUDENT_ID}"
+
+    local response crumb http_status
     crumb=$(jenkins_crumb)
-    response=$(curl -sf -X POST "${JENKINS_URL}/scriptText" \
+    http_status=$(curl -s -w "%{http_code}" -o /tmp/jenkins_response_$$.txt -X POST "${JENKINS_URL}/scriptText" \
         -u "${JENKINS_ADMIN_USER}:${JENKINS_ADMIN_PASSWORD}" \
         -c "${JENKINS_COOKIE_JAR}" -b "${JENKINS_COOKIE_JAR}" \
         ${crumb:+-H "$crumb"} \
-        --data-urlencode "script=${groovy_script}" 2>/dev/null) || true
+        --data-urlencode "script=${groovy_script}" 2>/dev/null)
+    response=$(cat /tmp/jenkins_response_$$.txt 2>/dev/null || echo "")
+    rm -f /tmp/jenkins_response_$$.txt
 
-    if echo "$response" | grep -q "created\|completed\|already"; then
+    if [ "$http_status" != "200" ]; then
+        log "⚠ Jenkins Script Console returned HTTP $http_status (expected 200)"
+        log "  Response: $(echo "$response" | head -c 300)"
+    fi
+
+    if echo "$response" | grep -q "assigned to\|done"; then
         log "  ✓ Folder permissions set for student '${STUDENT_ID}'"
+    elif echo "$response" | grep -q "already exists"; then
+        log "  ✓ Folder role already exists for student '${STUDENT_ID}'"
     else
-        warn "Folder permission setup: $response"
+        warn "Folder permission setup failed (HTTP $http_status): $(echo "$response" | head -c 300)"
+        warn "RBAC may not be properly scoped for this student"
     fi
 }
 
@@ -498,10 +510,16 @@ create_webhook() {
     # Gitea sends POST; Jenkins rejects unauthenticated POST due to CSRF, so we embed
     # a Jenkins API token in the URL for Basic Auth — this bypasses the CSRF filter.
     ensure_jenkins_webhook_token
+    
+    # Delete old/stale webhooks before creating new one (prevents duplicates and URL drift)
+    delete_stale_webhooks
+    
     # Build the webhook URL with credentials embedded: https://user:token@host/job/...
     local jenkins_base="${SHARED_JENKINS_URL%/}"
     local jenkins_auth_url="${jenkins_base/https:\/\//https://${JENKINS_ADMIN_USER}:${JENKINS_WEBHOOK_API_TOKEN}@}"
-    local jenkins_webhook_url="${jenkins_auth_url}/job/${STUDENT_ID}/job/fellowship-pipeline/build?token=${STUDENT_ID}"
+    # Parameterized jobs require /buildWithParameters — /build returns HTTP 400 when
+    # the job has any ParametersDefinitionProperty (e.g. the DEPLOYED_SUT_URL parameter).
+    local jenkins_webhook_url="${jenkins_auth_url}/job/${STUDENT_ID}/job/fellowship-pipeline/buildWithParameters?token=${STUDENT_ID}"
 
     # Validate Jenkins is reachable
     log "  Validating Jenkins reachability..."
@@ -524,10 +542,44 @@ create_webhook() {
     }") || true
 
     if echo "$response" | grep -q '"id"'; then
-        log "  ✓ Webhook created → /job/${STUDENT_ID}/job/fellowship-pipeline/build?token=${STUDENT_ID}"
+        log "  ✓ Webhook created → /job/${STUDENT_ID}/job/fellowship-pipeline/buildWithParameters?token=${STUDENT_ID}"
     else
         warn "Webhook may already exist or creation failed: $response"
     fi
+}
+
+delete_stale_webhooks() {
+    log "  Cleaning up stale webhooks (wrong endpoint or old configuration)..."
+    
+    local webhook_list
+    webhook_list=$(gitea_api GET "/repos/${GITEA_ORG_NAME}/${REPO_NAME}/hooks") || true
+    
+    if ! echo "$webhook_list" | grep -q '"id"'; then
+        log "  ✓ No existing webhooks to clean up"
+        return
+    fi
+    
+    # Extract webhook IDs that point to old endpoints or this student's job
+    # (allows re-provisioning without accumulating duplicate webhooks)
+    local webhook_id webhook_url
+    while IFS= read -r line; do
+        if echo "$line" | grep -q '"id"'; then
+            webhook_id=$(echo "$line" | sed -n 's/.*"id":\([0-9]*\).*/\1/p')
+            # Get the full webhook config to check URL
+            local webhook_config
+            webhook_config=$(gitea_api GET "/repos/${GITEA_ORG_NAME}/${REPO_NAME}/hooks/${webhook_id}") || true
+            webhook_url=$(echo "$webhook_config" | grep -o '"url":"[^"]*"' | cut -d'"' -f4 || echo "")
+            
+            # Delete if: endpoint is old /build, OR already points to this student's pipeline
+            if echo "$webhook_url" | grep -q '/build?token=' ||
+               echo "$webhook_url" | grep -q "/job/${STUDENT_ID}/job/fellowship-pipeline"; then
+                log "  Deleting old/duplicate webhook (id=$webhook_id): $webhook_url"
+                gitea_api DELETE "/repos/${GITEA_ORG_NAME}/${REPO_NAME}/hooks/${webhook_id}" >/dev/null || true
+            fi
+        fi
+    done < <(echo "$webhook_list" | grep -E '"id"')
+    
+    log "  ✓ Stale webhook cleanup complete"
 }
 
 # ── Step 4: Jenkins folder for the student ────────────────────────────────────
@@ -663,6 +715,67 @@ XML
     fi
 }
 
+# ── Post-provisioning validation ──────────────────────────────────────────────
+
+validate_webhook() {
+    log "Validating webhook..."
+    local webhook_json
+    webhook_json=$(gitea_api GET "/repos/${GITEA_ORG_NAME}/${REPO_NAME}/hooks" 2>/dev/null | grep -o '"url":"[^"]*"' | head -1)
+    
+    if [ -z "$webhook_json" ]; then
+        warn "No webhooks found for repo — webhook may not have been created"
+        return 1
+    fi
+    
+    if echo "$webhook_json" | grep -q "buildWithParameters"; then
+        log "  ✓ Webhook URL endpoint is correct (/buildWithParameters)"
+        return 0
+    elif echo "$webhook_json" | grep -q "/build\?"; then
+        warn "Webhook uses /build endpoint (should use /buildWithParameters for parameterized jobs)"
+        return 1
+    else
+        log "  ✓ Webhook created: $webhook_json"
+        return 0
+    fi
+}
+
+validate_jenkins_folder_rbac() {
+    log "Validating Jenkins folder-level RBAC..."
+    local crumb http_status
+    crumb=$(jenkins_crumb)
+    
+    http_status=$(curl -s -w "%{http_code}" -o /dev/null \
+        -u "${JENKINS_ADMIN_USER}:${JENKINS_ADMIN_PASSWORD}" \
+        -c "${JENKINS_COOKIE_JAR}" -b "${JENKINS_COOKIE_JAR}" \
+        "${JENKINS_URL}/job/${STUDENT_ID}/" 2>/dev/null)
+    
+    if [ "$http_status" = "200" ]; then
+        log "  ✓ Jenkins folder exists and is accessible"
+        return 0
+    else
+        warn "Jenkins folder not accessible (HTTP $http_status)"
+        return 1
+    fi
+}
+
+validate_jenkins_job_parameters() {
+    log "Validating Jenkins pipeline job has parameters..."
+    local config_xml
+    
+    config_xml=$(curl -s \
+        -u "${JENKINS_ADMIN_USER}:${JENKINS_ADMIN_PASSWORD}" \
+        -c "${JENKINS_COOKIE_JAR}" -b "${JENKINS_COOKIE_JAR}" \
+        "${JENKINS_URL}/job/${STUDENT_ID}/job/fellowship-pipeline/config.xml" 2>/dev/null)
+    
+    if echo "$config_xml" | grep -q "DEPLOYED_SUT_URL"; then
+        log "  ✓ Pipeline job has DEPLOYED_SUT_URL parameter"
+        return 0
+    else
+        warn "Pipeline job missing DEPLOYED_SUT_URL parameter"
+        return 1
+    fi
+}
+
 # ── Summary ───────────────────────────────────────────────────────────────────
 
 print_summary() {
@@ -670,6 +783,7 @@ print_summary() {
     log " Student '${STUDENT_ID}' provisioned successfully"
     log "=================================================="
     log "  Gitea repo:    ${SHARED_GITEA_URL}/${GITEA_ORG_NAME}/${REPO_NAME}"
+    log "  Jenkins folder: ${SHARED_JENKINS_URL}job/${STUDENT_ID}/"
     log "  Jenkins job:   ${SHARED_JENKINS_URL}job/${STUDENT_ID}/job/fellowship-pipeline/"
     log "  Git clone URL: ${GITEA_URL}/${GITEA_ORG_NAME}/${REPO_NAME}.git"
     log "  Credentials:   ${STUDENT_ID} / ${STUDENT_PASSWORD}"
@@ -688,6 +802,24 @@ main() {
     create_webhook
     create_jenkins_folder
     create_jenkins_pipeline
+    
+    log ""
+    log "== Post-provisioning validation =="
+    local validation_errors=0
+    
+    validate_webhook || validation_errors=$((validation_errors + 1))
+    validate_jenkins_folder_rbac || validation_errors=$((validation_errors + 1))
+    validate_jenkins_job_parameters || validation_errors=$((validation_errors + 1))
+    
+    if [ "$validation_errors" -gt 0 ]; then
+        log ""
+        warn "⚠ $validation_errors validation check(s) failed (see warnings above)"
+        warn "The student may have limited functionality until issues are resolved."
+    else
+        log "  ✓ All validation checks passed"
+    fi
+    
+    log ""
     print_summary
 }
 

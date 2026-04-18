@@ -187,6 +187,10 @@ def _invoke_ssm_command(
 
     Returns:
         dict(success, command_id, status, output, error)
+    
+    Note: A script exit code of 0 indicates success; any non-zero exit is failure.
+          SSM Status field reflects whether the command completed (not script exit code).
+          Therefore, we also check StandardErrorContent as a secondary indicator of failure.
     """
     env_exports = _build_env_exports(environment_vars)
     params_str = " ".join(f"'{str(p)}'" for p in parameters)
@@ -217,12 +221,30 @@ def _invoke_ssm_command(
                 if status in ("Success", "Failed", "Cancelled", "TimedOut", "Cancelling"):
                     output = invocation.get("StandardOutputContent", "")
                     error = invocation.get("StandardErrorContent", "")
-                    if status == "Success":
+                    
+                    # SSM Status "Success" means command ran, but doesn't guarantee script succeeded
+                    # Check for script errors in stderr or explicit failure markers
+                    script_failed = False
+                    if status != "Success":
+                        # SSM reports explicit failure (timeout, cancelled, or command error)
+                        script_failed = True
+                        logger.error(f"SSM reported failure: status={status}")
+                    elif error and any(word in error.lower() for word in ["error", "failed", "exception", "exit"]):
+                        # Script wrote errors to stderr even though SSM Status is "Success"
+                        # This can happen if script exits non-zero but SSM catches it after command completes
+                        script_failed = True
+                        logger.error(f"Script errors detected in stderr: {error[:500]}")
+                    
+                    if status == "Success" and not script_failed:
                         logger.info(f"SSM succeeded. output={output[:2000]}")
                     else:
-                        logger.error(f"SSM failed status={status} error={error[:2000]} output={output[:1000]}")
+                        if not script_failed:
+                            script_failed = status != "Success"
+                        logger.error(f"SSM status={status} script_failed={script_failed} "
+                                   f"error={error[:500]} output={output[:1000]}")
+                    
                     return {
-                        "success": status == "Success",
+                        "success": status == "Success" and not script_failed,
                         "command_id": command_id,
                         "status": status,
                         "output": output,
