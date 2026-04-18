@@ -310,7 +310,7 @@ def _provision(request_id: str, student_id: str, workshop_name: str, student_pas
     result = _invoke_ssm_command(
         instance_id=instance_id,
         script_path="/opt/scripts/provision-student.sh",
-        parameters=[student_id, student_password or "fellowship123"],
+        parameters=[student_id, student_password or student_id],
         environment_vars=env_vars,
     )
 

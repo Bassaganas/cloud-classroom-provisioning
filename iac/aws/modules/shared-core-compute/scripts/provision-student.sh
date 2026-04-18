@@ -26,7 +26,7 @@
 set -euo pipefail
 
 STUDENT_ID="${1:?Usage: provision-student.sh <student_id> [student_password]}"
-STUDENT_PASSWORD="${2:-fellowship123}"
+STUDENT_PASSWORD="${2:-${STUDENT_ID}}"
 
 GITEA_URL="${GITEA_URL:-http://localhost:3030}"
 GITEA_ADMIN_USER="${GITEA_ADMIN_USER:-fellowship}"
@@ -235,22 +235,29 @@ GROOVY
 
 create_gitea_user() {
     log "Step 1: Creating Gitea user '${STUDENT_ID}'..."
-    local response
-    response=$(gitea_api POST "/admin/users" "{
-        \"login_name\": \"${STUDENT_ID}\",
-        \"username\": \"${STUDENT_ID}\",
-        \"password\": \"${STUDENT_PASSWORD}\",
-        \"email\": \"${STUDENT_ID}@fellowship.local\",
-        \"send_notify\": false,
-        \"must_change_password\": false,
-        \"source_id\": 0
-    }") || true
-
-    if echo "$response" | grep -q '"id"'; then
-        log "  ✓ Gitea user '${STUDENT_ID}' created"
-    else
-        log "  ✓ Gitea user '${STUDENT_ID}' already exists (skipped)"
-    fi
+    local http_status tmp_body
+    tmp_body=$(mktemp)
+    http_status=$(curl -s -o "${tmp_body}" -w "%{http_code}" \
+        -X POST "${GITEA_URL}/api/v1/admin/users" \
+        -u "${GITEA_ADMIN_USER}:${GITEA_ADMIN_PASSWORD}" \
+        -H "Content-Type: application/json" \
+        -d "{
+            \"login_name\": \"${STUDENT_ID}\",
+            \"username\": \"${STUDENT_ID}\",
+            \"password\": \"${STUDENT_PASSWORD}\",
+            \"email\": \"${STUDENT_ID}@fellowship.local\",
+            \"send_notify\": false,
+            \"must_change_password\": false,
+            \"source_id\": 0
+        }" 2>&1) || http_status="000"
+    case "${http_status}" in
+        201) log "  ✓ Gitea user '${STUDENT_ID}' created" ;;
+        422) log "  ✓ Gitea user '${STUDENT_ID}' already exists (skipped)" ;;
+        401|403) warn "Gitea admin auth failed (HTTP ${http_status}) — check GITEA_ADMIN_PASSWORD" ;;
+        000) warn "Gitea API unreachable at ${GITEA_URL} — check GITEA_URL and network" ;;
+        *)   warn "Gitea user creation returned HTTP ${http_status}: $(cat "${tmp_body}" 2>/dev/null | head -c 300)" ;;
+    esac
+    rm -f "${tmp_body}"
 }
 
 # ── Step 2: Per-student Gitea repo ────────────────────────────────────────────

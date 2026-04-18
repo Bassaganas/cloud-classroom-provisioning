@@ -362,7 +362,7 @@ def provision_student_on_shared_core(student_id, workshop_name=None, student_pas
     # ── Async path (preferred) ────────────────────────────────────────────────
     if SHARED_CORE_PROVISIONING_QUEUE_URL:
         return _enqueue_provisioning_request(
-            'provision', student_id, workshop_name, student_password or 'fellowship123',
+            'provision', student_id, workshop_name, student_password or student_id,
             deployed_sut_url=deployed_sut_url
         )
 
@@ -380,7 +380,7 @@ def provision_student_on_shared_core(student_id, workshop_name=None, student_pas
 
     credentials = get_shared_core_credentials()
     if not student_password:
-        student_password = 'fellowship123'
+        student_password = student_id
 
     # ── Retrieve shared-core domains from SSM for webhook configuration ──
     # (2026-04-17 fix: Missing JENKINS_URL and GITEA_URL was causing webhooks
