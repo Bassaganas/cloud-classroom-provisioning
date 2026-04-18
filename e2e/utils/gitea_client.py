@@ -2,8 +2,10 @@
 import os
 import logging
 import requests
+import base64
 from typing import Dict, Optional, Any
 from urllib.parse import urljoin
+from requests.auth import HTTPBasicAuth
 
 logger = logging.getLogger(__name__)
 
@@ -11,14 +13,15 @@ logger = logging.getLogger(__name__)
 class GiteaClient:
     """Client for interacting with Gitea API."""
     
-    def __init__(self, base_url: Optional[str] = None, token: Optional[str] = None, username: Optional[str] = None):
+    def __init__(self, base_url: Optional[str] = None, token: Optional[str] = None, username: Optional[str] = None, password: Optional[str] = None):
         """
         Initialize Gitea client.
         
         Args:
             base_url: Gitea instance URL (defaults to GITEA_URL env var)
             token: Gitea API token (defaults to GITEA_API_TOKEN env var)
-            username: Gitea admin username (defaults to GITEA_ADMIN_USER env var)
+            username: Gitea username (can be admin or student)
+            password: Gitea password (for basic auth when token not available)
         """
         self.base_url = base_url or os.getenv('GITEA_URL', '')
         if not self.base_url:
@@ -26,26 +29,48 @@ class GiteaClient:
         
         self.token = token or os.getenv('GITEA_API_TOKEN', '')
         self.username = username or os.getenv('GITEA_ADMIN_USER', 'gitea_admin')
+        self.password = password or os.getenv('GITEA_ADMIN_PASSWORD', '')
         
         self.session = requests.Session()
+        
+        # Set up authentication: prefer token, fallback to basic auth
         if self.token:
             self.session.headers.update({
                 'Authorization': f'token {self.token}',
                 'Content-Type': 'application/json'
             })
+        elif self.username and self.password:
+            # Use basic auth for username/password
+            self.session.auth = HTTPBasicAuth(self.username, self.password)
+            self.session.headers.update({'Content-Type': 'application/json'})
         
-        logger.info(f"Initialized GiteaClient for {self.base_url}")
+        logger.info(f"Initialized GiteaClient for {self.base_url} with user {self.username}")
     
     def _make_request(self, method: str, endpoint: str, **kwargs) -> requests.Response:
         """Make HTTP request to Gitea API."""
         url = urljoin(self.base_url, f'/api/v1/{endpoint}')
         response = self.session.request(method, url, **kwargs)
         
-        if response.status_code >= 400:
+        if response.status_code >= 400 and response.status_code != 404:
             logger.error(f"{method} {url} - Status: {response.status_code} - Response: {response.text}")
             response.raise_for_status()
         
         return response
+    
+    def get_user(self, username: str) -> Dict[str, Any]:
+        """
+        Get user information by username.
+        
+        Args:
+            username: Username to look up
+            
+        Returns:
+            User data from Gitea
+        """
+        response = self._make_request('GET', f'users/{username}')
+        if response.status_code == 404:
+            raise ValueError(f"User '{username}' not found")
+        return response.json()
     
     def create_user(self, username: str, email: str, password: str, full_name: str = "") -> Dict[str, Any]:
         """

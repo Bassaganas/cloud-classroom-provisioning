@@ -96,6 +96,138 @@ jenkins_api() {
     fi
 }
 
+# ── Step 0.5: Jenkins student user creation and folder permissions ──────────
+
+create_jenkins_student_user() {
+    log "Step 0.5a: Creating Jenkins user '${STUDENT_ID}'..."
+    
+    # Create the student user via Jenkins Script Console (Groovy API)
+    local groovy_script
+    groovy_script=$(cat <<'GROOVY'
+import jenkins.model.Jenkins
+import hudson.security.HudsonPrivateSecurityRealm
+
+def jenkins = Jenkins.getInstance()
+def realm = jenkins.getSecurityRealm()
+
+if (realm instanceof HudsonPrivateSecurityRealm) {
+    // Attempt to create the user
+    try {
+        def user = realm.createAccount(USERNAME, PASSWORD)
+        user.setFullName(FULLNAME)
+        user.save()
+        println("User " + USERNAME + " created successfully")
+    } catch (Exception e) {
+        if (e.getMessage().contains("already exists")) {
+            println("User " + USERNAME + " already exists")
+        } else {
+            throw e
+        }
+    }
+} else {
+    println("ERROR: Jenkins security realm is not HudsonPrivateSecurityRealm")
+}
+GROOVY
+    )
+    
+    # Substitute variables
+    groovy_script="${groovy_script//USERNAME/\"$STUDENT_ID\"}"
+    groovy_script="${groovy_script//PASSWORD/\"$STUDENT_PASSWORD\"}"
+    groovy_script="${groovy_script//FULLNAME/\"Student: $STUDENT_ID\"}"
+    
+    local response crumb
+    crumb=$(jenkins_crumb)
+    response=$(curl -sf -X POST "${JENKINS_URL}/scriptText" \
+        -u "${JENKINS_ADMIN_USER}:${JENKINS_ADMIN_PASSWORD}" \
+        -c "${JENKINS_COOKIE_JAR}" -b "${JENKINS_COOKIE_JAR}" \
+        ${crumb:+-H "$crumb"} \
+        --data-urlencode "script=${groovy_script}" 2>/dev/null) || true
+
+    if echo "$response" | grep -q "created successfully\|already exists"; then
+        log "  ✓ Jenkins user '${STUDENT_ID}' ready"
+    else
+        # Non-fatal: user creation may not be supported on this Jenkins version
+        warn "Jenkins user creation: $response"
+    fi
+}
+
+setup_jenkins_folder_permissions() {
+    log "Step 0.5b: Setting up folder permissions for student '${STUDENT_ID}'..."
+    
+    # Use Jenkins Role-Based Strategy plugin to create folder-level role
+    # This allows the student to access only their own folder
+    local groovy_script
+    groovy_script=$(cat <<'GROOVY'
+import hudson.security.AuthorizationStrategy
+import com.cloudbees.hudson.plugins.rolestrategy.RoleBasedAuthorizationStrategy
+import com.cloudbees.hudson.plugins.rolestrategy.Role
+import org.jenkinsci.plugins.matrixauth.authorization.PermissionEntry
+import jenkins.model.Jenkins
+
+def jenkins = Jenkins.getInstance()
+def rbac = jenkins.getAuthorizationStrategy()
+
+if (rbac instanceof RoleBasedAuthorizationStrategy) {
+    def folderRoles = rbac.getRoles(RoleBasedAuthorizationStrategy.FOLDER)
+    def studentRoleName = "student-" + STUDENT_ID
+    
+    // Check if role already exists
+    def roleExists = folderRoles.any { it.name == studentRoleName }
+    
+    if (!roleExists) {
+        // Create folder-level role for this student
+        def permissions = [
+            new PermissionEntry(PermissionEntry.Type.USER, "jenkins.model.Item.Discover"),
+            new PermissionEntry(PermissionEntry.Type.USER, "hudson.model.Item.Workspace"),
+            new PermissionEntry(PermissionEntry.Type.USER, "hudson.model.Item.Build"),
+            new PermissionEntry(PermissionEntry.Type.USER, "hudson.model.Item.Cancel"),
+            new PermissionEntry(PermissionEntry.Type.USER, "hudson.model.Item.Move"),
+            new PermissionEntry(PermissionEntry.Type.USER, "hudson.model.Item.Configure"),
+            new PermissionEntry(PermissionEntry.Type.USER, "hudson.model.Item.Delete"),
+            new PermissionEntry(PermissionEntry.Type.USER, "hudson.model.Item.Read"),
+            new PermissionEntry(PermissionEntry.Type.USER, "hudson.model.Item.Extended")
+        ]
+        
+        def newRole = new Role(studentRoleName, permissions)
+        folderRoles.add(newRole)
+        rbac.addRole(RoleBasedAuthorizationStrategy.FOLDER, newRole)
+        println("Folder role " + studentRoleName + " created")
+    } else {
+        println("Folder role " + studentRoleName + " already exists")
+    }
+    
+    // Assign the role to the student on their folder
+    def folderMapping = rbac.getRoleMap(RoleBasedAuthorizationStrategy.FOLDER)
+    if (folderMapping != null) {
+        folderMapping.put(STUDENT_ID, [studentRoleName].toSet())
+        println("Role assignment completed for folder " + STUDENT_ID)
+    }
+    
+    jenkins.save()
+} else {
+    println("WARNING: Jenkins does not have Role-Based Strategy plugin")
+}
+GROOVY
+    )
+    
+    # Substitute variables
+    groovy_script="${groovy_script//STUDENT_ID/$STUDENT_ID}"
+    
+    local response crumb
+    crumb=$(jenkins_crumb)
+    response=$(curl -sf -X POST "${JENKINS_URL}/scriptText" \
+        -u "${JENKINS_ADMIN_USER}:${JENKINS_ADMIN_PASSWORD}" \
+        -c "${JENKINS_COOKIE_JAR}" -b "${JENKINS_COOKIE_JAR}" \
+        ${crumb:+-H "$crumb"} \
+        --data-urlencode "script=${groovy_script}" 2>/dev/null) || true
+
+    if echo "$response" | grep -q "created\|completed\|already"; then
+        log "  ✓ Folder permissions set for student '${STUDENT_ID}'"
+    else
+        warn "Folder permission setup: $response"
+    fi
+}
+
 # ── Step 1: Gitea student user ────────────────────────────────────────────────
 
 create_gitea_user() {
@@ -271,7 +403,7 @@ seed_sut_content() {
 
     # Copy each SUT asset into the repo working tree.
     local items_copied=0
-    for item in sut tests Jenkinsfile pytest.ini; do
+    for item in sut tests scripts Jenkinsfile pytest.ini; do
         if [ -e "${app_dir}/${item}" ]; then
             cp -a "${app_dir}/${item}" .
             items_copied=$((items_copied + 1))
@@ -307,7 +439,7 @@ seed_sut_content() {
     if git diff --cached --quiet; then
         log "  ✓ SUT content already present in '${REPO_NAME}' (nothing to commit)"
     else
-        git commit -q -m "feat: seed Fellowship SUT (sut/, tests/, Jenkinsfile) for ${STUDENT_ID}"
+        git commit -q -m "feat: seed Fellowship SUT (sut/, tests/, scripts/, Jenkinsfile) for ${STUDENT_ID}"
         if git push -q origin main; then
             log "  ✓ SUT content pushed to '${REPO_NAME}'"
         else
@@ -456,6 +588,8 @@ print_summary() {
 
 main() {
     log "Provisioning student '${STUDENT_ID}' on shared-core stack..."
+    create_jenkins_student_user
+    setup_jenkins_folder_permissions
     create_gitea_user
     create_gitea_repo
     seed_sut_content
