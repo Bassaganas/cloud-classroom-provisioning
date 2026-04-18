@@ -33,10 +33,15 @@ SQS message body (JSON):
   }
 """
 
+import base64
+import http.cookiejar
 import json
 import logging
 import os
+import re
 import time
+import urllib.parse
+import urllib.request
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
@@ -45,6 +50,12 @@ from botocore.exceptions import ClientError
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
+
+# ── Input validation ─────────────────────────────────────────────────────────
+# Restricts student IDs to alphanumeric + hyphen/underscore only.
+# Prevents Groovy code injection when student_id is interpolated into the
+# Jenkins Script Console payload.
+_STUDENT_ID_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 
 # ── AWS clients ───────────────────────────────────────────────────────────────
 
@@ -295,6 +306,123 @@ def _invoke_ssm_command(
     }
 
 
+# ── Jenkins RBAC helper ──────────────────────────────────────────────────────
+
+def _setup_jenkins_folder_role(request_id: str, student_id: str, credentials: dict) -> bool:
+    """
+    Post the per-student folder project role Groovy script directly to the Jenkins
+    Script Console API.  This is an idempotent supplement to provision-student.sh:
+    it ensures the RBAC role is always created even when the SSM script's own
+    role-setup step fails silently (it uses 'warn' not 'die' on error).
+
+    Returns True when the role was confirmed created/assigned, False on failure
+    (non-fatal — the overall provision status is still 'success', but a
+    'role_setup_warning' field is added to the DynamoDB item).
+    """
+    if not _STUDENT_ID_RE.match(student_id):
+        logger.error(
+            f"[{request_id}] student_id '{student_id}' contains unsafe characters "
+            "— skipping Jenkins role setup to prevent injection"
+        )
+        return False
+
+    jenkins_url = credentials["jenkins_url"].rstrip("/")
+    admin_user = credentials["jenkins_admin_user"]
+    admin_password = credentials["jenkins_admin_password"]
+
+    # student_id is validated above (alphanumeric + hyphen/underscore only),
+    # so it is safe to interpolate into the Groovy double-quoted string literals.
+    groovy_script = (
+        "import jenkins.model.Jenkins\n"
+        "import com.cloudbees.hudson.plugins.rolestrategy.RoleBasedAuthorizationStrategy\n"
+        "import com.cloudbees.hudson.plugins.rolestrategy.Role\n"
+        "import hudson.security.Permission\n"
+        "\n"
+        "def jenkins  = Jenkins.getInstance()\n"
+        "def strategy = jenkins.getAuthorizationStrategy()\n"
+        "if (!(strategy instanceof RoleBasedAuthorizationStrategy)) {\n"
+        "    println('WARNING: RoleBasedAuthorizationStrategy not active — skipping')\n"
+        "    return\n"
+        "}\n"
+        "\n"
+        f'def studentUser = \"{student_id}\"\n'
+        f'def roleName    = \"folder-role-{student_id}\"\n'
+        f'def pattern     = \"{student_id}(/.*)*\"\n'
+        "\n"
+        "Set<Permission> permissions = [\n"
+        "    hudson.model.Item.BUILD,    hudson.model.Item.CANCEL,\n"
+        "    hudson.model.Item.CONFIGURE, hudson.model.Item.DELETE,\n"
+        "    hudson.model.Item.DISCOVER, hudson.model.Item.READ,\n"
+        "    hudson.model.Item.WORKSPACE, hudson.model.Run.UPDATE,\n"
+        "] as Set\n"
+        "\n"
+        "def roleMap = strategy.getRoleMap(RoleBasedAuthorizationStrategy.PROJECT)\n"
+        "def role    = roleMap.getRoles().find { it.getName() == roleName }\n"
+        "if (role == null) {\n"
+        "    role = new Role(roleName, pattern, permissions)\n"
+        "    strategy.addRole(RoleBasedAuthorizationStrategy.PROJECT, role)\n"
+        "    println('Created folder role ' + roleName)\n"
+        "} else {\n"
+        "    println('Folder role ' + roleName + ' already exists')\n"
+        "}\n"
+        "strategy.assignRole(RoleBasedAuthorizationStrategy.PROJECT, role, studentUser)\n"
+        "jenkins.save()\n"
+        "println('Role ' + roleName + ' assigned to ' + studentUser + ' — done')\n"
+    )
+
+    auth_header = "Basic " + base64.b64encode(
+        f"{admin_user}:{admin_password}".encode()
+    ).decode()
+    cookie_jar = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cookie_jar))
+
+    # Step 1: Fetch CSRF crumb (also sets the session cookie in cookie_jar)
+    try:
+        crumb_req = urllib.request.Request(
+            f"{jenkins_url}/crumbIssuer/api/json",
+            headers={"Authorization": auth_header},
+        )
+        with opener.open(crumb_req, timeout=15) as resp:
+            crumb_data = json.loads(resp.read().decode())
+        crumb_field = crumb_data["crumbRequestField"]
+        crumb_value = crumb_data["crumb"]
+        logger.info(f"[{request_id}] Jenkins CSRF crumb obtained for student {student_id}")
+    except Exception as exc:
+        logger.warning(f"[{request_id}] Jenkins CSRF crumb fetch failed: {exc}")
+        return False
+
+    # Step 2: POST Groovy script to Jenkins Script Console
+    try:
+        post_data = urllib.parse.urlencode({"script": groovy_script}).encode()
+        script_req = urllib.request.Request(
+            f"{jenkins_url}/scriptText",
+            data=post_data,
+            headers={
+                "Authorization": auth_header,
+                crumb_field: crumb_value,
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+        )
+        with opener.open(script_req, timeout=30) as resp:
+            output = resp.read().decode()
+    except Exception as exc:
+        logger.warning(f"[{request_id}] Jenkins Script Console POST failed: {exc}")
+        return False
+
+    if "assigned to" in output and "done" in output:
+        logger.info(
+            f"[{request_id}] Jenkins folder role confirmed for {student_id}: "
+            f"{output.strip()}"
+        )
+        return True
+
+    logger.warning(
+        f"[{request_id}] Jenkins folder role setup got unexpected output for {student_id}: "
+        f"{output[:500]}"
+    )
+    return False
+
+
 # ── Core provisioning logic ───────────────────────────────────────────────────
 
 def _provision(request_id: str, student_id: str, workshop_name: str, student_password: str, deployed_sut_url: str = ""):
@@ -337,7 +465,23 @@ def _provision(request_id: str, student_id: str, workshop_name: str, student_pas
     )
 
     if result["success"]:
-        _update_status(request_id, "success", ssm_command_id=result["command_id"])
+        role_ok = _setup_jenkins_folder_role(request_id, student_id, credentials)
+        status_kwargs: dict = {"ssm_command_id": result["command_id"]}
+        if not role_ok:
+            logger.warning(
+                f"[{request_id}] *** JENKINS ROLE SETUP FAILED for student '{student_id}' ***\n"
+                "  The student's Gitea account, repo, webhook, and Jenkins folder were\n"
+                "  created successfully by the SSM script, but the project role that\n"
+                "  grants visibility in Jenkins was NOT assigned.\n"
+                "  Impact: student can log in to Jenkins but will see an empty dashboard.\n"
+                "  Fix: re-run provision-student.sh for this student, or call the\n"
+                "       provisioning API again (all steps are idempotent)."
+            )
+            status_kwargs["role_setup_warning"] = (
+                "Jenkins folder role setup failed after SSM provision — "
+                "student may not see their folder until re-provisioned"
+            )
+        _update_status(request_id, "success", **status_kwargs)
     else:
         _update_status(
             request_id,
