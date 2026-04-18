@@ -1827,8 +1827,17 @@ def _delete_route53_a_record(domain_name, strict=False, max_retries=3):
 def setup_caddy_domain(instance_id, workshop_name, machine_name=None, domain=None):
     """Setup Caddy domain with Route53 A record and instance tags
     
-    Uses predictable machine names (e.g., 'fellowship-pool-0') instead of instance IDs
-    to avoid timing issues. Domain is known before instance creation.
+    Creates Route53 A records for DNS resolution and tags instances with HTTPS domain.
+    The actual TLS certificate is pre-issued and stored in Secrets Manager, issued once
+    by the issue-wildcard-cert GitHub Actions workflow. Instances fetch the certificate
+    at bootstrap time, avoiding per-instance Let's Encrypt rate limits.
+    
+    Domain patterns:
+    - Testus Patronus: dify-{instance_id}.testingfantasy.com (Dify-only service)
+    - Fellowship: {machine_name}.fellowship.testingfantasy.com (multi-service: SUT + Jenkins + IDE + Gitea)
+    - Other workshops: {instance_id}.{workshop_name}.testingfantasy.com
+    
+    All domains are covered by *.testingfantasy.com wildcard certificate.
     
     Args:
         instance_id: EC2 instance ID
@@ -1847,7 +1856,14 @@ def setup_caddy_domain(instance_id, workshop_name, machine_name=None, domain=Non
         # Use provided domain or construct from machine_name, fallback to instance_id
         if domain:
             final_domain = sanitize_domain_name(domain)
+        elif str(workshop_name or '').strip().lower() == 'testus_patronus':
+            # Testus Patronus uses simplified domain pattern: dify-{instance_id}.testingfantasy.com
+            # (Dify-only service, no jenkins/ide/gitea subdomains like fellowship)
+            # Covered by *.testingfantasy.com wildcard certificate pre-issued by issue-wildcard-cert workflow
+            final_domain = f"dify-{instance_id}.{HTTPS_BASE_DOMAIN}"
+            logger.info(f"Testus Patronus instance domain pattern: {final_domain}")
         elif machine_name:
+            # Fellowship and other workshops: use machine_name pattern {machine_name}.{workshop_name}.{base_domain}
             # Sanitize machine_name before using it in domain
             sanitized_machine_name = sanitize_domain_name(machine_name)
             final_domain = f"{sanitized_machine_name}.{workshop_name}.{HTTPS_BASE_DOMAIN}"
