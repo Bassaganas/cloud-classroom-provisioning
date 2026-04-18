@@ -3196,10 +3196,15 @@ export GITEA_REPO_NAME={_gitea_repo}
             # Setup Caddy domain (Route53 A record)
             # Domain name and tags are already set before instance creation
             # Now we just need to create/update the Route53 record with the public IP
-            if domain and machine_name:
+            # For testus_patronus: domain=None here (instance_id not known until creation),
+            # so setup_caddy_domain() constructs dify-{instance_id}.{HTTPS_BASE_DOMAIN} internally.
+            _is_testus_patronus = str(workshop_name or '').strip().lower() == 'testus_patronus'
+            if machine_name and (domain or _is_testus_patronus):
                 caddy_setup = None
                 max_retries = 5
                 retry_delay = 10  # seconds
+                # Compute the expected domain for fallback messages (testus_patronus has no domain yet)
+                _expected_domain = domain or (f"dify-{instance_id}.{HTTPS_BASE_DOMAIN}" if _is_testus_patronus else None)
                 
                 for attempt in range(1, max_retries + 1):
                     try:
@@ -3221,21 +3226,23 @@ export GITEA_REPO_NAME={_gitea_repo}
                                 time.sleep(retry_delay)
                             else:
                                 logger.warning(f"⚠ Caddy Route53 record creation failed after {max_retries} attempts (instance may not have public IP yet)")
-                                logger.info(f"   Domain tags are already set: {domain}")
+                                logger.info(f"   Expected domain: {_expected_domain}")
                                 logger.info(f"   Route53 record will be created automatically when instance gets public IP")
                                 # Still add domain info to instance response (tags are already set)
-                                instances[-1]['https_url'] = f"https://{domain}"
-                                instances[-1]['https_domain'] = domain
+                                if _expected_domain:
+                                    instances[-1]['https_url'] = f"https://{_expected_domain}"
+                                    instances[-1]['https_domain'] = _expected_domain
                     except Exception as e:
                         if attempt < max_retries:
                             logger.warning(f"Error setting up Caddy domain (attempt {attempt}/{max_retries}): {str(e)}, retrying...")
                             time.sleep(retry_delay)
                         else:
                             logger.warning(f"Error setting up Caddy Route53 record after {max_retries} attempts (non-fatal): {str(e)}")
-                            logger.info(f"   Domain tags are already set: {domain}")
+                            logger.info(f"   Expected domain: {_expected_domain}")
                             # Still add domain info to instance response (tags are already set)
-                            instances[-1]['https_url'] = f"https://{domain}"
-                            instances[-1]['https_domain'] = domain
+                            if _expected_domain:
+                                instances[-1]['https_url'] = f"https://{_expected_domain}"
+                                instances[-1]['https_domain'] = _expected_domain
             else:
                 logger.info("HTTPS not configured - skipping Caddy domain setup")
 
