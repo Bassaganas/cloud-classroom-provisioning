@@ -405,6 +405,7 @@ function TutorialDashboard() {
 
       if (!query) return true
 
+      const assignedTo = instance.assigned || instance.assigned_to || ''
       return [
         instance.instance_id || '',
         instance.public_ip || '',
@@ -415,7 +416,7 @@ function TutorialDashboard() {
         instance.tags?.GiteaDomain || '',
         instance.state || '',
         type,
-        instance.assigned_to || ''
+        assignedTo
       ].some((value) => String(value).toLowerCase().includes(query))
     })
   }, [activeFilter, instances, search])
@@ -795,7 +796,7 @@ function TutorialDashboard() {
                             {!visitUrl && !instance.tags?.JenkinsDomain && !instance.tags?.IdeDomain && !instance.tags?.GiteaDomain && !instance.jenkins_job_url && !instance.gitea_repo_url && 'Pending...'}
                           </Stack>
                         </TableCell>
-                        <TableCell>{instance.assigned_to || '-'}</TableCell>
+                        <TableCell>{instance.assigned || instance.assigned_to || '-'}</TableCell>
                         <TableCell>
                           {type === 'admin' && instance.cleanup_days_remaining !== null ? (
                             <Stack spacing={0.5}>
