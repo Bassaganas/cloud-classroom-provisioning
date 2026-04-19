@@ -116,16 +116,30 @@ resource "aws_iam_role_policy" "ec2_route53_access" {
 
   policy = jsonencode({
     Version = "2012-10-17"
-    Statement = [{
-      Effect = "Allow"
-      Action = [
-        "route53:ListHostedZonesByName",
-        "route53:ChangeResourceRecordSets",
-        "route53:ListResourceRecordSets",
-        "route53:GetChange"
-      ]
-      Resource = "*"
-    }]
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "route53:ListHostedZonesByName",
+          "route53:ChangeResourceRecordSets",
+          "route53:ListResourceRecordSets",
+          "route53:GetChange"
+        ]
+        Resource = "*"
+      },
+      {
+        # Required by setup scripts to read the HttpsDomain tag set by Lambda after instance creation.
+        # The setup_testus_patronus.sh script uses `aws ec2 describe-tags` to retrieve the
+        # CADDY_DOMAIN value (dify-{instance_id}.testingfantasy.com) since the domain can only be
+        # computed after the instance ID is known (post run_instances). Without this permission the
+        # tag lookup silently returns empty, falling back to "localhost" and breaking HTTPS.
+        Effect = "Allow"
+        Action = [
+          "ec2:DescribeTags"
+        ]
+        Resource = "*"
+      }
+    ]
   })
 }
 
