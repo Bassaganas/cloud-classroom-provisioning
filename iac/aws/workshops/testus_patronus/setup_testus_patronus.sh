@@ -132,6 +132,13 @@ REDIS_VERSION=6-alpine
 # Weaviate version (stable)
 WEAVIATE_VERSION=1.27.0
 
+# ===== PORT CONFIGURATION FOR CADDY INTEGRATION =====
+# Remap Dify's nginx to non-standard ports so that Caddy (the HTTPS terminator)
+# can bind to ports 80 and 443.  Caddy listens on 80/443 externally and reverse-
+# proxies all traffic to Dify's nginx on localhost:8080.
+EXPOSE_NGINX_PORT=8080
+EXPOSE_NGINX_SSL_PORT=8443
+
 EOF
 
 # Pre-pull specific Docker images to ensure version consistency
@@ -183,18 +190,20 @@ else
     done
     
     if [ -n "$INSTANCE_ID" ]; then
-        # Get domain from instance tags (set by Lambda BEFORE instance creation)
-        # With predictable domain names, this should be available immediately
+        # Get domain from instance tags (set by Lambda shortly after instance creation)
+        # Lambda calls setup_caddy_domain() immediately after run_instances(), typically within ~10-20s.
+        # The instance takes ~5min to reach this section (Docker install + Dify pull + 120s sleep),
+        # so the tag should already be present. We retry generously (30×5s = 150s) just in case.
         log "Retrieving HttpsDomain tag from instance tags..."
-        for i in {1..6}; do
+        for i in {1..30}; do
             CADDY_DOMAIN=$(aws ec2 describe-tags --region "${AWS_REGION}" --filters "Name=resource-id,Values=${INSTANCE_ID}" "Name=key,Values=HttpsDomain" --query "Tags[0].Value" --output text 2>/dev/null || echo "")
             if [ -n "$CADDY_DOMAIN" ] && [ "$CADDY_DOMAIN" != "None" ] && [ "$CADDY_DOMAIN" != "" ]; then
                 log "✓ Found Caddy domain from tags: $CADDY_DOMAIN"
                 break
             fi
-            if [ $i -lt 6 ]; then
-                log "  Attempt $i/6: HttpsDomain tag not found yet, waiting 2s..."
-                sleep 2
+            if [ $i -lt 30 ]; then
+                log "  Attempt $i/30: HttpsDomain tag not found yet, waiting 5s..."
+                sleep 5
             fi
         done
     else
@@ -246,9 +255,10 @@ chown -R ec2-user:ec2-user /home/ec2-user/caddy/certs
 log "✓ Wildcard certificate fetched and written to /home/ec2-user/caddy/certs/"
 
 # Create Caddyfile using pre-issued certificate
+# NOTE: heredoc is unquoted (<< EOF) so ${CADDY_DOMAIN} is expanded by the shell
 cat > /home/ec2-user/caddy/Caddyfile << EOF
 # Caddyfile for Testus Patronus (Dify) — PRE-ISSUED WILDCARD CERTIFICATE
-# Domain: \${CADDY_DOMAIN} (e.g., dify-{instance-id}.testingfantasy.com)
+# Domain: ${CADDY_DOMAIN} (e.g., dify-{instance-id}.testingfantasy.com)
 #
 # Uses the shared *.testingfantasy.com wildcard certificate stored in AWS Secrets Manager
 # and issued once by the issue-wildcard-cert GitHub Actions workflow.
@@ -263,19 +273,21 @@ cat > /home/ec2-user/caddy/Caddyfile << EOF
 #   - Valid for: 90 days
 #   - Renewal: Automatic monthly via GitHub Actions workflow
 
-\${CADDY_DOMAIN} {
+${CADDY_DOMAIN} {
     # Load the pre-issued wildcard certificate
     # The wildcard *.testingfantasy.com covers all instances and workshops
     tls /home/ec2-user/caddy/certs/wildcard.crt /home/ec2-user/caddy/certs/wildcard.key
 
-    # Proxy all traffic to Dify (runs on localhost:80)
-    reverse_proxy localhost:80
+    # Proxy all traffic to Dify (nginx remapped to localhost:8080 via docker-compose.override.yml)
+    reverse_proxy localhost:8080
 }
 EOF
 chown -R ec2-user:ec2-user /home/ec2-user/caddy
 log "✓ Caddyfile created with pre-issued certificate for domain: ${CADDY_DOMAIN}"
 
 # Create systemd service for Caddy
+# CAP_NET_BIND_SERVICE allows ec2-user to bind to privileged ports (80, 443)
+# without running the entire process as root.
 cat > /etc/systemd/system/caddy.service << 'EOF'
 [Unit]
 Description=Caddy web server
@@ -289,6 +301,9 @@ WorkingDirectory=/home/ec2-user/caddy
 ExecStart=/usr/local/bin/caddy run --config /home/ec2-user/caddy/Caddyfile
 Restart=always
 RestartSec=5
+# Grant permission to bind to ports 80 and 443 without root
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
 
 [Install]
 WantedBy=multi-user.target
