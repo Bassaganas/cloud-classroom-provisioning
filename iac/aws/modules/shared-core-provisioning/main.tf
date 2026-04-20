@@ -117,11 +117,6 @@ resource "aws_dynamodb_table" "provisioning_status" {
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "request_id"
 
-  key_schema {
-    attribute_name = "request_id"
-    key_type       = "HASH"
-  }
-
   attribute {
     name = "request_id"
     type = "S"

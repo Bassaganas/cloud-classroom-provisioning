@@ -30,6 +30,12 @@ variable "common_instance_manager_password_secret_arn" {
   type        = string
 }
 
+variable "common_instance_manager_url" {
+  description = "URL of the common instance manager Lambda function for provisioning students"
+  type        = string
+  default     = ""
+}
+
 # Workshop-specific variables
 variable "environment" {
   description = "The environment name"
@@ -157,6 +163,18 @@ variable "instance_manager_timeout" {
   default     = 300
 }
 
+variable "fellowship_student_assignment_memory_size" {
+  description = "Memory size (MB) for fellowship_student_assignment Lambda"
+  type        = number
+  default     = 512
+}
+
+variable "fellowship_student_assignment_timeout" {
+  description = "Timeout (seconds) for fellowship_student_assignment Lambda"
+  type        = number
+  default     = 120
+}
+
 # CloudFront domain configuration
 variable "user_management_domain" {
   description = "Domain name for user management CloudFront distribution"
@@ -171,6 +189,49 @@ variable "dify_jira_domain" {
 variable "leaderboard_api_domain" {
   description = "Custom domain name for the leaderboard API Gateway"
   type        = string
+}
+
+variable "fellowship_student_assignment_domain" {
+  description = "Domain name for fellowship student assignment CloudFront distribution (e.g., fellowship.testingfantasy.com)"
+  type        = string
+  default     = ""
+}
+
+variable "fellowship_sut_domain" {
+  description = "Domain for fellowship SUT instances"
+  type        = string
+  default     = "sut.fellowship.testingfantasy.com"
+}
+
+variable "fellowship_jenkins_domain" {
+  description = "Domain for fellowship Jenkins"
+  type        = string
+  default     = "jenkins.fellowship.testingfantasy.com"
+}
+
+variable "fellowship_gitea_domain" {
+  description = "Domain for fellowship Gitea repository server"
+  type        = string
+  default     = "gitea.fellowship.testingfantasy.com"
+}
+
+variable "fellowship_gitea_api_domain" {
+  description = "Domain for fellowship Gitea API"
+  type        = string
+  default     = "gitea.fellowship.testingfantasy.com"
+}
+
+variable "fellowship_gitea_org" {
+  description = "Gitea organization name for fellowship"
+  type        = string
+  default     = "fellowship-org"
+}
+
+variable "destroy_key" {
+  description = "Secret key for destroying student resources"
+  type        = string
+  sensitive   = true
+  default     = "default_destroy_key"
 }
 
 variable "wait_for_certificate_validation" {

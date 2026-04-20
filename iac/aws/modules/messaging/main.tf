@@ -172,16 +172,6 @@ resource "aws_dynamodb_table" "leaderboard" {
   hash_key     = "pk"
   range_key    = "sk"
 
-  key_schema {
-    attribute_name = "pk"
-    key_type       = "HASH"
-  }
-
-  key_schema {
-    attribute_name = "sk"
-    key_type       = "RANGE"
-  }
-
   attribute {
     name = "pk"
     type = "S"

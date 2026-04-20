@@ -54,6 +54,24 @@ variable "enable_dify_jira_api" {
   default     = true
 }
 
+variable "enable_fellowship_student_assignment" {
+  description = "Whether to create the Fellowship Student Assignment Lambda (for student credential/URL provisioning)"
+  type        = bool
+  default     = true
+}
+
+variable "fellowship_student_assignment_memory_size" {
+  description = "Memory size (MB) for fellowship_student_assignment Lambda"
+  type        = number
+  default     = 512
+}
+
+variable "fellowship_student_assignment_timeout" {
+  description = "Timeout (seconds) for fellowship_student_assignment Lambda"
+  type        = number
+  default     = 120
+}
+
 variable "region" {
   description = "The AWS region to deploy to"
   type        = string
@@ -68,6 +86,55 @@ variable "status_lambda_url" {
   description = "URL of the status Lambda function (for user_management dependency)"
   type        = string
   default     = ""
+}
+
+variable "instance_manager_url" {
+  description = "URL of the instance_manager Lambda function (for other Lambdas like fellowship_student_assignment)"
+  type        = string
+  default     = ""
+}
+
+variable "destroy_key" {
+  description = "Secret key for destroying student resources"
+  type        = string
+  sensitive   = true
+  default     = "default_destroy_key"
+}
+
+variable "skip_iam_user_creation" {
+  description = "Skip IAM user creation to avoid rate limiting"
+  type        = bool
+  default     = false
+}
+
+variable "fellowship_sut_domain" {
+  description = "Domain for fellowship SUT instances"
+  type        = string
+  default     = "sut.fellowship.testingfantasy.com"
+}
+
+variable "fellowship_jenkins_domain" {
+  description = "Domain for fellowship Jenkins"
+  type        = string
+  default     = "jenkins.fellowship.testingfantasy.com"
+}
+
+variable "fellowship_gitea_domain" {
+  description = "Domain for fellowship Gitea repository server"
+  type        = string
+  default     = "gitea.fellowship.testingfantasy.com"
+}
+
+variable "fellowship_gitea_api_domain" {
+  description = "Domain for fellowship Gitea API"
+  type        = string
+  default     = "gitea.fellowship.testingfantasy.com"
+}
+
+variable "fellowship_gitea_org" {
+  description = "Gitea organization name for fellowship"
+  type        = string
+  default     = "fellowship-org"
 }
 
 variable "subnet_id" {
@@ -136,12 +203,6 @@ variable "instance_manager_https_cert_arn" {
   description = "ACM certificate ARN for per-instance HTTPS (ALB)"
   type        = string
   default     = ""
-}
-
-variable "skip_iam_user_creation" {
-  description = "Skip IAM user creation to avoid rate limiting (useful for conference scenarios). When true, users will only get EC2 instances, not AWS console access."
-  type        = bool
-  default     = true
 }
 
 # Lambda Scaling and Performance Variables

@@ -562,6 +562,78 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
     echo "✓ Verified: shared_core_provisioner.py packaged correctly"
     rm -rf "$TEMP_DIR9"
 
+    # Package fellowship student assignment Lambda function
+    echo "Packaging AWS Lambda fellowship student assignment function..."
+    
+    # Delete existing zip file to ensure clean packaging
+    PACKAGE_PATH="$PROJECT_ROOT/functions/packages/fellowship_student_assignment.zip"
+    if [ -f "$PACKAGE_PATH" ]; then
+        echo "Deleting existing zip file to ensure clean packaging..."
+        rm -f "$PACKAGE_PATH"
+    fi
+    
+    TEMP_DIR10=$(mktemp -d)
+    cp "$PROJECT_ROOT/functions/aws/fellowship/fellowship_student_assignment.py" "$TEMP_DIR10/"
+    
+    # Copy the common module directory (required for fellowship_student_assignment imports)
+    cp -r "$PROJECT_ROOT/functions/common" "$TEMP_DIR10/"
+    
+    # Verify temp directory contains the main file before installing dependencies
+    if [ ! -f "$TEMP_DIR10/fellowship_student_assignment.py" ]; then
+        echo "ERROR: fellowship_student_assignment.py not found in temp directory"
+        rm -rf "$TEMP_DIR10"
+        exit 1
+    fi
+    
+    # Verify common module was copied
+    if [ ! -d "$TEMP_DIR10/common" ]; then
+        echo "ERROR: common module directory not found in temp directory"
+        rm -rf "$TEMP_DIR10"
+        exit 1
+    fi
+    
+    $PIP_CMD install -q -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR10/"
+    
+    # Verify no unwanted Lambda function files in root directory
+    # (allow common/* subdirectory, fellowship_student_assignment.py is our main function)
+    UNWANTED_LAMBDA_FILES=$(find "$TEMP_DIR10" -maxdepth 1 -type f \( -name "classroom_*.py" -o -name "testus_patronus_*.py" -o -name "dify_jira_*.py" \) ! -name "fellowship_student_assignment.py")
+    if [ -n "$UNWANTED_LAMBDA_FILES" ]; then
+        echo "ERROR: Unwanted Lambda function files found in root directory:"
+        echo "$UNWANTED_LAMBDA_FILES"
+        echo "Expected only: fellowship_student_assignment.py with common/ subdirectory"
+        rm -rf "$TEMP_DIR10"
+        exit 1
+    fi
+    
+    cd "$TEMP_DIR10"
+    zip -r9q "$PACKAGE_PATH" .
+    cd "$PROJECT_ROOT"
+    
+    # Verify package contents
+    PACKAGE_PATH="$PROJECT_ROOT/functions/packages/fellowship_student_assignment.zip"
+    if ! unzip -l "$PACKAGE_PATH" | grep -q "fellowship_student_assignment.py"; then
+        echo "ERROR: Package does not contain fellowship_student_assignment.py"
+        rm -rf "$TEMP_DIR10"
+        exit 1
+    fi
+    
+    # Verify common module is in the package
+    if ! unzip -l "$PACKAGE_PATH" | grep -q "common/classroom_instance_manager.py"; then
+        echo "ERROR: Package does not contain common/classroom_instance_manager.py"
+        rm -rf "$TEMP_DIR10"
+        exit 1
+    fi
+    
+    # Verify lambda_handler function exists in the package
+    if ! unzip -p "$PACKAGE_PATH" fellowship_student_assignment.py | grep -q "def lambda_handler"; then
+        echo "ERROR: lambda_handler function not found in packaged file"
+        rm -rf "$TEMP_DIR10"
+        exit 1
+    fi
+    echo "✓ Verified: fellowship_student_assignment.py packaged with common/ module"
+    
+    rm -rf "$TEMP_DIR10"
+
 else
     # Azure Function packaging
     echo "Packaging Azure Function..."
