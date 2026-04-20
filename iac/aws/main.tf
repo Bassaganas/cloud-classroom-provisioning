@@ -240,7 +240,9 @@ module "common" {
 # ─────────────────────────────────────────────────────────────────────────────
 
 module "jenkins_agent_ecs" {
-  count = var.manage_shared_core ? 1 : 0
+  # Always-on — not gated by manage_shared_core — so that automated dev CI runs
+  # (manage_shared_core=false) never destroy the ECS cluster while Jenkins agent
+  # tasks are still running. Same rationale as the ECR repository below.
 
   source = "./modules/jenkins-agent-ecs"
 
@@ -255,6 +257,14 @@ module "jenkins_agent_ecs" {
   shared_core_ec2_role_name     = module.common.ec2_iam_role_name
   # ECR repo is managed here (always-on) so it is never destroyed by dev CI runs
   ecr_repository_url = aws_ecr_repository.jenkins_agent.repository_url
+}
+
+# Migrate state: the module was previously count-gated (instance [0]).
+# This moved block lets Terraform update the state file in-place without
+# destroying and recreating the ECS cluster.
+moved {
+  from = module.jenkins_agent_ecs[0]
+  to   = module.jenkins_agent_ecs
 }
 
 # ── ECR repository (always-on — not gated by manage_shared_core) ─────────────
@@ -372,11 +382,11 @@ module "shared_core_config" {
   shared_core_gitea_org_name    = var.shared_core_gitea_org_name
 
   # Jenkins ECS agent pool SSM parameters
-  jenkins_agent_ecs_cluster_arn         = module.jenkins_agent_ecs[0].ecs_cluster_arn
+  jenkins_agent_ecs_cluster_arn         = module.jenkins_agent_ecs.ecs_cluster_arn
   jenkins_agent_ecr_image               = aws_ecr_repository.jenkins_agent.repository_url
-  jenkins_agent_ecs_security_group_id   = module.jenkins_agent_ecs[0].agent_security_group_id
-  jenkins_agent_task_execution_role_arn = module.jenkins_agent_ecs[0].task_execution_role_arn
-  jenkins_agent_task_role_arn           = module.jenkins_agent_ecs[0].task_role_arn
+  jenkins_agent_ecs_security_group_id   = module.jenkins_agent_ecs.agent_security_group_id
+  jenkins_agent_task_execution_role_arn = module.jenkins_agent_ecs.task_execution_role_arn
+  jenkins_agent_task_role_arn           = module.jenkins_agent_ecs.task_role_arn
   jenkins_agent_subnet_id               = module.common.subnet_id
 }
 
