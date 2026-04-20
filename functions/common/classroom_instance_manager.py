@@ -410,6 +410,31 @@ def provision_student_on_shared_core(student_id, workshop_name=None, student_pas
     except Exception as e:
         logger.warning(f"Could not retrieve Gitea domain from SSM: {str(e)}")
 
+    # ── Retrieve SUT bucket from SSM (for exercises artifact download) ──
+    # The SUT bucket is shared across environments and stored at: /classroom/{workshop}/sut-bucket
+    sut_bucket = ''
+    try:
+        param_path = f"/classroom/{workshop}/sut-bucket"
+        sut_response = ssm.get_parameter(
+            Name=param_path,
+            WithDecryption=False
+        )
+        sut_bucket = sut_response['Parameter']['Value']
+        logger.info(f"Retrieved SUT bucket from SSM {param_path}: {sut_bucket}")
+    except Exception as e:
+        logger.warning(f"Could not retrieve SUT bucket from SSM ({param_path}): {str(e)}")
+        # Try environment-scoped parameter path as fallback
+        try:
+            param_fallback = f"/classroom/{workshop}/{env}/sut_bucket_name"
+            sut_response = ssm.get_parameter(
+                Name=param_fallback,
+                WithDecryption=False
+            )
+            sut_bucket = sut_response['Parameter']['Value']
+            logger.info(f"Retrieved SUT bucket from fallback SSM path {param_fallback}: {sut_bucket}")
+        except Exception as e2:
+            logger.warning(f"Could not retrieve SUT bucket from fallback SSM path: {str(e2)}")
+
     environment_vars = {
         'GITEA_ADMIN_USER': credentials.get('gitea_admin_user', 'fellowship'),
         'GITEA_ADMIN_PASSWORD': credentials.get('gitea_admin_password', 'fellowship123'),
@@ -424,6 +449,14 @@ def provision_student_on_shared_core(student_id, workshop_name=None, student_pas
         'SHARED_GITEA_URL': f'https://{gitea_domain}/' if gitea_domain else 'http://localhost:3030',
         'GITEA_INTERNAL_URL': 'http://gitea:3000',  # Docker-internal URL for Jenkins to clone repos
         'DEPLOYED_SUT_URL': deployed_sut_url or '',
+        # ── S3 Exercises configuration ────────────────────────────────────────
+        # Pass S3 bucket and AWS region so provision-student.sh can download
+        # the latest exercises artifact. This allows exercises to stay fresh
+        # without requiring a full SUT rebuild.
+        'SUT_BUCKET': sut_bucket or '',
+        'AWS_REGION': REGION,
+        'WORKSHOP_NAME': workshop,
+        'ENVIRONMENT': env,
     }
 
     result = invoke_ssm_command(
@@ -2920,7 +2953,7 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
                 # in standalone mode it defaults to the local 'lotr-sut' repo.
                 _shared_core = get_shared_core_mode(workshop_name)
                 _gitea_org = 'fellowship-org'
-                _gitea_repo = f"fellowship-sut-{student_name}" if _shared_core else 'lotr-sut'
+                _gitea_repo = f"fellowship-sut-{instance_student_name}" if _shared_core else 'lotr-sut'
 
                 # Inject domain and S3 artifact information into user_data as environment variables
                 # This ensures the domain and artifact are available immediately without needing EC2 metadata service
