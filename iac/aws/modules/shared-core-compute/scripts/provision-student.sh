@@ -63,7 +63,7 @@ JENKINS_COOKIE_JAR="/tmp/jenkins-cookies-$$.txt"
 
 REPO_NAME="fellowship-sut-${STUDENT_ID}"
 
-log()  { echo "[provision] $*"; }
+log()  { echo "[provision] $*" >&2; }
 warn() { echo "[provision] WARNING: $*" >&2; }
 die()  { echo "[provision] ERROR: $*" >&2; exit 1; }
 
