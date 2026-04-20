@@ -41,6 +41,15 @@ JENKINS_ADMIN_PASSWORD="${JENKINS_ADMIN_PASSWORD:-fellowship123}"
 SHARED_JENKINS_URL="${SHARED_JENKINS_URL:-${JENKINS_URL}}"
 SHARED_GITEA_URL="${SHARED_GITEA_URL:-${GITEA_URL}}"
 
+# ── S3 / Exercises configuration ───────────────────────────────────────────────
+# SUT bucket: contains SUT tarball and exercises artifact
+# AWS region: for S3 API calls (defaults to eu-west-1 if not provided)
+SUT_BUCKET="${SUT_BUCKET:-}"
+EXERCISES_ARTIFACT="${EXERCISES_ARTIFACT:-}"
+AWS_REGION="${AWS_REGION:-eu-west-1}"
+WORKSHOP_NAME="${WORKSHOP_NAME:-fellowship}"
+ENVIRONMENT="${ENVIRONMENT:-dev}"
+
 # URL of the student's deployed SUT EC2 instance.
 # Passed by the provisioner so the Jenkins pipeline job is pre-configured
 # and students don't need to set it manually.
@@ -59,6 +68,72 @@ warn() { echo "[provision] WARNING: $*" >&2; }
 die()  { echo "[provision] ERROR: $*" >&2; exit 1; }
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+get_exercises_from_s3() {
+    # Download latest exercises artifact from S3 and extract to a working directory.
+    # This allows students to get up-to-date exercises without re-provisioning or
+    # rebuilding the SUT instance.
+    #
+    # Returns: path to extracted exercises directory, or empty string if unavailable
+    
+    if [ -z "${SUT_BUCKET}" ]; then
+        warn "SUT_BUCKET not configured — exercises from S3 unavailable"
+        return 0
+    fi
+    
+    local exercises_dir=""
+    local artifact_name="${EXERCISES_ARTIFACT}"
+    
+    # If EXERCISES_ARTIFACT not provided, try to fetch the latest from SSM
+    if [ -z "${artifact_name}" ]; then
+        local ssm_param="/classroom/${WORKSHOP_NAME}/${ENVIRONMENT}/latest_exercises_artifact"
+        artifact_name=$(aws ssm get-parameter \
+            --name "${ssm_param}" \
+            --region "${AWS_REGION}" \
+            --query 'Parameter.Value' \
+            --output text 2>/dev/null || echo "")
+        
+        if [ -z "${artifact_name}" ] || [ "${artifact_name}" = "None" ]; then
+            warn "Could not determine latest exercises artifact from SSM (${ssm_param})"
+            return 0
+        fi
+        log "  Fetched latest exercises artifact from SSM: ${artifact_name}"
+    fi
+    
+    # Download from S3
+    local tmp_exercises_dir tmp_exercise_file
+    tmp_exercises_dir=$(mktemp -d)
+    tmp_exercise_file="${tmp_exercises_dir}/exercises.tar.gz"
+    
+    log "  Downloading exercises from S3: s3://${SUT_BUCKET}/${artifact_name}"
+    if ! aws s3 cp "s3://${SUT_BUCKET}/${artifact_name}" "${tmp_exercise_file}" \
+        --region "${AWS_REGION}" >/dev/null 2>&1; then
+        warn "Failed to download exercises from S3 (${artifact_name})"
+        rm -rf "${tmp_exercises_dir}"
+        return 0
+    fi
+    
+    # Extract tarball
+    if ! tar -xzf "${tmp_exercise_file}" -C "${tmp_exercises_dir}" 2>/dev/null; then
+        warn "Failed to extract exercises tarball"
+        rm -rf "${tmp_exercises_dir}"
+        return 0
+    fi
+    
+    log "  ✓ Exercises downloaded and extracted from S3"
+    echo "${tmp_exercises_dir}"
+}
+
+escape_xml() {
+    # Escape XML special characters to prevent injection in XML payloads
+    local string="$1"
+    string="${string//&/&amp;}"
+    string="${string//</&lt;}"
+    string="${string//>/&gt;}"
+    string="${string//\"/&quot;}"
+    string="${string//\'/&apos;}"
+    echo "$string"
+}
 
 gitea_api() {
     local method="$1"; local path="$2"; local data="${3:-}"
@@ -414,6 +489,13 @@ PYEOF
 seed_sut_content() {
     log "Step 2.5: Seeding SUT content into '${REPO_NAME}'..."
 
+    # Download exercises from S3 if available (primary source for fresh content)
+    local s3_exercises_dir=""
+    s3_exercises_dir=$(get_exercises_from_s3)
+    if [ -z "${s3_exercises_dir}" ]; then
+        log "  No exercises available from S3 (optional)"
+    fi
+
     # Locate the deployed app directory that contains sut/ and tests/.
     # The deploy-shared-core workflow clones the app into /home/ec2-user/fellowship-sut.
     local app_dir=""
@@ -442,7 +524,7 @@ seed_sut_content() {
     local tmp_dir
     tmp_dir=$(mktemp -d)
     # shellcheck disable=SC2064
-    trap "rm -rf '${tmp_dir}'" RETURN
+    trap "rm -rf '${tmp_dir}' '${s3_exercises_dir}'" RETURN
 
     if ! git clone --quiet "${auth_url}" "${tmp_dir}/repo" 2>/dev/null; then
         warn "git clone of '${REPO_NAME}' failed — falling back to stub Jenkinsfile"
@@ -466,20 +548,28 @@ seed_sut_content() {
         fi
     done
 
-    # Include any exercises docs if present.
-    # First check exercises/ directly in the app dir (preferred — committed to repo),
-    # then fall back to palantir-jenkins-ai/docs/exercises for legacy layouts.
-    for exercises_dir in \
-        "${app_dir}/exercises" \
-        "${app_dir}/palantir-jenkins-ai/docs/exercises" \
-        "$(dirname "${app_dir}")/palantir-jenkins-ai/docs/exercises"; do
-        if [ -d "${exercises_dir}" ]; then
-            mkdir -p exercises
-            cp -a "${exercises_dir}/." exercises/
-            log "  ✓ Included exercises"
-            break
-        fi
-    done
+    # Include exercises with priority: S3 (fresh) > local app directory (fallback)
+    # Priority 1: Exercises from S3 (freshest, always up-to-date)
+    if [ -n "${s3_exercises_dir}" ] && [ -d "${s3_exercises_dir}/exercises" ]; then
+        mkdir -p exercises
+        cp -a "${s3_exercises_dir}/exercises/." exercises/
+        items_copied=$((items_copied + 1))
+        log "  ✓ Included exercises/ (from S3)"
+    # Priority 2: Fall back to exercises from local app directory (offline/legacy deployments)
+    else
+        for exercises_dir in \
+            "${app_dir}/exercises" \
+            "${app_dir}/palantir-jenkins-ai/docs/exercises" \
+            "$(dirname "${app_dir}")/palantir-jenkins-ai/docs/exercises"; do
+            if [ -d "${exercises_dir}" ]; then
+                mkdir -p exercises
+                cp -a "${exercises_dir}/." exercises/
+                items_copied=$((items_copied + 1))
+                log "  ✓ Included exercises/ (from local app directory)"
+                break
+            fi
+        done
+    fi
 
     if [ "${items_copied}" -eq 0 ]; then
         warn "No SUT content copied — falling back to stub Jenkinsfile"
@@ -492,7 +582,7 @@ seed_sut_content() {
     if git diff --cached --quiet; then
         log "  ✓ SUT content already present in '${REPO_NAME}' (nothing to commit)"
     else
-        git commit -q -m "feat: seed Fellowship SUT (sut/, tests/, scripts/, Jenkinsfile) for ${STUDENT_ID}"
+        git commit -q -m "feat: seed Fellowship SUT (sut/, tests/, scripts/, Jenkinsfile, exercises) for ${STUDENT_ID}"
         if git push -q origin main; then
             log "  ✓ SUT content pushed to '${REPO_NAME}'"
         else
@@ -619,6 +709,18 @@ XML
 create_jenkins_pipeline() {
     log "Step 5: Creating Jenkins pipeline job for student '${STUDENT_ID}'..."
     local clone_url="${GITEA_URL}/${GITEA_ORG_NAME}/${REPO_NAME}.git"
+    
+    # Escape the DEPLOYED_SUT_URL for safe XML embedding
+    local escaped_sut_url
+    escaped_sut_url=$(escape_xml "${DEPLOYED_SUT_URL}")
+    
+    # Log what value we're injecting
+    if [ -z "${DEPLOYED_SUT_URL}" ]; then
+        log "  WARNING: DEPLOYED_SUT_URL is empty — job will have no default SUT endpoint"
+    else
+        log "  INFO: Setting DEPLOYED_SUT_URL default to: ${DEPLOYED_SUT_URL}"
+    fi
+    
     local job_xml
     job_xml=$(cat <<XML
 <?xml version='1.1' encoding='UTF-8'?>
@@ -631,7 +733,7 @@ create_jenkins_pipeline() {
         <hudson.model.StringParameterDefinition>
           <name>DEPLOYED_SUT_URL</name>
           <description>Base URL of this student's deployed SUT instance. Pre-configured at provisioning time; can be overridden per build.</description>
-          <defaultValue>${DEPLOYED_SUT_URL}</defaultValue>
+          <defaultValue>${escaped_sut_url}</defaultValue>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
       </parameterDefinitions>
@@ -704,6 +806,9 @@ XML
 
             if [ "$update_status" = "200" ] || [ "$update_status" = "302" ]; then
                 log "  ✓ Pipeline job updated with StringParameterDefinition for DEPLOYED_SUT_URL"
+                if [ -n "${DEPLOYED_SUT_URL}" ]; then
+                    log "  ✓ DEPLOYED_SUT_URL default value: ${DEPLOYED_SUT_URL}"
+                fi
             else
                 warn "  Pipeline job update returned HTTP ${update_status}"
             fi
@@ -769,6 +874,27 @@ validate_jenkins_job_parameters() {
     
     if echo "$config_xml" | grep -q "DEPLOYED_SUT_URL"; then
         log "  ✓ Pipeline job has DEPLOYED_SUT_URL parameter"
+        
+        # Extract and verify the default value
+        if [ -n "${DEPLOYED_SUT_URL}" ]; then
+            local escaped_expected
+            escaped_expected=$(escape_xml "${DEPLOYED_SUT_URL}")
+            if echo "$config_xml" | grep -q "<defaultValue>.*${escaped_expected}.*</defaultValue>"; then
+                log "  ✓ DEPLOYED_SUT_URL default value matches: ${DEPLOYED_SUT_URL}"
+            else
+                # Try checking without escaping (in case the check is fragile)
+                local raw_url_in_config
+                raw_url_in_config=$(echo "$config_xml" | grep -o '<defaultValue>[^<]*</defaultValue>' | head -1 | sed 's/<[^>]*>//g')
+                if [ -n "$raw_url_in_config" ]; then
+                    log "  ⚠ DEPLOYED_SUT_URL default value is: $raw_url_in_config"
+                    log "    (expected: ${DEPLOYED_SUT_URL})"
+                else
+                    log "  ⚠ DEPLOYED_SUT_URL parameter has no default value set"
+                fi
+            fi
+        else
+            log "  ℹ DEPLOYED_SUT_URL parameter exists but no default value was set (DEPLOYED_SUT_URL env var is empty)"
+        fi
         return 0
     else
         warn "Pipeline job missing DEPLOYED_SUT_URL parameter"
