@@ -16,10 +16,10 @@ locals {
 
 # DynamoDB table for instance assignments
 resource "aws_dynamodb_table" "instance_assignments" {
-  name             = "dynamodb-instance-assignments-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
-  billing_mode     = "PAY_PER_REQUEST"
-  hash_key         = "instance_id"
-  range_key        = null
+  name         = "dynamodb-instance-assignments-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
+  billing_mode = "PAY_PER_REQUEST"
+  hash_key     = "instance_id"
+  range_key    = null
 
   key_schema {
     attribute_name = "instance_id"
