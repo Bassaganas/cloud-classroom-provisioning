@@ -110,6 +110,14 @@ module "lambda" {
   region                                = var.region
   lambda_role_arn                       = module.iam_lambda.lambda_role_arn
   status_lambda_url                     = "" # Module will use its own status URL internally
+  instance_manager_url                  = var.common_instance_manager_url
+  destroy_key                           = var.destroy_key
+  skip_iam_user_creation                = var.skip_iam_user_creation
+  fellowship_sut_domain                 = var.fellowship_sut_domain
+  fellowship_jenkins_domain             = var.fellowship_jenkins_domain
+  fellowship_gitea_domain               = var.fellowship_gitea_domain
+  fellowship_gitea_api_domain           = var.fellowship_gitea_api_domain
+  fellowship_gitea_org                  = var.fellowship_gitea_org
   subnet_id                             = var.common_subnet_id
   security_group_ids                    = var.common_security_group_ids
   iam_instance_profile_name             = var.common_ec2_iam_instance_profile_name
@@ -118,7 +126,6 @@ module "lambda" {
   admin_cleanup_schedule                = var.admin_cleanup_schedule
   functions_path                        = "../../../../functions/packages"
   instance_manager_password_secret_name = var.common_instance_manager_password_secret_name
-  skip_iam_user_creation                = var.skip_iam_user_creation
 
   enable_instance_manager   = false
   enable_stop_old_instances = false
@@ -131,6 +138,11 @@ module "lambda" {
   user_management_reserved_concurrency    = var.user_management_reserved_concurrency
   instance_manager_memory_size            = var.instance_manager_memory_size
   instance_manager_timeout                = var.instance_manager_timeout
+
+  # Fellowship Student Assignment Lambda configuration
+  enable_fellowship_student_assignment      = var.fellowship_student_assignment_domain != ""
+  fellowship_student_assignment_memory_size = var.fellowship_student_assignment_memory_size
+  fellowship_student_assignment_timeout     = var.fellowship_student_assignment_timeout
 }
 
 # Security Group Rules - Optional additional ports (e.g., Jenkins, MailHog)
@@ -182,6 +194,25 @@ module "cloudfront_dify_jira" {
   wait_for_certificate_validation = var.wait_for_certificate_validation
   # Disable CloudFront logging to avoid conflicts with existing resources
   # Logging is optional and only used for debugging
+  enable_cloudwatch_logging = false
+}
+
+# CloudFront Module - Custom Domain and CDN for Fellowship Student Assignment
+module "cloudfront_fellowship_student_assignment" {
+  count  = var.fellowship_student_assignment_domain != "" ? 1 : 0
+  source = "../cloudfront"
+
+  providers = {
+    aws.us_east_1 = aws.us_east_1
+  }
+
+  environment                     = var.environment
+  owner                           = var.owner
+  workshop_name                   = var.workshop_name
+  domain_name                     = var.fellowship_student_assignment_domain
+  lambda_function_url             = module.lambda.fellowship_student_assignment_url
+  wait_for_certificate_validation = var.wait_for_certificate_validation
+  # Disable CloudFront logging to avoid conflicts with existing resources
   enable_cloudwatch_logging = false
 }
 

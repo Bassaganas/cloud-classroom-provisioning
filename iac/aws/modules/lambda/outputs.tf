@@ -48,6 +48,16 @@ output "dify_jira_api_url" {
   value       = try(aws_lambda_function_url.dify_jira_api_url[0].function_url, null)
 }
 
+output "fellowship_student_assignment_function_arn" {
+  description = "ARN of the fellowship student assignment Lambda function"
+  value       = try(aws_lambda_function.fellowship_student_assignment[0].arn, null)
+}
+
+output "fellowship_student_assignment_url" {
+  description = "URL of the fellowship student assignment Lambda function"
+  value       = try(aws_lambda_function_url.fellowship_student_assignment_url[0].function_url, null)
+}
+
 
 
 

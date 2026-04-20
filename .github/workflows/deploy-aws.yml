@@ -162,9 +162,9 @@ jobs:
           # Automated dev CI must never modify the production shared-core host.
           # The shared-core group (EC2, ECS agent cluster, IAM OIDC role, Secrets Manager,
           # SSM config params) is only managed via workflow_dispatch (deploy_manual).
-          TF_VAR_manage_shared_core: 'true'
-          # Enable verbose Terraform logging
-          TF_LOG: DEBUG
+          TF_VAR_manage_shared_core: 'false'
+          # Show Terraform warnings and errors only (not debug noise)
+          TF_LOG: WARN
         run: |
           set -euo pipefail
           
@@ -271,8 +271,8 @@ jobs:
           # manage_shared_core defaults to true in terraform.tfvars; override to false
           # if this manual run should skip shared-core (e.g. workshop-only deploys).
           TF_VAR_manage_shared_core: ${{ vars.MANAGE_SHARED_CORE || 'true' }}
-          # Enable verbose Terraform logging for debugging
-          TF_LOG: DEBUG
+          # Show Terraform warnings and errors only (not debug noise)
+          TF_LOG: WARN
         run: |
           set -euo pipefail
           
@@ -501,8 +501,8 @@ jobs:
           TF_VAR_shared_core_gitea_admin_password: ${{ secrets.SHARED_CORE_GITEA_ADMIN_PASSWORD }}
           TF_VAR_shared_core_key_name: shared-core-deploy
           TF_VAR_manage_shared_core: 'true'
-          # Enable verbose Terraform logging for debugging
-          TF_LOG: DEBUG
+          # Show Terraform warnings and errors only (not debug noise)
+          TF_LOG: WARN
         run: |
           set -euo pipefail
           

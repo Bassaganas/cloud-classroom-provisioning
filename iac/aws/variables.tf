@@ -368,6 +368,18 @@ variable "fellowship_instance_manager_timeout" {
   default     = 300
 }
 
+variable "fellowship_student_assignment_memory_size" {
+  description = "Fellowship student assignment Lambda memory size"
+  type        = number
+  default     = 512
+}
+
+variable "fellowship_student_assignment_timeout" {
+  description = "Fellowship student assignment Lambda timeout"
+  type        = number
+  default     = 120
+}
+
 variable "fellowship_user_management_domain" {
   description = "User management domain for fellowship"
   type        = string
@@ -384,6 +396,49 @@ variable "fellowship_leaderboard_api_domain" {
   description = "Leaderboard API domain for fellowship"
   type        = string
   default     = "leaderboard-api-fellowship.testingfantasy.com"
+}
+
+variable "fellowship_student_assignment_domain" {
+  description = "Fellowship student assignment Lambda domain (e.g., fellowship.testingfantasy.com)"
+  type        = string
+  default     = "fellowship.testingfantasy.com"
+}
+
+variable "fellowship_sut_domain" {
+  description = "Domain for fellowship SUT instances"
+  type        = string
+  default     = "sut.fellowship.testingfantasy.com"
+}
+
+variable "fellowship_jenkins_domain" {
+  description = "Domain for fellowship Jenkins"
+  type        = string
+  default     = "jenkins.fellowship.testingfantasy.com"
+}
+
+variable "fellowship_gitea_domain" {
+  description = "Domain for fellowship Gitea repository server"
+  type        = string
+  default     = "gitea.fellowship.testingfantasy.com"
+}
+
+variable "fellowship_gitea_api_domain" {
+  description = "Domain for fellowship Gitea API"
+  type        = string
+  default     = "gitea.fellowship.testingfantasy.com"
+}
+
+variable "fellowship_gitea_org" {
+  description = "Gitea organization name for fellowship"
+  type        = string
+  default     = "fellowship-org"
+}
+
+variable "fellowship_destroy_key" {
+  description = "Secret key for destroying fellowship student resources"
+  type        = string
+  sensitive   = true
+  default     = "default_destroy_key"
 }
 
 variable "fellowship_wait_for_certificate_validation" {
