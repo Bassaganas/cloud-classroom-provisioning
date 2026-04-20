@@ -163,7 +163,11 @@ jobs:
           # The shared-core group (EC2, ECS agent cluster, IAM OIDC role, Secrets Manager,
           # SSM config params) is only managed via workflow_dispatch (deploy_manual).
           TF_VAR_manage_shared_core: 'true'
+          # Enable verbose Terraform logging
+          TF_LOG: DEBUG
         run: |
+          set -euo pipefail
+          
           SKIP_PKG_FLAG=""
           if [ "${{ steps.lambda-cache.outputs.cache-hit }}" = "true" ]; then
             echo "Lambda packages restored from cache – skipping repackaging"
@@ -176,7 +180,10 @@ jobs:
             --region "${AWS_REGION}" \
             --environment dev \
             --workshop "$WORKSHOP" \
-            $SKIP_PKG_FLAG
+            $SKIP_PKG_FLAG || {
+            echo "::error::Deployment setup failed. Check logs above for Terraform errors."
+            exit 1
+          }
           
           # Extract Lambda Function URL from Terraform outputs
           cd iac/aws
@@ -264,7 +271,11 @@ jobs:
           # manage_shared_core defaults to true in terraform.tfvars; override to false
           # if this manual run should skip shared-core (e.g. workshop-only deploys).
           TF_VAR_manage_shared_core: ${{ vars.MANAGE_SHARED_CORE || 'true' }}
+          # Enable verbose Terraform logging for debugging
+          TF_LOG: DEBUG
         run: |
+          set -euo pipefail
+          
           EXTRA_FLAGS=""
           if [ "${{ inputs.action }}" = "destroy" ]; then
             EXTRA_FLAGS="--destroy"
@@ -280,7 +291,10 @@ jobs:
             --region "${AWS_REGION}" \
             --environment "${{ inputs.environment }}" \
             --workshop "${{ inputs.workshop }}" \
-            $EXTRA_FLAGS
+            $EXTRA_FLAGS || {
+            echo "::error::Deployment action failed. Check logs above for Terraform errors."
+            exit 1
+          }
 
       - name: Check shared-core health (post-Terraform)
         if: inputs.action != 'destroy'
@@ -487,7 +501,11 @@ jobs:
           TF_VAR_shared_core_gitea_admin_password: ${{ secrets.SHARED_CORE_GITEA_ADMIN_PASSWORD }}
           TF_VAR_shared_core_key_name: shared-core-deploy
           TF_VAR_manage_shared_core: 'true'
+          # Enable verbose Terraform logging for debugging
+          TF_LOG: DEBUG
         run: |
+          set -euo pipefail
+          
           SKIP_PKG_FLAG=""
           if [ "${{ steps.lambda-cache.outputs.cache-hit }}" = "true" ]; then
             echo "Lambda packages restored from cache – skipping repackaging"
@@ -500,4 +518,7 @@ jobs:
             --region "${AWS_REGION}" \
             --environment prod \
             --workshop "$WORKSHOP" \
-            $SKIP_PKG_FLAG
+            $SKIP_PKG_FLAG || {
+            echo "::error::Production deployment failed. Check logs above for Terraform errors."
+            exit 1
+          }

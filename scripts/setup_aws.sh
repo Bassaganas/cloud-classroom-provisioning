@@ -777,7 +777,7 @@ else
   if [ -n "$TARGET_FLAGS" ]; then
     terraform apply -auto-approve $TARGET_FLAGS
   else
-  terraform apply -auto-approve
+    terraform apply -auto-approve
   fi
     
     # Upload workshop setup scripts to S3 (for fellowship and/or testus_patronus)
