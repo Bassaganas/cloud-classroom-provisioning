@@ -16,9 +16,15 @@ locals {
 
 # DynamoDB table for instance assignments
 resource "aws_dynamodb_table" "instance_assignments" {
-  name         = "dynamodb-instance-assignments-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
-  billing_mode = "PAY_PER_REQUEST"
-  hash_key     = "instance_id"
+  name             = "dynamodb-instance-assignments-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
+  billing_mode     = "PAY_PER_REQUEST"
+  hash_key         = "instance_id"
+  range_key        = null
+
+  key_schema {
+    attribute_name = "instance_id"
+    key_type       = "HASH"
+  }
 
   attribute {
     name = "instance_id"
@@ -34,6 +40,10 @@ resource "aws_dynamodb_table" "instance_assignments" {
     name            = "student_name-index"
     hash_key        = "student_name"
     projection_type = "ALL"
+    key_schema {
+      attribute_name = "student_name"
+      key_type       = "HASH"
+    }
   }
 
   tags = {
@@ -161,6 +171,11 @@ resource "aws_dynamodb_table" "tutorial_sessions" {
   billing_mode = "PAY_PER_REQUEST"
   hash_key     = "session_id"
 
+  key_schema {
+    attribute_name = "session_id"
+    key_type       = "HASH"
+  }
+
   attribute {
     name = "session_id"
     type = "S"
@@ -175,6 +190,10 @@ resource "aws_dynamodb_table" "tutorial_sessions" {
     name            = "workshop_name-index"
     hash_key        = "workshop_name"
     projection_type = "ALL"
+    key_schema {
+      attribute_name = "workshop_name"
+      key_type       = "HASH"
+    }
   }
 
   tags = {
