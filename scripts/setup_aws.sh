@@ -670,7 +670,7 @@ terraform init -reconfigure
 # that are managed outside of Terraform or cannot be deleted.
 # ============================================================================
 if [ "${TF_VAR_manage_shared_core:-true}" = "true" ]; then
-  echo "Checking for existing shared-core resources to import..."
+  echo "Pre-apply: Importing shared-core resources into Terraform state..."
   _SC_PREFIX="/classroom/shared-core/${ENVIRONMENT}"
 
   # Helper: import an SSM parameter into Terraform state if it exists in AWS but not in state
@@ -679,32 +679,78 @@ if [ "${TF_VAR_manage_shared_core:-true}" = "true" ]; then
     local ssm_name="$2"
     if aws ssm get-parameter --name "$ssm_name" --region "$REGION" >/dev/null 2>&1; then
       if ! terraform state show "$tf_addr" >/dev/null 2>&1; then
-        terraform import -allow-missing-config "$tf_addr" "$ssm_name" 2>&1 | grep -v "Resource already exists in state" || true
+        echo "  Importing: $ssm_name → $tf_addr"
+        terraform import -allow-missing-config "$tf_addr" "$ssm_name" >/dev/null 2>&1
+        echo "  ✓ Imported: $ssm_name"
       fi
     fi
   }
 
-  # --- module.shared_core_secrets: Secrets Manager ---
-  # CreateSecret fails with ResourceExistsException when the secret already exists in AWS.
+  # --- CRITICAL: module.shared_core_secrets: Secrets Manager ---
+  # The secret MUST be pre-created in AWS (cannot be created by the deployment script).
+  # This is a mandatory prereq because the secret contains sensitive operational data:
+  # SSH private keys, GitHub tokens, Jenkins/Gitea admin passwords.
+  #
+  # Prerequisites:
+  #   1. Create the secret manually in AWS Secrets Manager with the correct name
+  #   2. Ensure it contains all required fields (see modules/shared-core-secrets/main.tf)
+  #   3. Run this deployment script — it will import the existing secret into Terraform state
+  #   4. Terraform will then manage the secret lifecycle (updates, access, retention, etc.)
+  #
+  # To create the secret manually, see: cloud-classroom-provisioning/MANUAL_SETUP.md
   _SECRET_ID="${_SC_PREFIX}/deploy"
+  echo "  Checking Secrets Manager secret (must be pre-created): $_SECRET_ID"
+  
   if aws secretsmanager describe-secret --secret-id "$_SECRET_ID" --region "$REGION" >/dev/null 2>&1; then
+    echo "  ✓ Secret exists in AWS"
+    
     if terraform state show "module.shared_core_secrets[0].aws_secretsmanager_secret.shared_core_deploy" >/dev/null 2>&1; then
-      echo "✓ Secret already in Terraform state: $_SECRET_ID"
+      echo "  ✓ Secret already in Terraform state"
     else
-      echo "Importing existing secret into Terraform state: $_SECRET_ID"
-      SECRET_ARN=$(aws secretsmanager describe-secret --secret-id "$_SECRET_ID" --region "$REGION" --query 'ARN' --output text 2>/dev/null || echo "")
-      if [ -n "$SECRET_ARN" ]; then
-        terraform import -allow-missing-config "module.shared_core_secrets[0].aws_secretsmanager_secret.shared_core_deploy" "$SECRET_ARN" 2>&1 | grep -v "Resource already exists in state" || true
-        echo "✓ Imported secret: $_SECRET_ID"
+      echo "  Importing secret into Terraform state..."
+      SECRET_ARN=$(aws secretsmanager describe-secret --secret-id "$_SECRET_ID" --region "$REGION" --query 'ARN' --output text)
+      echo "    Secret ARN: $SECRET_ARN"
+      
+      set +e
+      import_output=$(terraform import "module.shared_core_secrets[0].aws_secretsmanager_secret.shared_core_deploy" "$SECRET_ARN" 2>&1)
+      import_exit=$?
+      set -e
+      
+      if [ $import_exit -eq 0 ] || echo "$import_output" | grep -q "Resource already exists in state"; then
+        # Verify the resource is actually in state now — -allow-missing-config used to exit 0 silently
+        if terraform state show "module.shared_core_secrets[0].aws_secretsmanager_secret.shared_core_deploy" >/dev/null 2>&1; then
+          echo "  ✓ Import succeeded and verified in state"
+        else
+          echo "  ✗ Import reported success but resource not found in Terraform state"
+          echo "  Import output: $import_output"
+          exit 1
+        fi
       else
-        echo "⚠ Warning: Could not retrieve ARN for secret $_SECRET_ID. Import may fail."
+        echo "  ✗ Import failed with exit code $import_exit"
+        echo "  Output: $import_output"
+        exit 1
       fi
     fi
+  else
+    echo "  ✗ FATAL: Secret does not exist in AWS"
+    echo ""
+    echo "  The shared-core deploy secret must be created manually in AWS before deployment."
+    echo "  This is intentional—sensitive operational data should not be created by scripts."
+    echo ""
+    echo "  To create the secret, run:"
+    echo "    aws secretsmanager create-secret \\"
+    echo "      --name '${_SECRET_ID}' \\"
+    echo "      --description 'Shared core deployment secret bundle for GitHub Actions' \\"
+    echo "      --secret-string '{\"ssh_private_key\":\"<SSH_KEY>\",\"gh_repo_token\":\"<GH_TOKEN>\",\"jenkins_admin_password\":\"<JENKINS_PW>\",\"gitea_admin_password\":\"<GITEA_PW>\"}' \\"
+    echo "      --region '$REGION'"
+    echo ""
+    echo "  Or see: cloud-classroom-provisioning/MANUAL_SETUP.md for detailed instructions"
+    exit 1
   fi
 
   # --- module.shared_core_config: SSM parameters ---
-  # SSM parameters have overwrite=true so CreateParameter won't fail, but importing
-  # them prevents state drift and avoids spurious diffs on every re-apply.
+  # SSM parameters are created by Terraform, but importing prevents state drift
+  # if they were created outside of Terraform.
   _import_ssm_param "module.shared_core_config[0].aws_ssm_parameter.shared_core_instance_id"               "${_SC_PREFIX}/instance-id"
   _import_ssm_param "module.shared_core_config[0].aws_ssm_parameter.shared_core_ssh_host"                  "${_SC_PREFIX}/ssh-host"
   _import_ssm_param "module.shared_core_config[0].aws_ssm_parameter.shared_core_security_group_id"         "${_SC_PREFIX}/security-group-id"
@@ -734,44 +780,6 @@ export TF_VAR_shared_core_jenkins_admin_password="${TF_VAR_shared_core_jenkins_a
 export TF_VAR_shared_core_gitea_admin_password="${TF_VAR_shared_core_gitea_admin_password:-${_tf_sc_gitea_pw}}"
 # Ensure EC2 key pair name is set if already configured (e.g., from setup_classroom.sh or env var)
 export TF_VAR_shared_core_key_name="${TF_VAR_shared_core_key_name:-}"
-
-# Create shared-core deploy secret in AWS Secrets Manager if TF_VAR_* env vars are set
-# This allows the deploy-shared-core workflow to retrieve the secret without manual setup
-if [ -n "${TF_VAR_shared_core_ssh_private_key:-}" ] && [ -n "${TF_VAR_shared_core_gh_repo_token:-}" ]; then
-  _DEPLOY_SECRET_ID="/classroom/shared-core/${ENVIRONMENT}/deploy"
-  echo "Creating/updating deploy secret: $_DEPLOY_SECRET_ID"
-  
-  # Build the JSON secret from env vars
-  _SECRET_JSON=$(python3 << 'PYSCRIPT'
-import json, os
-secret = {
-  "ssh_private_key": os.environ.get("TF_VAR_shared_core_ssh_private_key", ""),
-  "gh_repo_token": os.environ.get("TF_VAR_shared_core_gh_repo_token", ""),
-  "jenkins_admin_password": os.environ.get("TF_VAR_shared_core_jenkins_admin_password", ""),
-  "gitea_admin_password": os.environ.get("TF_VAR_shared_core_gitea_admin_password", "")
-}
-print(json.dumps(secret))
-PYSCRIPT
-)
-  
-  # Create or update the secret (overwrite=true)
-  if aws secretsmanager put-secret-value \
-    --secret-id "$_DEPLOY_SECRET_ID" \
-    --secret-string "$_SECRET_JSON" \
-    --region "$REGION" >/dev/null 2>&1; then
-    echo "✓ Deploy secret updated: $_DEPLOY_SECRET_ID"
-  else
-    # If secret doesn't exist, create it first
-    if aws secretsmanager create-secret \
-      --name "$_DEPLOY_SECRET_ID" \
-      --secret-string "$_SECRET_JSON" \
-      --region "$REGION" >/dev/null 2>&1; then
-      echo "✓ Deploy secret created: $_DEPLOY_SECRET_ID"
-    else
-      echo "⚠ Warning: Could not create/update deploy secret. deploy-shared-core workflow will fail unless the secret is manually populated."
-    fi
-  fi
-fi
 
 # Determine target flags for partial deployments
 TARGET_FLAGS=""
