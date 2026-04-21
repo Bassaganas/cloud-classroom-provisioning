@@ -103,7 +103,7 @@ run_as_ec2user_docker() {
 # Clone and configure Dify as ec2-user with specific version
 log "Setting up Dify..."
 su - ec2-user -c "git clone https://github.com/langgenius/dify.git ~/dify"
-su - ec2-user -c "cd ~/dify && git checkout 1.9.1"  # Pin to stable version 1.9.1
+su - ec2-user -c "cd ~/dify && git checkout 1.13.3"  # Pin to stable version 1.9.1
 su - ec2-user -c "cp ~/dify/docker/.env.example ~/dify/docker/.env"
 
 # Configure Dify with minimal, documented configuration
