@@ -664,6 +664,35 @@ EOF
 
 terraform init -reconfigure
 
+# ============================================================================
+# Pre-apply: Import existing AWS resources into Terraform state to prevent
+# unnecessary recreation on subsequent applies. This is essential for resources
+# that are managed outside of Terraform or cannot be deleted.
+# ============================================================================
+if [ "${TF_VAR_manage_shared_core:-true}" = "true" ]; then
+  echo "Checking for existing shared-core secrets to import..."
+  _SECRET_ID="/classroom/shared-core/${ENVIRONMENT}/deploy"
+  
+  # Check if secret exists in AWS but not in Terraform state
+  if aws secretsmanager describe-secret --secret-id "$_SECRET_ID" --region "$REGION" >/dev/null 2>&1; then
+    # Try to import the secret into state if not already present
+    # Use -allow-missing-config to handle cases where the module might not be initialized yet
+    if terraform state show "module.shared_core_config[0].aws_secretsmanager_secret.shared_core_deploy" >/dev/null 2>&1; then
+      echo "✓ Secret already in Terraform state: $_SECRET_ID"
+    else
+      echo "Importing existing secret into Terraform state: $_SECRET_ID"
+      # Get the ARN for the import (terraform import requires ARN for secrets manager)
+      SECRET_ARN=$(aws secretsmanager describe-secret --secret-id "$_SECRET_ID" --region "$REGION" --query 'ARN' --output text 2>/dev/null || echo "")
+      if [ -n "$SECRET_ARN" ]; then
+        terraform import -allow-missing-config "module.shared_core_config[0].aws_secretsmanager_secret.shared_core_deploy" "$SECRET_ARN" 2>&1 | grep -v "Resource already exists in state" || true
+        echo "✓ Imported secret: $_SECRET_ID"
+      else
+        echo "⚠ Warning: Could not retrieve ARN for secret $_SECRET_ID. Import may fail."
+      fi
+    fi
+  fi
+fi
+
 # Shared-core deploy secrets must be passed as TF_VAR_* env vars (not in tfvars) because
 # the SSH private key is multi-line and cannot be embedded in a quoted Terraform string.
 # In CI these are set by the workflow; for local re-runs fall back to values preserved

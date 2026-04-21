@@ -124,3 +124,9 @@ variable "shared_core_gitea_domain" {
   type        = string
   default     = ""
 }
+
+variable "sut_bucket_name" {
+  description = "Name of the S3 SUT bucket (from the workshop s3-sut module output); passed to the shared-core-provisioner Lambda as SUT_BUCKET"
+  type        = string
+  default     = ""
+}

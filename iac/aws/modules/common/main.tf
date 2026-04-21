@@ -3,6 +3,12 @@
 
 data "aws_caller_identity" "current" {}
 
+# Read S3 SUT bucket name from SSM when not provided directly (created by the workshop module)
+data "aws_ssm_parameter" "sut_bucket_name" {
+  count = var.sut_bucket_name == "" ? 1 : 0
+  name  = "/classroom/${var.workshop_name}/sut-bucket"
+}
+
 data "aws_route53_zone" "primary" {
   name         = "${var.base_domain}."
   private_zone = false
@@ -153,6 +159,8 @@ module "shared_core_provisioning" {
   owner                            = var.owner
   region                           = var.region
   instance_manager_lambda_role_arn = module.iam_lambda.lambda_role_arn
+  workshop_name                    = var.workshop_name
+  sut_bucket_name                  = var.sut_bucket_name != "" ? var.sut_bucket_name : try(data.aws_ssm_parameter.sut_bucket_name[0].value, "")
 
   depends_on = [module.iam_lambda]
 }

@@ -256,8 +256,8 @@ resource "aws_lambda_function" "provisioner" {
       ENVIRONMENT               = var.environment
       CLASSROOM_REGION          = var.region
       PROVISIONING_STATUS_TABLE = local.table_name
-      # Workshop name stored in SSM at /classroom/shared-core/{env}/instance-id
-      # The Lambda reads credentials and instance ID from SSM at runtime
+      WORKSHOP_NAME             = var.workshop_name
+      SUT_BUCKET                = var.sut_bucket_name
     }
   }
 
