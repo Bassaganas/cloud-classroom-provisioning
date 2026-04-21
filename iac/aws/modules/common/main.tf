@@ -3,12 +3,6 @@
 
 data "aws_caller_identity" "current" {}
 
-# Read S3 SUT bucket name from SSM when not provided directly (created by the workshop module)
-data "aws_ssm_parameter" "sut_bucket_name" {
-  count = var.sut_bucket_name == "" ? 1 : 0
-  name  = "/classroom/${var.workshop_name}/sut-bucket"
-}
-
 data "aws_route53_zone" "primary" {
   name         = "${var.base_domain}."
   private_zone = false
@@ -81,6 +75,16 @@ module "storage" {
   instance_terminate_timeout_minutes      = var.instance_terminate_timeout_minutes
   instance_hard_terminate_timeout_minutes = var.hard_terminate_timeout_minutes
   instance_manager_password               = var.instance_manager_password
+}
+
+# S3 SUT Module - Workshop System Under Test bucket
+module "s3_sut" {
+  source = "../s3-sut"
+
+  environment  = var.environment
+  owner        = var.owner
+  workshop_name = var.workshop_name
+  region       = var.region
 }
 
 # IAM Lambda Module - Lambda Execution Role
@@ -160,7 +164,7 @@ module "shared_core_provisioning" {
   region                           = var.region
   instance_manager_lambda_role_arn = module.iam_lambda.lambda_role_arn
   workshop_name                    = var.workshop_name
-  sut_bucket_name                  = var.sut_bucket_name != "" ? var.sut_bucket_name : try(data.aws_ssm_parameter.sut_bucket_name[0].value, "")
+  sut_bucket_name                  = var.sut_bucket_name != "" ? var.sut_bucket_name : module.s3_sut.bucket_name
 
   depends_on = [module.iam_lambda]
 }
