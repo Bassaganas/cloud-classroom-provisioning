@@ -670,27 +670,59 @@ terraform init -reconfigure
 # that are managed outside of Terraform or cannot be deleted.
 # ============================================================================
 if [ "${TF_VAR_manage_shared_core:-true}" = "true" ]; then
-  echo "Checking for existing shared-core secrets to import..."
-  _SECRET_ID="/classroom/shared-core/${ENVIRONMENT}/deploy"
-  
-  # Check if secret exists in AWS but not in Terraform state
+  echo "Checking for existing shared-core resources to import..."
+  _SC_PREFIX="/classroom/shared-core/${ENVIRONMENT}"
+
+  # Helper: import an SSM parameter into Terraform state if it exists in AWS but not in state
+  _import_ssm_param() {
+    local tf_addr="$1"
+    local ssm_name="$2"
+    if aws ssm get-parameter --name "$ssm_name" --region "$REGION" >/dev/null 2>&1; then
+      if ! terraform state show "$tf_addr" >/dev/null 2>&1; then
+        terraform import -allow-missing-config "$tf_addr" "$ssm_name" 2>&1 | grep -v "Resource already exists in state" || true
+      fi
+    fi
+  }
+
+  # --- module.shared_core_secrets: Secrets Manager ---
+  # CreateSecret fails with ResourceExistsException when the secret already exists in AWS.
+  _SECRET_ID="${_SC_PREFIX}/deploy"
   if aws secretsmanager describe-secret --secret-id "$_SECRET_ID" --region "$REGION" >/dev/null 2>&1; then
-    # Try to import the secret into state if not already present
-    # Use -allow-missing-config to handle cases where the module might not be initialized yet
-    if terraform state show "module.shared_core_config[0].aws_secretsmanager_secret.shared_core_deploy" >/dev/null 2>&1; then
+    if terraform state show "module.shared_core_secrets[0].aws_secretsmanager_secret.shared_core_deploy" >/dev/null 2>&1; then
       echo "✓ Secret already in Terraform state: $_SECRET_ID"
     else
       echo "Importing existing secret into Terraform state: $_SECRET_ID"
-      # Get the ARN for the import (terraform import requires ARN for secrets manager)
       SECRET_ARN=$(aws secretsmanager describe-secret --secret-id "$_SECRET_ID" --region "$REGION" --query 'ARN' --output text 2>/dev/null || echo "")
       if [ -n "$SECRET_ARN" ]; then
-        terraform import -allow-missing-config "module.shared_core_config[0].aws_secretsmanager_secret.shared_core_deploy" "$SECRET_ARN" 2>&1 | grep -v "Resource already exists in state" || true
+        terraform import -allow-missing-config "module.shared_core_secrets[0].aws_secretsmanager_secret.shared_core_deploy" "$SECRET_ARN" 2>&1 | grep -v "Resource already exists in state" || true
         echo "✓ Imported secret: $_SECRET_ID"
       else
         echo "⚠ Warning: Could not retrieve ARN for secret $_SECRET_ID. Import may fail."
       fi
     fi
   fi
+
+  # --- module.shared_core_config: SSM parameters ---
+  # SSM parameters have overwrite=true so CreateParameter won't fail, but importing
+  # them prevents state drift and avoids spurious diffs on every re-apply.
+  _import_ssm_param "module.shared_core_config[0].aws_ssm_parameter.shared_core_instance_id"               "${_SC_PREFIX}/instance-id"
+  _import_ssm_param "module.shared_core_config[0].aws_ssm_parameter.shared_core_ssh_host"                  "${_SC_PREFIX}/ssh-host"
+  _import_ssm_param "module.shared_core_config[0].aws_ssm_parameter.shared_core_security_group_id"         "${_SC_PREFIX}/security-group-id"
+  _import_ssm_param "module.shared_core_config[0].aws_ssm_parameter.shared_core_jenkins_domain[0]"         "${_SC_PREFIX}/jenkins-domain"
+  _import_ssm_param "module.shared_core_config[0].aws_ssm_parameter.shared_core_gitea_domain[0]"           "${_SC_PREFIX}/gitea-domain"
+  _import_ssm_param "module.shared_core_config[0].aws_ssm_parameter.shared_core_hosted_zone_id[0]"         "${_SC_PREFIX}/hosted-zone-id"
+  _import_ssm_param "module.shared_core_config[0].aws_ssm_parameter.shared_core_gitea_admin_user"          "${_SC_PREFIX}/gitea-admin-user"
+  _import_ssm_param "module.shared_core_config[0].aws_ssm_parameter.shared_core_gitea_admin_email"         "${_SC_PREFIX}/gitea-admin-email"
+  _import_ssm_param "module.shared_core_config[0].aws_ssm_parameter.shared_core_gitea_org_name"            "${_SC_PREFIX}/gitea-org-name"
+  _import_ssm_param "module.shared_core_config[0].aws_ssm_parameter.jenkins_agent_ecs_cluster_arn"         "${_SC_PREFIX}/agent/ecs-cluster-arn"
+  _import_ssm_param "module.shared_core_config[0].aws_ssm_parameter.jenkins_agent_ecr_image"               "${_SC_PREFIX}/agent/ecr-agent-image"
+  _import_ssm_param "module.shared_core_config[0].aws_ssm_parameter.jenkins_agent_ecs_security_group_id"   "${_SC_PREFIX}/agent/agent-security-group-id"
+  _import_ssm_param "module.shared_core_config[0].aws_ssm_parameter.jenkins_agent_task_execution_role_arn" "${_SC_PREFIX}/agent/task-execution-role-arn"
+  _import_ssm_param "module.shared_core_config[0].aws_ssm_parameter.jenkins_agent_task_role_arn"           "${_SC_PREFIX}/agent/task-role-arn"
+  _import_ssm_param "module.shared_core_config[0].aws_ssm_parameter.jenkins_agent_subnet_id"               "${_SC_PREFIX}/agent/subnet-id"
+  _import_ssm_param "module.shared_core_config[0].aws_ssm_parameter.jenkins_agent_jnlp_tunnel"             "${_SC_PREFIX}/agent/jnlp-tunnel"
+
+  echo "✓ Pre-apply import checks complete"
 fi
 
 # Shared-core deploy secrets must be passed as TF_VAR_* env vars (not in tfvars) because
