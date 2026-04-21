@@ -17,6 +17,10 @@ resource "aws_secretsmanager_secret" "shared_core_deploy" {
   description             = "Shared core deployment secret bundle for GitHub Actions"
   recovery_window_in_days = 0
 
+  lifecycle {
+    prevent_destroy = true
+  }
+
   tags = {
     Environment = var.shared_core_environment
     Owner       = var.owner
