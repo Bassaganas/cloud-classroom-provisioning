@@ -36,6 +36,11 @@ locals {
   )
   # Convert region to region code (eu-west-1 -> euwest1)
   region_code = replace(var.region, "-", "")
+
+  # Compute the s3-sut bucket name using the same convention as the s3-sut module.
+  # The bucket is created by the workshop module; common derives the name at plan-time
+  # to avoid a circular dependency (workshop depends on common).
+  sut_bucket_name_computed = var.workshop_name == "testus_patronus" ? "s3-testus-patronus-setup-${var.environment}-${local.region_code}" : "s3-fellowship-sut-${var.environment}-${local.region_code}"
 }
 
 # Resource Group for shared/common resources
@@ -75,16 +80,6 @@ module "storage" {
   instance_terminate_timeout_minutes      = var.instance_terminate_timeout_minutes
   instance_hard_terminate_timeout_minutes = var.hard_terminate_timeout_minutes
   instance_manager_password               = var.instance_manager_password
-}
-
-# S3 SUT Module - Workshop System Under Test bucket
-module "s3_sut" {
-  source = "../s3-sut"
-
-  environment   = var.environment
-  owner         = var.owner
-  workshop_name = var.workshop_name
-  region        = var.region
 }
 
 # IAM Lambda Module - Lambda Execution Role
@@ -164,7 +159,7 @@ module "shared_core_provisioning" {
   region                           = var.region
   instance_manager_lambda_role_arn = module.iam_lambda.lambda_role_arn
   workshop_name                    = var.workshop_name
-  sut_bucket_name                  = var.sut_bucket_name != "" ? var.sut_bucket_name : module.s3_sut.bucket_name
+  sut_bucket_name                  = var.sut_bucket_name != "" ? var.sut_bucket_name : local.sut_bucket_name_computed
 
   depends_on = [module.iam_lambda]
 }
