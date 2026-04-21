@@ -442,6 +442,16 @@ def _provision(request_id: str, student_id: str, workshop_name: str, student_pas
         return
 
     credentials = _get_shared_core_credentials()
+
+    # Retrieve SUT bucket from SSM so provision-student.sh can download exercises from S3
+    sut_bucket = ""
+    try:
+        sut_bucket_param = f"/classroom/{workshop_name}/sut-bucket"
+        sut_bucket = ssm_client.get_parameter(Name=sut_bucket_param)["Parameter"]["Value"]
+        logger.info(f"[{request_id}] Retrieved SUT bucket from SSM ({sut_bucket_param}): {sut_bucket}")
+    except Exception as e:
+        logger.warning(f"[{request_id}] Could not retrieve SUT bucket from SSM: {e}")
+
     env_vars = {
         "GITEA_URL": credentials["gitea_url"],
         "JENKINS_URL": credentials["jenkins_url"],
@@ -454,8 +464,14 @@ def _provision(request_id: str, student_id: str, workshop_name: str, student_pas
         "SHARED_GITEA_URL": credentials["gitea_url"],
         "SHARED_JENKINS_URL": credentials["jenkins_url"],
         "DEPLOYED_SUT_URL": deployed_sut_url or "",
+        # S3 exercises configuration — allows provision-student.sh to download
+        # the latest exercises artifact from S3 into the student's Gitea repo
+        "SUT_BUCKET": sut_bucket,
+        "AWS_REGION": REGION,
+        "WORKSHOP_NAME": workshop_name,
+        "ENVIRONMENT": ENVIRONMENT,
     }
-    logger.info(f"[{request_id}] using GITEA_URL={credentials['gitea_url']} JENKINS_URL={credentials['jenkins_url']}")
+    logger.info(f"[{request_id}] using GITEA_URL={credentials['gitea_url']} JENKINS_URL={credentials['jenkins_url']} SUT_BUCKET={sut_bucket}")
 
     result = _invoke_ssm_command(
         instance_id=instance_id,
