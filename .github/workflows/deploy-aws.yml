@@ -151,6 +151,59 @@ jobs:
           aws s3api head-object --bucket "$LAMBDA_ARTIFACT_BUCKET" --key "$LAMBDA_ARTIFACT_KEY" >/dev/null
           echo "✓ Found artifact s3://$LAMBDA_ARTIFACT_BUCKET/$LAMBDA_ARTIFACT_KEY"
 
+      - name: Import Secrets Manager secret into Terraform state
+        # Pre-flight: reconcile state drift before apply so terraform apply never
+        # hits ResourceExistsException on an already-existing secret.
+        env:
+          TF_VAR_shared_core_ssh_private_key: ${{ secrets.SHARED_CORE_SSH_PRIVATE_KEY }}
+          TF_VAR_shared_core_gh_repo_token: ${{ secrets.SHARED_CORE_GH_REPO_TOKEN }}
+          TF_VAR_shared_core_jenkins_admin_password: ${{ secrets.SHARED_CORE_JENKINS_ADMIN_PASSWORD }}
+          TF_VAR_shared_core_gitea_admin_password: ${{ secrets.SHARED_CORE_GITEA_ADMIN_PASSWORD }}
+          TF_VAR_manage_shared_core: 'true'
+        run: |
+          set -euo pipefail
+          REGION="${AWS_REGION}"
+          REGION_CODE=$(echo "$REGION" | tr -d '-')
+          BACKEND_BUCKET="terraform-state-classroom-shared-${REGION_CODE}"
+          BACKEND_TABLE="terraform-locks-classroom-shared"
+          STATE_KEY="classroom/dev/terraform.tfstate"
+          SECRET_NAME="/classroom/shared-core/dev/deploy"
+
+          cd iac/aws
+          terraform init -reconfigure \
+            -backend-config="bucket=${BACKEND_BUCKET}" \
+            -backend-config="key=${STATE_KEY}" \
+            -backend-config="region=${REGION}" \
+            -backend-config="dynamodb_table=${BACKEND_TABLE}" \
+            -backend-config="encrypt=true" \
+            -no-color >/dev/null
+
+          if ! aws secretsmanager describe-secret --secret-id "$SECRET_NAME" \
+               --region "$REGION" >/dev/null 2>&1; then
+            echo "Secret $SECRET_NAME does not exist in AWS — no import needed (will be created)."
+            exit 0
+          fi
+          if terraform state show \
+               "module.shared_core_secrets[0].aws_secretsmanager_secret.shared_core_deploy" \
+               >/dev/null 2>&1; then
+            echo "✓ Secret already in Terraform state — skipping import."
+            exit 0
+          fi
+          SECRET_ARN=$(aws secretsmanager describe-secret \
+            --secret-id "$SECRET_NAME" --region "$REGION" \
+            --query 'ARN' --output text)
+          echo "Importing $SECRET_NAME → $SECRET_ARN"
+          terraform import \
+            "module.shared_core_secrets[0].aws_secretsmanager_secret.shared_core_deploy" \
+            "$SECRET_ARN"
+          if ! terraform state show \
+               "module.shared_core_secrets[0].aws_secretsmanager_secret.shared_core_deploy" \
+               >/dev/null 2>&1; then
+            echo "::error::Import appeared to succeed but resource is still absent from Terraform state."
+            exit 1
+          fi
+          echo "✓ Secret successfully imported into Terraform state."
+
       - name: Deploy dev environment
         id: deploy
         env:
@@ -159,10 +212,12 @@ jobs:
           SKIP_TEMPLATE_PUBLISH: 'true'
           TF_VAR_lambda_artifact_bucket: ${{ vars.LAMBDA_ARTIFACT_BUCKET || '' }}
           TF_VAR_lambda_artifact_key: ${{ vars.LAMBDA_ARTIFACT_KEY || 'palantir/leaderboard_lambda.zip' }}
-          # Automated dev CI must never modify the production shared-core host.
-          # The shared-core group (EC2, ECS agent cluster, IAM OIDC role, Secrets Manager,
-          # SSM config params) is only managed via workflow_dispatch (deploy_manual).
-          TF_VAR_manage_shared_core: 'false'
+          TF_VAR_shared_core_ssh_private_key: ${{ secrets.SHARED_CORE_SSH_PRIVATE_KEY }}
+          TF_VAR_shared_core_gh_repo_token: ${{ secrets.SHARED_CORE_GH_REPO_TOKEN }}
+          TF_VAR_shared_core_jenkins_admin_password: ${{ secrets.SHARED_CORE_JENKINS_ADMIN_PASSWORD }}
+          TF_VAR_shared_core_gitea_admin_password: ${{ secrets.SHARED_CORE_GITEA_ADMIN_PASSWORD }}
+          TF_VAR_shared_core_key_name: shared-core-deploy
+          TF_VAR_manage_shared_core: 'true'
           # Show Terraform warnings and errors only (not debug noise)
           TF_LOG: WARN
         run: |
@@ -256,6 +311,78 @@ jobs:
 
           aws s3api head-object --bucket "$LAMBDA_ARTIFACT_BUCKET" --key "$LAMBDA_ARTIFACT_KEY" >/dev/null
           echo "✓ Found artifact s3://$LAMBDA_ARTIFACT_BUCKET/$LAMBDA_ARTIFACT_KEY"
+
+      - name: Import Secrets Manager secret into Terraform state
+        # Pre-flight: if the deploy secret already exists in AWS but is not tracked
+        # in Terraform state (state drift), importing it now prevents the subsequent
+        # terraform apply from failing with ResourceExistsException.
+        # Only runs when shared-core infra is being managed and action is not destroy.
+        if: ${{ (vars.MANAGE_SHARED_CORE == '' || vars.MANAGE_SHARED_CORE == 'true') && inputs.action != 'destroy' }}
+        env:
+          TF_VAR_shared_core_ssh_private_key: ${{ secrets.SHARED_CORE_SSH_PRIVATE_KEY }}
+          TF_VAR_shared_core_gh_repo_token: ${{ secrets.SHARED_CORE_GH_REPO_TOKEN }}
+          TF_VAR_shared_core_jenkins_admin_password: ${{ secrets.SHARED_CORE_JENKINS_ADMIN_PASSWORD }}
+          TF_VAR_shared_core_gitea_admin_password: ${{ secrets.SHARED_CORE_GITEA_ADMIN_PASSWORD }}
+          TF_VAR_manage_shared_core: ${{ vars.MANAGE_SHARED_CORE || 'true' }}
+        run: |
+          set -euo pipefail
+          ENV="${{ inputs.environment }}"
+          REGION="${AWS_REGION}"
+          REGION_CODE=$(echo "$REGION" | tr -d '-')
+          BACKEND_BUCKET="terraform-state-classroom-shared-${REGION_CODE}"
+          BACKEND_TABLE="terraform-locks-classroom-shared"
+          STATE_KEY="classroom/${ENV}/terraform.tfstate"
+          SECRET_NAME="/classroom/shared-core/${ENV}/deploy"
+
+          cd iac/aws
+
+          # Initialise Terraform pointing at the correct remote backend for this run.
+          # Use -backend-config flags to override the committed backend.tf values so that
+          # the region / environment are always correct regardless of what's committed.
+          echo "Initialising Terraform backend for import pre-flight..."
+          terraform init -reconfigure \
+            -backend-config="bucket=${BACKEND_BUCKET}" \
+            -backend-config="key=${STATE_KEY}" \
+            -backend-config="region=${REGION}" \
+            -backend-config="dynamodb_table=${BACKEND_TABLE}" \
+            -backend-config="encrypt=true" \
+            -no-color >/dev/null
+
+          # Skip if the secret does not yet exist in AWS (fresh deployment).
+          if ! aws secretsmanager describe-secret --secret-id "$SECRET_NAME" \
+               --region "$REGION" >/dev/null 2>&1; then
+            echo "Secret $SECRET_NAME does not exist in AWS — no import needed (will be created)."
+            exit 0
+          fi
+
+          # Skip if the resource is already tracked in state.
+          if terraform state show \
+               "module.shared_core_secrets[0].aws_secretsmanager_secret.shared_core_deploy" \
+               >/dev/null 2>&1; then
+            echo "✓ Secret already in Terraform state — skipping import."
+            exit 0
+          fi
+
+          # Import the pre-existing secret so that terraform apply does not attempt
+          # to create it (which would fail with ResourceExistsException).
+          SECRET_ARN=$(aws secretsmanager describe-secret \
+            --secret-id "$SECRET_NAME" \
+            --region "$REGION" \
+            --query 'ARN' \
+            --output text)
+          echo "Importing $SECRET_NAME → $SECRET_ARN"
+          terraform import \
+            "module.shared_core_secrets[0].aws_secretsmanager_secret.shared_core_deploy" \
+            "$SECRET_ARN"
+
+          # Verify the import actually landed in state.
+          if ! terraform state show \
+               "module.shared_core_secrets[0].aws_secretsmanager_secret.shared_core_deploy" \
+               >/dev/null 2>&1; then
+            echo "::error::Import appeared to succeed but resource is still absent from Terraform state."
+            exit 1
+          fi
+          echo "✓ Secret successfully imported into Terraform state."
 
       - name: Run deployment action
         env:
@@ -487,6 +614,59 @@ jobs:
 
           aws s3api head-object --bucket "$LAMBDA_ARTIFACT_BUCKET" --key "$LAMBDA_ARTIFACT_KEY" >/dev/null
           echo "✓ Found artifact s3://$LAMBDA_ARTIFACT_BUCKET/$LAMBDA_ARTIFACT_KEY"
+
+      - name: Import Secrets Manager secret into Terraform state
+        # Pre-flight: reconcile state drift before apply so terraform apply never
+        # hits ResourceExistsException on an already-existing secret.
+        env:
+          TF_VAR_shared_core_ssh_private_key: ${{ secrets.SHARED_CORE_SSH_PRIVATE_KEY }}
+          TF_VAR_shared_core_gh_repo_token: ${{ secrets.SHARED_CORE_GH_REPO_TOKEN }}
+          TF_VAR_shared_core_jenkins_admin_password: ${{ secrets.SHARED_CORE_JENKINS_ADMIN_PASSWORD }}
+          TF_VAR_shared_core_gitea_admin_password: ${{ secrets.SHARED_CORE_GITEA_ADMIN_PASSWORD }}
+          TF_VAR_manage_shared_core: 'true'
+        run: |
+          set -euo pipefail
+          REGION="${AWS_REGION}"
+          REGION_CODE=$(echo "$REGION" | tr -d '-')
+          BACKEND_BUCKET="terraform-state-classroom-shared-${REGION_CODE}"
+          BACKEND_TABLE="terraform-locks-classroom-shared"
+          STATE_KEY="classroom/prod/terraform.tfstate"
+          SECRET_NAME="/classroom/shared-core/prod/deploy"
+
+          cd iac/aws
+          terraform init -reconfigure \
+            -backend-config="bucket=${BACKEND_BUCKET}" \
+            -backend-config="key=${STATE_KEY}" \
+            -backend-config="region=${REGION}" \
+            -backend-config="dynamodb_table=${BACKEND_TABLE}" \
+            -backend-config="encrypt=true" \
+            -no-color >/dev/null
+
+          if ! aws secretsmanager describe-secret --secret-id "$SECRET_NAME" \
+               --region "$REGION" >/dev/null 2>&1; then
+            echo "Secret $SECRET_NAME does not exist in AWS — no import needed (will be created)."
+            exit 0
+          fi
+          if terraform state show \
+               "module.shared_core_secrets[0].aws_secretsmanager_secret.shared_core_deploy" \
+               >/dev/null 2>&1; then
+            echo "✓ Secret already in Terraform state — skipping import."
+            exit 0
+          fi
+          SECRET_ARN=$(aws secretsmanager describe-secret \
+            --secret-id "$SECRET_NAME" --region "$REGION" \
+            --query 'ARN' --output text)
+          echo "Importing $SECRET_NAME → $SECRET_ARN"
+          terraform import \
+            "module.shared_core_secrets[0].aws_secretsmanager_secret.shared_core_deploy" \
+            "$SECRET_ARN"
+          if ! terraform state show \
+               "module.shared_core_secrets[0].aws_secretsmanager_secret.shared_core_deploy" \
+               >/dev/null 2>&1; then
+            echo "::error::Import appeared to succeed but resource is still absent from Terraform state."
+            exit 1
+          fi
+          echo "✓ Secret successfully imported into Terraform state."
 
       - name: Deploy prod environment (shared-core + classroom infra)
         env:
