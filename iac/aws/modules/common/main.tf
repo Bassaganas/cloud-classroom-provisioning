@@ -81,10 +81,10 @@ module "storage" {
 module "s3_sut" {
   source = "../s3-sut"
 
-  environment  = var.environment
-  owner        = var.owner
+  environment   = var.environment
+  owner         = var.owner
   workshop_name = var.workshop_name
-  region       = var.region
+  region        = var.region
 }
 
 # IAM Lambda Module - Lambda Execution Role
