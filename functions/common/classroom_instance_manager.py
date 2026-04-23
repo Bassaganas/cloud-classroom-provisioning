@@ -13,6 +13,7 @@ from datetime import datetime, timezone, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 import base64
+from generate_student_identity import generate_character_student_id, validate_character_student_id
 
 # Initialize test mode BEFORE boto3 clients are created
 # This allows moto mocks to intercept all boto3 calls during testing
@@ -2810,14 +2811,18 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
             # Reset per-iteration state so values from instance N don't bleed into instance N+1.
             # For shared-core provisioning, each instance gets its own student_name:
             # - If student_name was explicitly provided by caller, use it for all instances
-            # - If student_name was not provided, generate a UNIQUE UUID for each instance
+            # - If student_name was not provided, generate a unique LOTR character name
             user_data = base_user_data
             if student_name_provided:
                 instance_student_name = student_name  # Use the provided name for all instances
+                try:
+                    validate_character_student_id(instance_student_name)
+                except ValueError as e:
+                    logger.warning(f"Student name validation warning: {str(e)}")
             else:
-                # Generate unique student name for each instance in the pool
-                instance_student_name = f"student-{uuid.uuid4().hex[:8]}"
-                logger.info(f"Auto-generated unique student_name for instance {i+1}/{count}: {instance_student_name}")
+                # Generate unique character-based student name for each instance in the pool
+                instance_student_name = generate_character_student_id()
+                logger.info(f"Auto-generated unique character-based student_name for instance {i+1}/{count}: {instance_student_name}")
             
             # Determine naming and tags based on type
             if instance_type == 'admin':
@@ -2878,7 +2883,13 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
                 tags.append({'Key': 'PurchaseType', 'Value': 'on-demand'})
             # Generate predictable domain name BEFORE instance creation
             # This eliminates timing issues - domain is known immediately
-            machine_name = name  # Use the same name as the instance name
+            # For Fellowship workshop: use character-based student name for domains
+            # For other workshops: use instance name as before
+            if str(workshop_name or '').strip().lower() == 'fellowship':
+                machine_name = instance_student_name  # Use character name for domains (e.g., legolas_xy37)
+            else:
+                machine_name = name  # Use the instance name for other workshops
+            
             if HTTPS_BASE_DOMAIN and HTTPS_HOSTED_ZONE_ID:
                 # Use workshop-specific domain patterns to match wildcard cert (*.testingfantasy.com)
                 # Testus Patronus uses dify-{instance_id}.testingfantasy.com (single level = coverage by wildcard)

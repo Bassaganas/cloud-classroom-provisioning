@@ -337,6 +337,8 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
     fi
     
     cp "$PROJECT_ROOT/functions/common/classroom_instance_manager.py" "$TEMP_DIR5/"
+    # generate_student_identity.py is a direct import of classroom_instance_manager
+    cp "$PROJECT_ROOT/functions/common/generate_student_identity.py" "$TEMP_DIR5/"
     
     # Verify copy succeeded
     COPIED_SIZE=$(wc -c < "$TEMP_DIR5/classroom_instance_manager.py")
@@ -346,11 +348,11 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
         exit 1
     fi
     
-    # Verify temp directory only contains the intended file before installing dependencies
+    # Verify temp directory contains the two expected source files before installing dependencies
     PYTHON_FILES_IN_TEMP=$(find "$TEMP_DIR5" -maxdepth 1 -name "*.py" -type f | wc -l)
-    if [ "$PYTHON_FILES_IN_TEMP" -ne 1 ]; then
+    if [ "$PYTHON_FILES_IN_TEMP" -ne 2 ]; then
         echo "ERROR: Temp directory contains unexpected Python files before dependency installation"
-        echo "Found $PYTHON_FILES_IN_TEMP Python files, expected 1"
+        echo "Found $PYTHON_FILES_IN_TEMP Python files, expected 2 (classroom_instance_manager.py + generate_student_identity.py)"
         rm -rf "$TEMP_DIR5"
         exit 1
     fi
@@ -368,9 +370,14 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
         exit 1
     fi
     
-    # Verify the package contains the correct file
+    # Verify the package contains the correct files
     if ! unzip -l "$PACKAGE_PATH" | grep -q "classroom_instance_manager.py"; then
         echo "ERROR: Package does not contain classroom_instance_manager.py"
+        rm -rf "$TEMP_DIR5"
+        exit 1
+    fi
+    if ! unzip -l "$PACKAGE_PATH" | grep -q "generate_student_identity.py"; then
+        echo "ERROR: Package does not contain generate_student_identity.py"
         rm -rf "$TEMP_DIR5"
         exit 1
     fi
