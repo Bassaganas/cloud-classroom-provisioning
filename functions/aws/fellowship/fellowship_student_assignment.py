@@ -28,6 +28,13 @@ import urllib.parse
 from datetime import datetime, timedelta
 import requests
 
+# Import LOTR character lore for student identity display
+try:
+    from generate_student_identity import get_character_lore
+except ImportError:
+    def get_character_lore(char):
+        return {}
+
 # Initialize AWS clients first
 # (No import of common module - we'll call instance_manager via HTTP endpoint instead)
 
@@ -185,521 +192,724 @@ def generate_fellowship_urls(student_name, sut_url):
     }
 
 
+# Environment variable names for secrets passed into this Lambda
+_AZURE_OPENAI_ENDPOINT = os.environ.get('AZURE_OPENAI_ENDPOINT', '')
+_AZURE_OPENAI_API_KEY = os.environ.get('AZURE_OPENAI_API_KEY', '')
+_AZURE_OPENAI_DEPLOYMENT = os.environ.get('AZURE_OPENAI_DEPLOYMENT', 'gpt-4o')
+_AZURE_OPENAI_API_VERSION = os.environ.get('AZURE_OPENAI_API_VERSION', '2024-12-01-preview')
+_SQS_QUEUE_URL = os.environ.get('SQS_QUEUE_URL', '')
+_MCP_TOKEN = os.environ.get('MCP_TOKEN', '')
+_MAILDOG_API_URL = os.environ.get('MAILDOG_API_URL', '')
+_MAILDOG_TOKEN = os.environ.get('MAILDOG_TOKEN', '')
+
+
+def generate_env_content(user_info):
+    """Generate unified .env file content from student provisioning data.
+
+    Includes all variables needed for IDE, exercises, and services.
+    All values are fully populated where available; empty string fallback otherwise.
+
+    Args:
+        user_info: dict from create_student() with keys: student_name, instance_id,
+                   sut_url, jenkins_url, gitea_url, llm_configs, password
+
+    Returns:
+        str: full .env file content
+    """
+    student_name = user_info.get('student_name', '')
+    password = user_info.get('password', student_name)
+
+    # Extract Jenkins token from LLM configs not ideal, but token may come later via API
+    # For now, use environment variable if available
+    jenkins_user = student_name
+    jenkins_url_base = f"https://{FELLOWSHIP_DOMAINS['jenkins']}"
+    gitea_url_base = f"https://{FELLOWSHIP_DOMAINS['gitea']}"
+    gitea_user = student_name
+    gitea_repo = f"fellowship-sut-{student_name}"
+    gitea_org = GITEA_ORG
+
+    # Azure OpenAI from Lambda env vars (shared classroom config)
+    azure_endpoint = _AZURE_OPENAI_ENDPOINT
+    azure_api_key = _AZURE_OPENAI_API_KEY
+    azure_deployment = _AZURE_OPENAI_DEPLOYMENT
+    azure_api_version = _AZURE_OPENAI_API_VERSION
+
+    # If LLM configs list is present, use first entry (per-student configs override shared)
+    llm_configs = user_info.get('llm_configs', [])
+    if llm_configs:
+        first = llm_configs[0]
+        if first.get('api_key'):
+            azure_api_key = first['api_key']
+        if first.get('endpoint'):
+            azure_endpoint = first['endpoint']
+        if first.get('deployment_name'):
+            azure_deployment = first['deployment_name']
+
+    env_content = f"""# ════════════════════════════════════════════════════════════════════════════════
+# MASTER CONFIGURATION — Single .env for the entire repository
+# ════════════════════════════════════════════════════════════════════════════════
+# Generated for student: {student_name}
+# Generated at: {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S UTC')}
+#
+# All exercises (ex1–ex5), services, and scripts load from this file.
+# Place this file in the repository root: palantir-jenkins-ai/.env
+#
+# ⚠️ This file contains sensitive credentials. Do NOT commit to git. Do NOT share.
+
+# ── STUDENT PROFILE & EVENT SOURCING ─────────────────────────────────────────
+#
+# REQUIRED: Student identifier — appears in all progress events and leaderboard
+STUDENT_ID={student_name}
+
+# AWS SQS Configuration for progress tracking
+SQS_QUEUE_URL={_SQS_QUEUE_URL}
+AWS_REGION={REGION}
+
+# Environment mode: 'local' (no AWS) or 'aws' (sends events to SQS)
+ENVIRONMENT={ENVIRONMENT}
+
+# Event sourcing logging level (uncomment DEBUG to see detail)
+TRACKER_LOG_LEVEL=INFO
+
+# ── LEADERBOARD SERVICE (LOCAL ONLY) ─────────────────────────────────────────
+#
+LEADERBOARD_DB=.docker/leaderboard.db
+API_HOST=0.0.0.0
+API_PORT=5050
+
+# ── Azure OpenAI (LLM Provider) ──────────────────────────────────────────────
+#
+# Used by: ex1, ex2 (query_client), ex3, ex4, ex5
+AZURE_OPENAI_ENDPOINT={azure_endpoint}
+AZURE_OPENAI_API_KEY={azure_api_key}
+AZURE_OPENAI_DEPLOYMENT={azure_deployment}
+AZURE_OPENAI_API_VERSION={azure_api_version}
+AZURE_OPENAI_MAX_TOKENS=500
+AZURE_OPENAI_TEMPERATURE=0.7
+
+# ── Jenkins ───────────────────────────────────────────────────────────────────
+#
+# Used by: ex2-jenkins-mcp-server, ex4-gitea-mcp, ex5-grand-finale
+JENKINS_URL={jenkins_url_base}
+JENKINS_USER={jenkins_user}
+JENKINS_TOKEN={password}
+JENKINS_PIPELINE=fellowship-pipeline
+JENKINS_STUDENT={student_name}
+
+# ── Gitea ─────────────────────────────────────────────────────────────────────
+#
+# Used by: ex4-gitea-mcp, ex5-grand-finale
+GITEA_URL={gitea_url_base}
+GITEA_TOKEN={password}
+GITEA_OWNER={gitea_org}
+GITEA_REPO={gitea_repo}
+GITEA_USER={gitea_user}
+
+# ── Email Service (Maildog) ───────────────────────────────────────────────────
+#
+# Used by: ex3-notification-mcp, ex5-grand-finale
+MAILDOG_API_URL={_MAILDOG_API_URL}
+MAILDOG_TOKEN={_MAILDOG_TOKEN}
+
+# ── MCP Token ─────────────────────────────────────────────────────────────────
+MCP_TOKEN={_MCP_TOKEN}
+
+# ── IDE / Local Development ────────────────────────────────────────────────────
+COMPOSE_PROJECT_NAME=fellowship-local
+CADDY_PORT_HTTP=9000
+CADDY_PORT_HTTPS=9443
+CADDY_DOMAIN=localhost
+FRONTEND_MODE=dev
+REACT_APP_API_URL=/api
+REACT_APP_ENABLE_TEST_CONTROLS=true
+DATABASE_URL=sqlite:////app/data/fellowship.db
+SECRET_KEY=dev-secret-key-change-in-production
+NODE_ENV=development
+"""
+    return env_content.lstrip()
+
+
 def generate_html_response(user_info, error_message=None, status_lambda_url=None):
     """Generate LOTR-themed HTML response with student assignment information"""
     if error_message:
-        return f"""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Error - Fellowship Student Assignment</title>
-            <style>
-                body {{
-                    font-family: Arial, sans-serif;
-                    background: linear-gradient(135deg, #1a0000 0%, #330000 100%);
-                    margin: 0;
-                    padding: 0;
-                    min-height: 100vh;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                }}
-                .error-container {{
-                    background: #fff;
-                    padding: 40px;
-                    border-radius: 12px;
-                    box-shadow: 0 4px 24px rgba(0,0,0,0.3);
-                    text-align: center;
-                    max-width: 420px;
-                    border-left: 6px solid #b30000;
-                }}
-                .error-icon {{
-                    font-size: 48px;
-                    margin-bottom: 12px;
-                }}
-                h1 {{
-                    color: #b30000;
-                    margin-bottom: 8px;
-                }}
-                .error-details {{
-                    background: #f8f8f8;
-                    color: #b30000;
-                    font-size: 0.95em;
-                    padding: 10px 12px;
-                    border-radius: 6px;
-                    margin-bottom: 18px;
-                    word-break: break-all;
-                }}
-            </style>
-        </head>
-        <body>
-            <div class="error-container">
-                <div class="error-icon">⚔️</div>
-                <h1>The Road is Dark</h1>
-                <p>An error has occurred in your quest.</p>
-                <div class="error-details">{error_message}</div>
-                <button onclick="location.reload()" style="background: #1a0000; color: #fff; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer;">Try Again</button>
-            </div>
-        </body>
-        </html>
-        """
+        return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Error — Fellowship Quest</title>
+    <style>
+        body {{ font-family: Georgia, serif; background: linear-gradient(135deg, #1a0000 0%, #330000 100%); margin: 0; padding: 40px 20px; min-height: 100vh; display: flex; align-items: center; justify-content: center; }}
+        .error-card {{ background: #f5f1e8; padding: 40px; border-radius: 8px; box-shadow: 0 8px 32px rgba(0,0,0,0.4); text-align: center; max-width: 480px; border: 2px solid #8b0000; }}
+        .error-icon {{ font-size: 52px; margin-bottom: 12px; }}
+        h1 {{ color: #8b0000; margin-bottom: 8px; font-size: 1.8rem; }}
+        p {{ color: #1a0000; margin-bottom: 16px; }}
+        .error-details {{ background: #fff; color: #8b0000; font-family: 'Courier New', monospace; font-size: 0.9em; padding: 12px; border-radius: 6px; margin-bottom: 20px; word-break: break-all; border: 1px solid #d4af37; text-align: left; }}
+        button {{ background: #1a0000; color: #d4af37; border: 2px solid #d4af37; padding: 10px 24px; border-radius: 4px; cursor: pointer; font-family: Georgia, serif; font-weight: bold; font-size: 1rem; }}
+        button:hover {{ background: #d4af37; color: #1a0000; }}
+    </style>
+</head>
+<body>
+    <div class="error-card">
+        <div class="error-icon">⚔️</div>
+        <h1>The Road is Dark</h1>
+        <p>An error has occurred in your quest through Middle-earth.</p>
+        <div class="error-details">{error_message}</div>
+        <button onclick="location.reload()">Try Again</button>
+    </div>
+</body>
+</html>"""
 
     student_name = user_info.get('student_name', 'Unknown')
-    password = user_info.get('password', '')
-    instance_id = user_info.get('instance_id', 'N/A')
+    password = user_info.get('password', student_name)
+    instance_id = user_info.get('instance_id', '')
     sut_url = user_info.get('sut_url', '#')
     jenkins_url = user_info.get('jenkins_url', '#')
     gitea_url = user_info.get('gitea_url', '#')
     llm_configs = user_info.get('llm_configs', [])
     instance_error = user_info.get('instance_error', '')
 
+    # Derive character info from student_name (e.g., "legolas_xy37" -> "legolas")
+    char_key = student_name.split('_')[0] if '_' in student_name else student_name
+    lore = get_character_lore(char_key)
+    char_display_name = lore.get('name', char_key.capitalize())
+    char_race = lore.get('race', '')
+    char_role = lore.get('role', '')
+    char_description = lore.get('description', 'A member of the Fellowship, bound by oath to the quest.')
+
+    # Character icon by race
+    race_icons = {
+        'Hobbit': '🌿', 'Human': '⚔️', 'Elf': '🏹', 'Dwarf': '⛏️',
+        'Wizard': '🧙', 'Maiar': '🔥', 'Ent': '🌳', 'Spider': '🕷️',
+        'Nazgûl': '💀', 'Uruk-hai': '🛡️', 'Orc': '🪓', 'Horse': '🐎',
+        'Creature': '👁️', 'Hobbit-like': '🌿', 'Demon': '🔥',
+    }
+    char_icon = race_icons.get(char_race, '⚔️')
+
+    # .env file content
+    env_content = generate_env_content(user_info)
+    # Escape for HTML embedding in JS string (avoid breaking template literals)
+    env_content_js = env_content.replace('\\', '\\\\').replace('`', '\\`').replace('$', '\\$')
+
     # Build LLM configs section
-    llm_section = ""
+    llm_rows = ""
     if llm_configs:
-        llm_section = "<div class=\"info-box\"><h2>Azure LLM Configuration</h2><div class=\"config-grid\">"
         for config in llm_configs:
-            llm_section += f"""
-            <div class="config-card">
-                <div class="config-title">{config.get('config_name', 'Unknown')}</div>
-                <div class="config-row">
-                    <span class="config-label">Deployment</span>
-                    <span class="config-value">{config.get('deployment_name', 'N/A')}</span>
-                    <button class="copy-btn" onclick="copyToClipboard('{config.get('deployment_name', '')}')">📋</button>
-                </div>
-                <div class="config-row">
-                    <span class="config-label">API Key</span>
-                    <span class="config-value">••••••••</span>
-                    <button class="copy-btn" onclick="copyToClipboard('{config.get('api_key', '')}')">📋</button>
-                </div>
-                <div class="config-row">
-                    <span class="config-label">Endpoint</span>
-                    <span class="config-value">{config.get('endpoint', 'N/A')}</span>
-                    <button class="copy-btn" onclick="copyToClipboard('{config.get('endpoint', '')}')">📋</button>
-                </div>
-            </div>
-            """
-        llm_section += "</div></div>"
+            llm_rows += f"""
+                <div class="config-card">
+                    <div class="config-card-title">{config.get('config_name', 'Azure OpenAI')}</div>
+                    <div class="cred-row">
+                        <span class="cred-label">Deployment</span>
+                        <span class="cred-value mono">{config.get('deployment_name', 'N/A')}</span>
+                        <button class="copy-btn" onclick="copy('{config.get('deployment_name', '')}')">📋</button>
+                    </div>
+                    <div class="cred-row">
+                        <span class="cred-label">API Key</span>
+                        <span class="cred-value mono">{"*" * 12}</span>
+                        <button class="copy-btn" onclick="copy('{config.get('api_key', '')}')">📋</button>
+                    </div>
+                    <div class="cred-row">
+                        <span class="cred-label">Endpoint</span>
+                        <span class="cred-value mono small">{config.get('endpoint', 'N/A')}</span>
+                        <button class="copy-btn" onclick="copy('{config.get('endpoint', '')}')">📋</button>
+                    </div>
+                </div>"""
 
-    instance_section = ""
-    if instance_id and instance_id != 'N/A':
-        instance_section = f"""
-        <div class="info-box">
-            <h2>Your System Under Test (SUT)</h2>
-            <div class="sut-info">
-                <div class="info-row">
-                    <span class="label">Instance ID</span>
-                    <span class="value">{instance_id}</span>
-                </div>
-                <div class="info-row">
-                    <span class="label">SUT URL</span>
-                    <span class="value"><a href="{sut_url}" target="_blank">{sut_url}</a></span>
-                    <button class="copy-btn" onclick="copyToClipboard('{sut_url}')">📋</button>
-                </div>
-            </div>
-        </div>
-        """
+    sut_section = ""
+    if instance_id:
+        sut_section = f"""
+                <div class="section-box">
+                    <h3 class="section-title">🏰 System Under Test</h3>
+                    <div class="cred-row">
+                        <span class="cred-label">Instance</span>
+                        <span class="cred-value mono">{instance_id}</span>
+                    </div>
+                    <div class="cred-row">
+                        <span class="cred-label">SUT URL</span>
+                        <span class="cred-value"><a href="{sut_url}" target="_blank" class="gold-link">{sut_url}</a></span>
+                        <button class="copy-btn" onclick="copy('{sut_url}')">📋</button>
+                    </div>
+                </div>"""
     elif instance_error:
-        instance_section = f"""
-        <div class="warning-box">
-            <strong>⚠️ Note:</strong> Unable to assign an instance at this time. Reason: {instance_error}
+        sut_section = f"""<div class="warning-box">⚠️ Unable to assign an instance at this time: {instance_error}</div>"""
+
+    llm_section = ""
+    if llm_rows:
+        llm_section = f"""
+                <div class="section-box">
+                    <h3 class="section-title">🤖 Azure LLM Configuration</h3>
+                    <div class="config-grid">{llm_rows}</div>
+                </div>"""
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fellowship — Your Quest Assignment</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    <style>
+        :root {{
+            --gold:   #d4af37;
+            --silver: #c0c0c0;
+            --dark:   #1a0000;
+            --red:    #8b0000;
+            --cream:  #f5f1e8;
+            --white:  #ffffff;
+        }}
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        body {{
+            font-family: Georgia, 'Times New Roman', serif;
+            background: radial-gradient(ellipse at top, #2a0000 0%, #0d0000 70%);
+            color: var(--dark);
+            min-height: 100vh;
+            padding: 20px;
+        }}
+
+        /* ── Page wrapper ── */
+        .page {{
+            max-width: 980px;
+            margin: 32px auto;
+        }}
+
+        /* ── Hero banner ── */
+        .hero {{
+            background: linear-gradient(160deg, var(--dark) 0%, #2a0000 50%, var(--red) 100%);
+            border: 2px solid var(--gold);
+            border-radius: 8px 8px 0 0;
+            padding: 36px 32px 28px;
+            text-align: center;
+            position: relative;
+            overflow: hidden;
+        }}
+        .hero::before {{
+            content: '';
+            position: absolute; inset: 0;
+            background: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='60' height='60'%3E%3Ccircle cx='30' cy='30' r='28' fill='none' stroke='%23d4af3715' stroke-width='1'/%3E%3Ccircle cx='30' cy='30' r='18' fill='none' stroke='%23d4af3712' stroke-width='1'/%3E%3C/svg%3E") repeat;
+            pointer-events: none;
+        }}
+        .hero-subtitle {{
+            color: var(--silver);
+            font-style: italic;
+            font-size: 0.95rem;
+            margin-bottom: 16px;
+        }}
+        .hero-title {{
+            color: var(--gold);
+            font-size: 2.2rem;
+            letter-spacing: 2px;
+            text-shadow: 0 2px 12px rgba(212,175,55,0.4);
+        }}
+        .hero-divider {{
+            border: none; border-top: 1px solid var(--gold);
+            opacity: 0.4; margin: 18px auto; width: 60%;
+        }}
+
+        /* ── Character card ── */
+        .char-card {{
+            background: linear-gradient(135deg, #1a0000 0%, #250000 60%, #1a0005 100%);
+            border: 1px solid var(--gold);
+            border-top: none;
+            padding: 28px 32px;
+            display: flex;
+            gap: 28px;
+            align-items: center;
+        }}
+        .char-icon {{
+            font-size: 64px;
+            line-height: 1;
+            flex-shrink: 0;
+            filter: drop-shadow(0 0 16px rgba(212,175,55,0.5));
+        }}
+        .char-info {{ flex: 1; }}
+        .char-name {{
+            color: var(--gold);
+            font-size: 1.9rem;
+            font-weight: bold;
+            letter-spacing: 1px;
+        }}
+        .char-meta {{
+            color: var(--silver);
+            font-size: 0.9rem;
+            margin: 4px 0 10px;
+            font-style: italic;
+        }}
+        .char-desc {{
+            color: #c8b89a;
+            font-size: 0.95rem;
+            line-height: 1.5;
+        }}
+        .char-id-badge {{
+            background: var(--dark);
+            border: 1px solid var(--gold);
+            color: var(--gold);
+            font-family: 'Courier New', monospace;
+            font-size: 0.85rem;
+            padding: 4px 10px;
+            border-radius: 4px;
+            margin-top: 10px;
+            display: inline-block;
+        }}
+
+        /* ── Main content ── */
+        .card {{
+            background: var(--cream);
+            border: 1px solid #cbbfa0;
+            border-top: none;
+            padding: 28px 32px;
+        }}
+        .card:last-child {{
+            border-radius: 0 0 8px 8px;
+        }}
+
+        /* ── Section boxes ── */
+        .section-box {{
+            background: var(--white);
+            border: 1.5px solid #d4af37;
+            border-radius: 6px;
+            padding: 20px;
+            margin-bottom: 24px;
+        }}
+        .section-title {{
+            color: var(--dark);
+            font-size: 1.1rem;
+            margin-bottom: 16px;
+            padding-bottom: 8px;
+            border-bottom: 2px solid var(--gold);
+        }}
+
+        /* ── Credential rows ── */
+        .cred-row {{
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 10px;
+            padding: 10px 12px;
+            background: #fdfaf4;
+            border-radius: 4px;
+            border: 1px solid #e8e0cc;
+        }}
+        .cred-label {{
+            font-weight: bold;
+            color: var(--red);
+            min-width: 110px;
+            font-size: 0.88rem;
+        }}
+        .cred-value {{
+            flex: 1;
+            word-break: break-all;
+            font-size: 0.93rem;
+        }}
+        .cred-value.mono {{
+            font-family: 'Courier New', monospace;
+        }}
+        .cred-value.small {{
+            font-size: 0.82rem;
+        }}
+
+        /* ── Copy button ── */
+        .copy-btn {{
+            background: var(--gold);
+            color: var(--dark);
+            border: none;
+            padding: 5px 11px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-weight: bold;
+            font-size: 0.85rem;
+            flex-shrink: 0;
+            transition: background 0.2s;
+        }}
+        .copy-btn:hover {{ background: var(--silver); }}
+
+        /* ── .env download section ── */
+        .env-section {{
+            background: #0e0a00;
+            border: 1.5px solid var(--gold);
+            border-radius: 6px;
+            padding: 20px;
+            margin-bottom: 24px;
+        }}
+        .env-section-title {{
+            color: var(--gold);
+            font-size: 1.1rem;
+            margin-bottom: 14px;
+            border-bottom: 1px solid rgba(212,175,55,0.3);
+            padding-bottom: 8px;
+        }}
+        .env-preview {{
+            background: #050300;
+            color: #a8d08d;
+            font-family: 'Courier New', monospace;
+            font-size: 0.78rem;
+            padding: 16px;
+            border-radius: 4px;
+            max-height: 260px;
+            overflow-y: auto;
+            white-space: pre;
+            border: 1px solid #333;
+            margin-bottom: 16px;
+            line-height: 1.5;
+        }}
+        .env-preview .comment {{ color: #6a9955; }}
+        .env-actions {{ display: flex; gap: 12px; flex-wrap: wrap; }}
+        .env-btn {{
+            padding: 9px 20px;
+            border-radius: 4px;
+            border: none;
+            cursor: pointer;
+            font-family: Georgia, serif;
+            font-weight: bold;
+            font-size: 0.9rem;
+            transition: all 0.2s;
+        }}
+        .env-btn-download {{
+            background: var(--gold);
+            color: var(--dark);
+        }}
+        .env-btn-download:hover {{ background: #c9a52e; }}
+        .env-btn-copy {{
+            background: transparent;
+            color: var(--gold);
+            border: 2px solid var(--gold);
+        }}
+        .env-btn-copy:hover {{ background: var(--gold); color: var(--dark); }}
+
+        /* ── Links section ── */
+        .links-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 12px;
+        }}
+        .link-card {{
+            background: var(--white);
+            border: 1.5px solid #d4af37;
+            border-radius: 6px;
+            padding: 14px 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }}
+        .link-icon {{ font-size: 1.4rem; flex-shrink: 0; }}
+        .link-text {{ flex: 1; }}
+        .link-text a {{ color: var(--red); text-decoration: none; font-weight: bold; font-size: 0.88rem; word-break: break-all; }}
+        .link-text a:hover {{ text-decoration: underline; }}
+        .link-label {{ color: #888; font-size: 0.78rem; }}
+
+        /* ── LLM config grid ── */
+        .config-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }}
+        .config-card {{ background: var(--white); border: 1px solid var(--gold); border-radius: 6px; padding: 14px; }}
+        .config-card-title {{ font-weight: bold; color: var(--red); margin-bottom: 10px; font-size: 0.95rem; }}
+
+        /* ── Warning box ── */
+        .warning-box {{
+            background: #fff8e1;
+            border-left: 4px solid var(--red);
+            padding: 12px 16px;
+            margin-bottom: 20px;
+            border-radius: 4px;
+            color: var(--dark);
+            font-size: 0.9rem;
+        }}
+
+        /* ── Footer ── */
+        .footer {{
+            background: var(--dark);
+            border: 1px solid var(--gold);
+            border-top: 2px solid var(--gold);
+            border-radius: 0 0 8px 8px;
+            padding: 20px 32px;
+            text-align: center;
+            color: var(--silver);
+            font-size: 0.88rem;
+        }}
+        .footer p {{ margin-bottom: 8px; }}
+        .footer a {{ color: var(--gold); text-decoration: none; }}
+        .footer a:hover {{ text-decoration: underline; }}
+        .footer .reset-btn {{
+            background: transparent;
+            color: var(--gold);
+            border: 1px solid rgba(212,175,55,0.4);
+            padding: 7px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: Georgia, serif;
+            font-size: 0.85rem;
+            margin-top: 8px;
+        }}
+        .footer .reset-btn:hover {{ background: rgba(212,175,55,0.1); }}
+
+        /* ── Gold link ── */
+        .gold-link {{ color: var(--red); font-weight: bold; text-decoration: none; }}
+        .gold-link:hover {{ text-decoration: underline; }}
+
+        /* ── Toast ── */
+        #toast {{
+            position: fixed; top: 24px; right: 24px;
+            background: var(--gold); color: var(--dark);
+            padding: 12px 20px; border-radius: 6px;
+            font-weight: bold; font-family: Georgia, serif;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+            z-index: 9999; display: none;
+            animation: fadeIn 0.3s ease;
+        }}
+        @keyframes fadeIn {{ from {{ opacity:0; transform:translateY(-10px); }} to {{ opacity:1; transform:translateY(0); }} }}
+
+        /* ── Responsive ── */
+        @media (max-width: 640px) {{
+            .char-card {{ flex-direction: column; text-align: center; }}
+            .hero-title {{ font-size: 1.6rem; }}
+            .cred-row {{ flex-wrap: wrap; }}
+        }}
+    </style>
+    <script>
+        var ENV_CONTENT = `{env_content_js}`;
+        var STUDENT_ID  = '{student_name}';
+
+        function copy(text) {{
+            navigator.clipboard.writeText(text).then(function() {{
+                showToast('Copied to clipboard!');
+            }}).catch(function() {{
+                showToast('Copy failed — please select and copy manually.');
+            }});
+        }}
+
+        function copyEnv() {{
+            navigator.clipboard.writeText(ENV_CONTENT).then(function() {{
+                showToast('Config copied to clipboard!');
+            }}).catch(function() {{
+                showToast('Copy failed — please select text in the preview above.');
+            }});
+        }}
+
+        function downloadEnv() {{
+            var blob = new Blob([ENV_CONTENT], {{type: 'text/plain'}});
+            var a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'fellowship-' + STUDENT_ID + '.env';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(a.href);
+            showToast('.env file downloaded!');
+        }}
+
+        function showToast(msg) {{
+            var t = document.getElementById('toast');
+            t.textContent = msg;
+            t.style.display = 'block';
+            setTimeout(function() {{ t.style.display = 'none'; }}, 2500);
+        }}
+
+        function getNewStudent() {{
+            document.cookie = "fellowship_student=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+            document.cookie = "fellowship_instance_id=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+            document.cookie = "fellowship_sut_url=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+            window.location.href = '/';
+        }}
+    </script>
+</head>
+<body>
+<div id="toast"></div>
+<div class="page">
+
+    <!-- ── Hero ── -->
+    <div class="hero">
+        <div class="hero-subtitle">Testing Fantasy · Fellowship Workshop</div>
+        <div class="hero-title">&#x2694; The Fellowship of the Quest &#x2694;</div>
+        <hr class="hero-divider">
+        <div style="color: var(--silver); font-style: italic; font-size: 0.92rem;">
+            "All we have to decide is what to do with the time that is given us."
         </div>
-        """
+    </div>
 
-    html_content = f"""
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Fellowship - Student Assignment</title>
-        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
-        <style>
-            :root {{
-                --gold: #d4af37;
-                --silver: #c0c0c0;
-                --dark: #1a0000;
-                --red: #8b0000;
-                --light: #f5f1e8;
-            }}
+    <!-- ── Character card ── -->
+    <div class="char-card">
+        <div class="char-icon">{char_icon}</div>
+        <div class="char-info">
+            <div class="char-name">{char_display_name}</div>
+            <div class="char-meta">{char_race} · {char_role}</div>
+            <div class="char-desc">{char_description}</div>
+            <div class="char-id-badge">Identity: {student_name}</div>
+        </div>
+    </div>
 
-            * {{
-                margin: 0;
-                padding: 0;
-                box-sizing: border-box;
-            }}
+    <!-- ── Content ── -->
+    <div class="card">
 
-            body {{
-                font-family: 'Georgia', serif;
-                background: linear-gradient(135deg, var(--dark) 0%, #330000 100%);
-                color: var(--dark);
-                padding: 20px;
-                min-height: 100vh;
-            }}
-
-            .container {{
-                max-width: 1000px;
-                margin: 40px auto;
-                background: var(--light);
-                border-radius: 8px;
-                box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-                overflow: hidden;
-            }}
-
-            .header {{
-                background: linear-gradient(135deg, var(--dark) 0%, var(--red) 100%);
-                color: var(--gold);
-                padding: 30px;
-                text-align: center;
-                border-bottom: 3px solid var(--gold);
-            }}
-
-            .header h1 {{
-                font-size: 2.5rem;
-                margin-bottom: 5px;
-                text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
-            }}
-
-            .header .subtitle {{
-                font-size: 1.1rem;
-                color: var(--silver);
-                font-style: italic;
-            }}
-
-            .content {{
-                padding: 30px;
-            }}
-
-            .greeting {{
-                background: #fff8f0;
-                border-left: 4px solid var(--gold);
-                padding: 20px;
-                margin-bottom: 30px;
-                border-radius: 4px;
-            }}
-
-            .greeting h2 {{
-                color: var(--dark);
-                margin-bottom: 10px;
-                font-size: 1.4rem;
-            }}
-
-            .credentials-box {{
-                background: #f0f0f0;
-                border: 2px solid var(--gold);
-                border-radius: 8px;
-                padding: 20px;
-                margin-bottom: 30px;
-            }}
-
-            .credentials-box h2 {{
-                color: var(--dark);
-                margin-bottom: 20px;
-                font-size: 1.3rem;
-                border-bottom: 2px solid var(--gold);
-                padding-bottom: 10px;
-            }}
-
-            .credential-item {{
-                margin-bottom: 15px;
-                display: flex;
-                align-items: center;
-                gap: 10px;
-            }}
-
-            .credential-item .label {{
-                font-weight: bold;
-                color: var(--red);
-                min-width: 120px;
-            }}
-
-            .credential-item .value {{
-                font-family: 'Courier New', monospace;
-                background: white;
-                padding: 8px 12px;
-                border-radius: 4px;
-                flex: 1;
-                word-break: break-all;
-            }}
-
-            .credential-item .copy-btn {{
-                background: var(--gold);
-                color: var(--dark);
-                border: none;
-                padding: 6px 12px;
-                border-radius: 4px;
-                cursor: pointer;
-                font-weight: bold;
-                transition: all 0.3s ease;
-            }}
-
-            .credential-item .copy-btn:hover {{
-                background: var(--silver);
-                transform: scale(1.05);
-            }}
-
-            .info-box {{
-                background: #f9f9f9;
-                border: 2px solid var(--dark);
-                border-radius: 8px;
-                padding: 20px;
-                margin-bottom: 30px;
-            }}
-
-            .info-box h2 {{
-                color: var(--dark);
-                margin-bottom: 20px;
-                font-size: 1.3rem;
-                border-bottom: 2px solid var(--red);
-                padding-bottom: 10px;
-            }}
-
-            .info-row {{
-                display: flex;
-                align-items: center;
-                gap: 15px;
-                margin-bottom: 12px;
-                padding: 12px;
-                background: white;
-                border-radius: 4px;
-            }}
-
-            .info-row .label {{
-                font-weight: bold;
-                color: var(--red);
-                min-width: 120px;
-            }}
-
-            .info-row .value {{
-                flex: 1;
-                font-family: 'Courier New', monospace;
-                word-break: break-all;
-            }}
-
-            .info-row a {{
-                color: var(--red);
-                text-decoration: none;
-                font-weight: bold;
-            }}
-
-            .info-row a:hover {{
-                text-decoration: underline;
-            }}
-
-            .config-grid {{
-                display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-                gap: 20px;
-            }}
-
-            .config-card {{
-                background: white;
-                border: 2px solid var(--gold);
-                border-radius: 8px;
-                padding: 16px;
-            }}
-
-            .config-title {{
-                font-weight: bold;
-                color: var(--red);
-                margin-bottom: 12px;
-                font-size: 1.1rem;
-            }}
-
-            .config-row {{
-                margin-bottom: 10px;
-                padding: 10px;
-                background: #f9f9f9;
-                border-radius: 4px;
-                display: flex;
-                align-items: center;
-                gap: 10px;
-            }}
-
-            .config-label {{
-                font-weight: bold;
-                color: var(--dark);
-                min-width: 100px;
-                font-size: 0.9rem;
-            }}
-
-            .config-value {{
-                flex: 1;
-                font-family: 'Courier New', monospace;
-                font-size: 0.9rem;
-                word-break: break-all;
-            }}
-
-            .warning-box {{
-                background: #fff3cd;
-                border-left: 4px solid var(--red);
-                padding: 15px;
-                margin-bottom: 20px;
-                border-radius: 4px;
-                color: var(--dark);
-            }}
-
-            .footer {{
-                background: #f0f0f0;
-                padding: 20px;
-                text-align: center;
-                border-top: 2px solid var(--gold);
-                color: var(--dark);
-                font-size: 0.9rem;
-            }}
-
-            .copy-btn {{
-                background: var(--gold);
-                color: var(--dark);
-                border: none;
-                padding: 6px 12px;
-                border-radius: 4px;
-                cursor: pointer;
-                font-weight: bold;
-                transition: all 0.3s ease;
-            }}
-
-            .copy-btn:hover {{
-                background: var(--silver);
-                transform: scale(1.05);
-            }}
-
-            /* Responsive design */
-            @media (max-width: 768px) {{
-                .container {{
-                    margin: 20px auto;
-                }}
-
-                .header h1 {{
-                    font-size: 2rem;
-                }}
-
-                .content {{
-                    padding: 20px;
-                }}
-
-                .config-grid {{
-                    grid-template-columns: 1fr;
-                }}
-
-                .info-row {{
-                    flex-direction: column;
-                    align-items: flex-start;
-                }}
-            }}
-        </style>
-        <script>
-            function copyToClipboard(text) {{
-                navigator.clipboard.writeText(text).then(function() {{
-                    showNotification("Copied to clipboard!");
-                }}).catch(function(err) {{
-                    console.error('Failed to copy:', err);
-                }});
-            }}
-
-            function showNotification(message) {{
-                const notification = document.createElement('div');
-                notification.style.cssText = `
-                    position: fixed;
-                    top: 20px;
-                    right: 20px;
-                    background: var(--gold);
-                    color: var(--dark);
-                    padding: 15px 20px;
-                    border-radius: 4px;
-                    font-weight: bold;
-                    z-index: 1000;
-                    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-                    animation: slideIn 0.3s ease;
-                `;
-                notification.textContent = message;
-                document.body.appendChild(notification);
-
-                setTimeout(() => {{
-                    notification.style.animation = 'slideOut 0.3s ease';
-                    setTimeout(() => {{
-                        document.body.removeChild(notification);
-                    }}, 300);
-                }}, 2000);
-            }}
-
-            function getNewStudent() {{
-                // Clear cookies and reload to get a new student assignment
-                document.cookie = "fellowship_student=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
-                document.cookie = "fellowship_instance_id=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
-                document.cookie = "fellowship_sut_url=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
-                window.location.href = '/';
-            }}
-
-            style = document.createElement('style');
-            style.textContent = `
-                @keyframes slideIn {{
-                    from {{ transform: translateX(100%); opacity: 0; }}
-                    to {{ transform: translateX(0); opacity: 1; }}
-                }}
-                @keyframes slideOut {{
-                    from {{ transform: translateX(0); opacity: 1; }}
-                    to {{ transform: translateX(100%); opacity: 0; }}
-                }}
-            `;
-            document.head.appendChild(style);
-        </script>
-    </head>
-    <body>
-        <div class="container">
-            <div class="header">
-                <h1>🧝 Fellowship Quest</h1>
-                <div class="subtitle">Your Journey to Testing Mastery Awaits</div>
+        <!-- Credentials -->
+        <div class="section-box">
+            <h3 class="section-title">⚔️ Your Credentials</h3>
+            <div class="cred-row">
+                <span class="cred-label">Username</span>
+                <span class="cred-value mono">{student_name}</span>
+                <button class="copy-btn" onclick="copy('{student_name}')">📋</button>
             </div>
+            <div class="cred-row">
+                <span class="cred-label">Password</span>
+                <span class="cred-value mono">{password}</span>
+                <button class="copy-btn" onclick="copy('{password}')">📋</button>
+            </div>
+            <div class="cred-row">
+                <span class="cred-label">Email</span>
+                <span class="cred-value mono">{student_name}@fellowship.local</span>
+                <button class="copy-btn" onclick="copy('{student_name}@fellowship.local')">📋</button>
+            </div>
+        </div>
 
-            <div class="content">
-                <div class="greeting">
-                    <h2>Welcome, Fellowship Candidate!</h2>
-                    <p>You have been selected for the Fellowship tour. Below are your credentials and resources to begin your quest.</p>
+        {sut_section}
+
+        <!-- Links -->
+        <div class="section-box">
+            <h3 class="section-title">🏹 Fellowship Resources</h3>
+            <div class="links-grid">
+                <div class="link-card">
+                    <div class="link-icon">⚙️</div>
+                    <div class="link-text">
+                        <div class="link-label">Jenkins Folder</div>
+                        <a href="{jenkins_url}" target="_blank">{jenkins_url}</a>
+                    </div>
+                    <button class="copy-btn" onclick="copy('{jenkins_url}')">📋</button>
                 </div>
-
-                <div class="credentials-box">
-                    <h2>⚔️ Your Credentials</h2>
-                    <div class="credential-item">
-                        <span class="label">Student ID:</span>
-                        <span class="value">{student_name}</span>
-                        <button class="copy-btn" onclick="copyToClipboard('{student_name}')">📋</button>
+                <div class="link-card">
+                    <div class="link-icon">📚</div>
+                    <div class="link-text">
+                        <div class="link-label">Gitea Repository</div>
+                        <a href="{gitea_url}" target="_blank">{gitea_url}</a>
                     </div>
-                    <div class="credential-item">
-                        <span class="label">Password:</span>
-                        <span class="value">{password}</span>
-                        <button class="copy-btn" onclick="copyToClipboard('{password}')">📋</button>
-                    </div>
-                </div>
-
-                {instance_section}
-
-                <div class="info-box">
-                    <h2>🏰 Fellowship Resources</h2>
-                    <div class="info-row">
-                        <span class="label">Jenkins Folder:</span>
-                        <span class="value"><a href="{jenkins_url}" target="_blank">{jenkins_url}</a></span>
-                        <button class="copy-btn" onclick="copyToClipboard('{jenkins_url}')">📋</button>
-                    </div>
-                    <div class="info-row">
-                        <span class="label">Gitea Repository:</span>
-                        <span class="value"><a href="{gitea_url}" target="_blank">{gitea_url}</a></span>
-                        <button class="copy-btn" onclick="copyToClipboard('{gitea_url}')">📋</button>
-                    </div>
-                </div>
-
-                {llm_section}
-
-                <div class="footer">
-                    <p>Your quest resources will be available for the duration of the Fellowship program.</p>
-                    <p>May your tests be true and your code be strong.</p>
-                    <button onclick="getNewStudent()" style="margin-top: 10px; background: var(--dark); color: var(--gold); border: 1px solid var(--gold); padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold;">Get New Student Assignment</button>
+                    <button class="copy-btn" onclick="copy('{gitea_url}')">📋</button>
                 </div>
             </div>
         </div>
-    </body>
-    </html>
-    """
-    return html_content
+
+        {llm_section}
+
+        <!-- .env download -->
+        <div class="env-section">
+            <div class="env-section-title">📜 Master Configuration (.env)</div>
+            <div class="env-preview" id="envPreview">{env_content}</div>
+            <div class="env-actions">
+                <button class="env-btn env-btn-download" onclick="downloadEnv()">
+                    ⬇ Download .env
+                </button>
+                <button class="env-btn env-btn-copy" onclick="copyEnv()">
+                    📋 Copy to Clipboard
+                </button>
+            </div>
+        </div>
+
+    </div><!-- /card -->
+
+    <!-- ── Footer ── -->
+    <div class="footer">
+        <p>May your tests be true and your code be strong.</p>
+        <p>Questions? Visit the <a href="https://docs.testingfantasy.com" target="_blank">Fellowship Docs</a></p>
+        <button class="reset-btn" onclick="getNewStudent()">Request New Assignment</button>
+    </div>
+
+</div><!-- /page -->
+</body>
+</html>"""
 
 
 def create_student():
