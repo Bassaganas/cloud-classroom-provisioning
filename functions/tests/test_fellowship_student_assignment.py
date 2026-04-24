@@ -16,7 +16,14 @@ from unittest.mock import patch, MagicMock, Mock
 from datetime import datetime
 import sys
 import boto3
-from moto import mock_iam, mock_dynamodb, mock_secretsmanager
+
+# Try new moto import first, fall back to old style
+try:
+    from moto import mock_aws
+except ImportError:
+    from moto import mock_iam as _mock_iam, mock_dynamodb as _mock_dynamodb, mock_secretsmanager as _mock_secretsmanager
+    def mock_aws(cls):
+        return _mock_iam(_mock_dynamodb(_mock_secretsmanager(cls)))
 
 # Add functions to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
@@ -29,9 +36,7 @@ os.environ['STATUS_LAMBDA_URL'] = 'https://test.lambda-url.eu-west-1.on.aws/'
 os.environ['SKIP_IAM_USER_CREATION'] = 'false'
 
 
-@mock_iam
-@mock_dynamodb
-@mock_secretsmanager
+@mock_aws
 class TestFellowshipStudentAssignment:
     """Test suite for fellowship student assignment"""
 

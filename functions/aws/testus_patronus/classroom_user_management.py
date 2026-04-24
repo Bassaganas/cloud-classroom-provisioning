@@ -207,8 +207,29 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
         </body>
         </html>
         """
-    # Always ensure azure_configs is present
+    
+    # Extract user info
+    user_name = user_info.get('user_name', 'Unknown')
     azure_configs = user_info.get('azure_configs', [])
+    instance_id = user_info.get('instance_id', '')
+    
+    # NEW: Extract character lore
+    lore = user_info.get('character_lore', {})
+    char_name = lore.get('name', user_name.replace('-', ' ').title())
+    char_race = lore.get('race', 'Wanderer')
+    char_role = lore.get('role', 'Tester')
+    char_description = lore.get('description', 'A member of the testing fellowship.')
+    
+    # Character icon by race
+    race_icons = {
+        'Hobbit': '🌿', 'Human': '⚔️', 'Elf': '🏹', 'Dwarf': '⛏️',
+        'Wizard': '🧙', 'Maiar': '🔥', 'Ent': '🌳', 'Spider': '🕷️',
+        'Nazgûl': '💀', 'Uruk-hai': '🛡️', 'Orc': '🪓', 'Horse': '🐎',
+        'Creature': '👁️', 'Hobbit-like': '🌿', 'Demon': '🔥', 'Wanderer': '🧭'
+    }
+    char_icon = race_icons.get(char_race, '⚔️')
+    
+    # Build LLM configs section
     azure_configs_html = """
     <div class=\"info-box\">
         <h2>LLM Models</h2>
@@ -859,6 +880,17 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
             <div class="subtitle">No magic, just AI with your company context</div>
             <h2>Welcome! Here are your Azure LLM credentials and your Dify instance. This is your user: {user_info['user_name']}</h2>
             <button class="get-new-user-btn" onclick="getNewUser()">Get a new user</button>
+            
+            <!-- Character Card -->
+            <div style="background: linear-gradient(135deg, #1a0000 0%, #250000 100%); border: 1px solid #d4af37; border-radius: 8px; padding: 20px; margin-bottom: 24px; display: flex; gap: 16px; align-items: center;">
+                <div style="font-size: 48px; flex-shrink: 0;">{char_icon}</div>
+                <div style="flex: 1;">
+                    <div style="color: #d4af37; font-size: 1.3em; font-weight: bold;">{char_name}</div>
+                    <div style="color: #c0c0c0; font-size: 0.9em; margin: 4px 0;">{char_race} · {char_role}</div>
+                    <div style="color: #c8b89a; font-size: 0.9em; line-height: 1.4; margin-top: 8px;">{char_description}</div>
+                </div>
+            </div>
+            
             {instance_info_html}
             {azure_configs_html}
             <div class="warning">
@@ -1769,6 +1801,15 @@ def create_user():
     console_user_name = f"conference-user-{suffix}"
     logger.info(f"Generated user name: {console_user_name}")
     
+    # NEW: Get character lore (Harry Potter theming consistency)
+    logger.warning(f"Get character lore for harry potter is not implemented yet, using placeholder lore for {console_user_name}")
+    character_lore = {
+        'name': console_user_name.replace('-', ' ').title(),
+        'race': 'Wanderer',
+        'role': 'Tester',
+        'description': 'A skilled member of the Dumbledore\'s Army.'
+        }
+    
     # Only check if user exists if IAM creation is enabled
     if not SKIP_IAM_USER_CREATION:
         if user_exists(console_user_name):
@@ -1776,6 +1817,7 @@ def create_user():
             raise Exception("User already exists. Try again.")
 
     user = create_console_user(console_user_name, account_id)
+    user['character_lore'] = character_lore  # NEW: Include lore in user dict
 
     # Get all Azure OpenAI configurations
     azure_configs = get_secret()

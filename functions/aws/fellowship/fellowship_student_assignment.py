@@ -358,7 +358,18 @@ NODE_ENV=development
 
 
 def generate_html_response(user_info, env_content='', error_message=None, status_lambda_url=None):
-    """Generate LOTR-themed HTML response with student assignment information"""
+    """Generate LOTR-themed HTML response with student assignment information.
+    
+    Section order (matches Testus Patronus for consistency):
+    1. Header (links, title, subtitle)
+    2. "Get New Student" button (always visible)
+    3. Character Card
+    4. Instance/Service Links (with status polling)
+    5. Credentials
+    6. LLM Configs  
+    7. .ENV Configuration (Fellowship-specific)
+    8. Footer
+    """
     if error_message:
         return f"""<!DOCTYPE html>
 <html lang="en">
@@ -396,6 +407,7 @@ def generate_html_response(user_info, env_content='', error_message=None, status
     gitea_url = user_info.get('gitea_url', '#')
     llm_configs = user_info.get('llm_configs', [])
     instance_error = user_info.get('instance_error', '')
+    provisioning_status = user_info.get('provisioning_status', 'unknown')
     
     # Local references to module-level link constants
     docs_link = DOCS_LINK
@@ -446,31 +458,44 @@ def generate_html_response(user_info, env_content='', error_message=None, status
                     </div>
                 </div>"""
 
-    sut_section = ""
-    if instance_id:
-        sut_section = f"""
-                <div class="section-box">
-                    <h3 class="section-title">🏰 System Under Test</h3>
-                    <div class="cred-row">
-                        <span class="cred-label">Instance</span>
-                        <span class="cred-value mono">{instance_id}</span>
-                    </div>
-                    <div class="cred-row">
-                        <span class="cred-label">SUT URL</span>
-                        <span class="cred-value"><a href="{sut_url}" target="_blank" class="gold-link">{sut_url}</a></span>
-                        <button class="copy-btn" onclick="copy('{sut_url}')">📋</button>
-                    </div>
-                </div>"""
+    # ── Instance/Service Links Section ──────────────────────────────────────
+    # NEW: Reorganized for better UX (provisioning-aware)
+    instance_section = ""
+    if instance_id and instance_id != 'PENDING':
+        # Links section (with status polling)
+        instance_section = f"""
+        <div class="section-box">
+            <h3 class="section-title">🏰 Instance & Services</h3>
+            <div class="service-links">
+                <div class="service-link-item">
+                    <span class="service-label">SUT</span>
+                    <span class="loading-status"><span id="sut-spinner" class="spinner" style="display:inline-block; width:16px; height:16px; border:2px solid #d4af37; border-top-color:transparent; border-radius:50%; animation:spin 0.8s linear infinite; vertical-align:middle; margin-right:8px;"></span><span id="sut-status">Checking...</span></span>
+                    <a id="sut-link" class="disabled-link" href="#" target="_blank">{sut_url}</a>
+                </div>
+                <div class="service-link-item">
+                    <span class="service-label">Jenkins</span>
+                    <span class="loading-status"><span id="jenkins-spinner" class="spinner" style="display:inline-block; width:16px; height:16px; border:2px solid #d4af37; border-top-color:transparent; border-radius:50%; animation:spin 0.8s linear infinite; vertical-align:middle; margin-right:8px;"></span><span id="jenkins-status">{provisioning_status if provisioning_status != 'success' else 'Checking...'}</span></span>
+                    <a id="jenkins-link" class="disabled-link" href="#" target="_blank">{jenkins_url}</a>
+                </div>
+                <div class="service-link-item">
+                    <span class="service-label">Gitea</span>
+                    <span class="loading-status"><span id="gitea-spinner" class="spinner" style="display:inline-block; width:16px; height:16px; border:2px solid #d4af37; border-top-color:transparent; border-radius:50%; animation:spin 0.8s linear infinite; vertical-align:middle; margin-right:8px;"></span><span id="gitea-status">{provisioning_status if provisioning_status != 'success' else 'Checking...'}</span></span>
+                    <a id="gitea-link" class="disabled-link" href="#" target="_blank">{gitea_url}</a>
+                </div>
+            </div>
+        </div>"""
     elif instance_error:
-        sut_section = f"""<div class="warning-box">⚠️ Unable to assign an instance at this time: {instance_error}</div>"""
+        instance_section = f"""<div class="warning-box">⚠️ Unable to assign an instance at this time: {instance_error}</div>"""
+    else:
+        instance_section = """<div class="warning-box">⏳ Instance is being assigned. Please wait...</div>"""
 
     llm_section = ""
     if llm_rows:
         llm_section = f"""
-                <div class="section-box">
-                    <h3 class="section-title">🤖 Azure LLM Configuration</h3>
-                    <div class="config-grid">{llm_rows}</div>
-                </div>"""
+        <div class="section-box">
+            <h3 class="section-title">🤖 Azure LLM Configuration</h3>
+            <div class="config-grid">{llm_rows}</div>
+        </div>"""
 
     # Build .env section
     env_section = ""
@@ -478,14 +503,14 @@ def generate_html_response(user_info, env_content='', error_message=None, status
         # Escape for HTML display
         env_display = env_content.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
         env_section = f"""
-                <div class="env-section">
-                    <div class="env-section-title">📝 Environment Configuration (.env)</div>
-                    <div class="env-preview">{env_display}</div>
-                    <div class="env-actions">
-                        <button class="env-btn env-btn-download" onclick="downloadEnv()">⬇️ Download .env</button>
-                        <button class="env-btn env-btn-copy" onclick="copyEnv()">📋 Copy to Clipboard</button>
-                    </div>
-                </div>"""
+        <div class="env-section" style="margin-top: 24px;">
+            <div class="env-section-title">📝 Environment Configuration (.env)</div>
+            <div class="env-preview">{env_display}</div>
+            <div class="env-actions">
+                <button class="env-btn env-btn-download" onclick="downloadEnv()">⬇️ Download .env</button>
+                <button class="env-btn env-btn-copy" onclick="copyEnv()">📋 Copy to Clipboard</button>
+            </div>
+        </div>"""
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -496,12 +521,12 @@ def generate_html_response(user_info, env_content='', error_message=None, status
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <style>
         :root {{
-            --gold:   #d4af37;
+            --gold: #d4af37;
             --silver: #c0c0c0;
-            --dark:   #1a0000;
-            --red:    #8b0000;
-            --cream:  #f5f1e8;
-            --white:  #ffffff;
+            --dark: #1a0000;
+            --red: #8b0000;
+            --cream: #f5f1e8;
+            --white: #ffffff;
         }}
         * {{ margin: 0; padding: 0; box-sizing: border-box; }}
         body {{
@@ -512,13 +537,11 @@ def generate_html_response(user_info, env_content='', error_message=None, status
             padding: 20px;
         }}
 
-        /* ── Page wrapper ── */
         .page {{
             max-width: 980px;
             margin: 32px auto;
         }}
 
-        /* ── Hero banner ── */
         .hero {{
             background: linear-gradient(160deg, var(--dark) 0%, #2a0000 50%, var(--red) 100%);
             border: 2px solid var(--gold);
@@ -551,7 +574,6 @@ def generate_html_response(user_info, env_content='', error_message=None, status
             opacity: 0.4; margin: 18px auto; width: 60%;
         }}
 
-        /* ── Character card ── */
         .char-card {{
             background: linear-gradient(135deg, #1a0000 0%, #250000 60%, #1a0005 100%);
             border: 1px solid var(--gold);
@@ -597,7 +619,6 @@ def generate_html_response(user_info, env_content='', error_message=None, status
             display: inline-block;
         }}
 
-        /* ── Main content ── */
         .card {{
             background: var(--cream);
             border: 1px solid #cbbfa0;
@@ -608,7 +629,6 @@ def generate_html_response(user_info, env_content='', error_message=None, status
             border-radius: 0 0 8px 8px;
         }}
 
-        /* ── Section boxes ── */
         .section-box {{
             background: var(--white);
             border: 1.5px solid #d4af37;
@@ -624,7 +644,6 @@ def generate_html_response(user_info, env_content='', error_message=None, status
             border-bottom: 2px solid var(--gold);
         }}
 
-        /* ── Credential rows ── */
         .cred-row {{
             display: flex;
             align-items: center;
@@ -653,7 +672,6 @@ def generate_html_response(user_info, env_content='', error_message=None, status
             font-size: 0.82rem;
         }}
 
-        /* ── Copy button ── */
         .copy-btn {{
             background: var(--gold);
             color: var(--dark);
@@ -668,7 +686,6 @@ def generate_html_response(user_info, env_content='', error_message=None, status
         }}
         .copy-btn:hover {{ background: var(--silver); }}
 
-        /* ── .env download section ── */
         .env-section {{
             background: #0e0a00;
             border: 1.5px solid var(--gold);
@@ -697,7 +714,6 @@ def generate_html_response(user_info, env_content='', error_message=None, status
             margin-bottom: 16px;
             line-height: 1.5;
         }}
-        .env-preview .comment {{ color: #6a9955; }}
         .env-actions {{ display: flex; gap: 12px; flex-wrap: wrap; }}
         .env-btn {{
             padding: 9px 20px;
@@ -721,33 +737,50 @@ def generate_html_response(user_info, env_content='', error_message=None, status
         }}
         .env-btn-copy:hover {{ background: var(--gold); color: var(--dark); }}
 
-        /* ── Links section ── */
-        .links-grid {{
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-            gap: 12px;
+        .service-links {{
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
         }}
-        .link-card {{
-            background: var(--white);
-            border: 1.5px solid #d4af37;
-            border-radius: 6px;
-            padding: 14px 16px;
+        .service-link-item {{
             display: flex;
             align-items: center;
             gap: 12px;
+            padding: 12px;
+            background: #fdfaf4;
+            border-radius: 4px;
         }}
-        .link-icon {{ font-size: 1.4rem; flex-shrink: 0; }}
-        .link-text {{ flex: 1; }}
-        .link-text a {{ color: var(--red); text-decoration: none; font-weight: bold; font-size: 0.88rem; word-break: break-all; }}
-        .link-text a:hover {{ text-decoration: underline; }}
-        .link-label {{ color: #888; font-size: 0.78rem; }}
+        .service-label {{
+            font-weight: bold;
+            color: var(--red);
+            min-width: 80px;
+            font-size: 0.9rem;
+        }}
+        .loading-status {{
+            flex: 1;
+            font-size: 0.85rem;
+            color: #888;
+            min-width: 120px;
+        }}
+        .disabled-link {{
+            color: #ccc;
+            text-decoration: none;
+            cursor: not-allowed;
+            opacity: 0.5;
+            pointer-events: none;
+        }}
+        .disabled-link.ready {{
+            color: var(--red);
+            cursor: pointer;
+            text-decoration: underline;
+            opacity: 1;
+            pointer-events: auto;
+        }}
 
-        /* ── LLM config grid ── */
         .config-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; }}
         .config-card {{ background: var(--white); border: 1px solid var(--gold); border-radius: 6px; padding: 14px; }}
         .config-card-title {{ font-weight: bold; color: var(--red); margin-bottom: 10px; font-size: 0.95rem; }}
 
-        /* ── Warning box ── */
         .warning-box {{
             background: #fff8e1;
             border-left: 4px solid var(--red);
@@ -758,7 +791,6 @@ def generate_html_response(user_info, env_content='', error_message=None, status
             font-size: 0.9rem;
         }}
 
-        /* ── Footer ── */
         .footer {{
             background: var(--dark);
             border: 1px solid var(--gold);
@@ -785,11 +817,6 @@ def generate_html_response(user_info, env_content='', error_message=None, status
         }}
         .footer .reset-btn:hover {{ background: rgba(212,175,55,0.1); }}
 
-        /* ── Gold link ── */
-        .gold-link {{ color: var(--red); font-weight: bold; text-decoration: none; }}
-        .gold-link:hover {{ text-decoration: underline; }}
-
-        /* ── Toast ── */
         #toast {{
             position: fixed; top: 24px; right: 24px;
             background: var(--gold); color: var(--dark);
@@ -800,17 +827,37 @@ def generate_html_response(user_info, env_content='', error_message=None, status
             animation: fadeIn 0.3s ease;
         }}
         @keyframes fadeIn {{ from {{ opacity:0; transform:translateY(-10px); }} to {{ opacity:1; transform:translateY(0); }} }}
+        @keyframes spin {{ from {{ transform:rotate(0deg); }} to {{ transform:rotate(360deg); }} }}
 
-        /* ── Responsive ── */
         @media (max-width: 640px) {{
             .char-card {{ flex-direction: column; text-align: center; }}
             .hero-title {{ font-size: 1.6rem; }}
-            .cred-row {{ flex-wrap: wrap; }}
+            .service-link-item {{ flex-wrap: wrap; }}
         }}
     </style>
     <script>
         var ENV_CONTENT = `{env_content_js}`;
-        var STUDENT_ID  = '{student_name}';
+        var STUDENT_ID = '{student_name}';
+        var STATUS_LAMBDA_URL = '{status_lambda_url}' || '';
+        var PROVISIONING_STATUS = '{provisioning_status}';
+
+        function setCookie(name, value, days) {{
+            var d = new Date();
+            d.setTime(d.getTime() + (days*24*60*60*1000));
+            var expires = "expires=" + d.toUTCString();
+            document.cookie = name + "=" + encodeURIComponent(value) + ";" + expires + ";path=/";
+        }}
+
+        function getCookie(name) {{
+            var nameEQ = name + "=";
+            var ca = document.cookie.split(';');
+            for(var i=0;i < ca.length;i++) {{
+                var c = ca[i];
+                while (c.charAt(0)==' ') c = c.substring(1,c.length);
+                if (c.indexOf(nameEQ) == 0) return decodeURIComponent(c.substring(nameEQ.length,c.length));
+            }}
+            return null;
+        }}
 
         function copy(text) {{
             navigator.clipboard.writeText(text).then(function() {{
@@ -824,7 +871,7 @@ def generate_html_response(user_info, env_content='', error_message=None, status
             navigator.clipboard.writeText(ENV_CONTENT).then(function() {{
                 showToast('Config copied to clipboard!');
             }}).catch(function() {{
-                showToast('Copy failed — please select text in the preview above.');
+                showToast('Copy failed — please select text in preview.');
             }});
         }}
 
@@ -848,11 +895,99 @@ def generate_html_response(user_info, env_content='', error_message=None, status
         }}
 
         function getNewStudent() {{
-            document.cookie = "fellowship_student=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+            document.cookie = "fellowship_student_name=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
             document.cookie = "fellowship_instance_id=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
-            document.cookie = "fellowship_sut_url=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
+            document.cookie = "fellowship_public_ip=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;";
             window.location.href = '/';
         }}
+
+        // Status polling (matches testus_patronus pattern)
+        var pollCount = 0;
+        var maxPolls = 60;  // 5 minutes with 5s interval
+
+        function pollStatus() {{
+            if(!STATUS_LAMBDA_URL || !STUDENT_ID) {{
+                console.log('[Fellowship] Status Lambda URL or student ID not configured');
+                return;
+            }}
+
+            fetch(STATUS_LAMBDA_URL + '?student_name=' + encodeURIComponent(STUDENT_ID))
+                .then(res => res.json())
+                .then(data => {{
+                    pollCount++;
+                    
+                    // Check if reassignment needed
+                    if (data.reassign_needed) {{
+                        console.log('[Fellowship] Instance deleted/terminated, triggering reassignment. Reason:', data.reason);
+                        document.getElementById('sut-status').textContent = 'Instance reassigning...';
+                        setCookie('fellowship_student_name', '', -1);
+                        setCookie('fellowship_instance_id', '', -1);
+                        setCookie('fellowship_public_ip', '', -1);
+                        setTimeout(() => {{
+                            window.location.href = window.location.origin + window.location.pathname;
+                        }}, 1500);
+                        return;
+                    }}
+
+                    // Check provisioning status
+                    if (data.provisioning_in_progress) {{
+                        document.getElementById('jenkins-status').textContent = data.message || 'Provisioning...';
+                        document.getElementById('gitea-status').textContent = data.message || 'Provisioning...';
+                        if (pollCount < maxPolls) setTimeout(pollStatus, 5000);
+                        return;
+                    }}
+
+                    // If ready: activate links
+                    if (data.ready) {{
+                        if (data.sut_url) {{
+                            document.getElementById('sut-link').href = data.sut_url;
+                            document.getElementById('sut-link').classList.add('ready');
+                            document.getElementById('sut-link').classList.remove('disabled-link');
+                            document.getElementById('sut-spinner').style.display = 'none';
+                            document.getElementById('sut-status').textContent = 'Ready';
+                        }}
+                        if (data.jenkins_url) {{
+                            document.getElementById('jenkins-link').href = data.jenkins_url;
+                            document.getElementById('jenkins-link').classList.add('ready');
+                            document.getElementById('jenkins-link').classList.remove('disabled-link');
+                            document.getElementById('jenkins-spinner').style.display = 'none';
+                            document.getElementById('jenkins-status').textContent = 'Ready';
+                        }}
+                        if (data.gitea_url) {{
+                            document.getElementById('gitea-link').href = data.gitea_url;
+                            document.getElementById('gitea-link').classList.add('ready');
+                            document.getElementById('gitea-link').classList.remove('disabled-link');
+                            document.getElementById('gitea-spinner').style.display = 'none';
+                            document.getElementById('gitea-status').textContent = 'Ready';
+                        }}
+                        setCookie('fellowship_public_ip', data.ip || '', 7);
+                        console.log('[Fellowship] All services ready');
+                    }} else {{
+                        // Not ready, keep polling
+                        if (pollCount < maxPolls) {{
+                            setTimeout(pollStatus, 5000);
+                        }} else {{
+                            document.getElementById('sut-status').textContent = 'Refresh if taking too long';
+                        }}
+                    }}
+                }})
+                .catch(err => {{
+                    console.error('[Fellowship] Error polling status:', err);
+                    if (pollCount < maxPolls) setTimeout(pollStatus, 5000);
+                }});
+        }}
+
+        // Start polling immediately on page load
+        document.addEventListener('DOMContentLoaded', function() {{
+            // Set cookies for session persistence
+            setCookie('fellowship_student_name', STUDENT_ID, 7);
+            var instanceId = "{instance_id}";
+            if (instanceId && instanceId !== 'PENDING') {{
+                setCookie('fellowship_instance_id', instanceId, 7);
+            }}
+            // Start polling
+            pollStatus();
+        }});
     </script>
 </head>
 <body>
@@ -883,6 +1018,14 @@ def generate_html_response(user_info, env_content='', error_message=None, status
     <!-- ── Content ── -->
     <div class="card">
 
+        <!-- Get New Student button (always visible) -->
+        <div style="text-align: center; margin-bottom: 24px;">
+            <button class="footer reset-btn" onclick="getNewStudent()" style="margin-top: 0;">Request New Assignment</button>
+        </div>
+
+        <!-- Instance & Services (reorganized for polling) -->
+        {instance_section}
+
         <!-- Credentials -->
         <div class="section-box">
             <h3 class="section-title">⚔️ Your Credentials</h3>
@@ -903,48 +1046,9 @@ def generate_html_response(user_info, env_content='', error_message=None, status
             </div>
         </div>
 
-        {env_section}
-
-        {sut_section}
-
-        <!-- Links -->
-        <div class="section-box">
-            <h3 class="section-title">🏹 Fellowship Resources</h3>
-            <div class="links-grid">
-                <div class="link-card">
-                    <div class="link-icon">⚙️</div>
-                    <div class="link-text">
-                        <div class="link-label">Jenkins Folder</div>
-                        <a href="{jenkins_url}" target="_blank">{jenkins_url}</a>
-                    </div>
-                    <button class="copy-btn" onclick="copy('{jenkins_url}')">📋</button>
-                </div>
-                <div class="link-card">
-                    <div class="link-icon">📚</div>
-                    <div class="link-text">
-                        <div class="link-label">Gitea Repository</div>
-                        <a href="{gitea_url}" target="_blank">{gitea_url}</a>
-                    </div>
-                    <button class="copy-btn" onclick="copy('{gitea_url}')">📋</button>
-                </div>
-            </div>
-        </div>
-
         {llm_section}
 
-        <!-- .env download -->
-        <div class="env-section">
-            <div class="env-section-title">📜 Master Configuration (.env)</div>
-            <div class="env-preview" id="envPreview">{env_content}</div>
-            <div class="env-actions">
-                <button class="env-btn env-btn-download" onclick="downloadEnv()">
-                    ⬇ Download .env
-                </button>
-                <button class="env-btn env-btn-copy" onclick="copyEnv()">
-                    📋 Copy to Clipboard
-                </button>
-            </div>
-        </div>
+        {env_section}
 
     </div><!-- /card -->
 
@@ -955,7 +1059,6 @@ def generate_html_response(user_info, env_content='', error_message=None, status
             <a href="{docs_link}" target="_blank">📖 Fellowship Documentation</a> · 
             <a href="{testingfantasy_link}" target="_blank">🌐 Testing Fantasy</a>
         </p>
-        <button class="reset-btn" onclick="getNewStudent()">Request New Assignment</button>
     </div>
 
 </div><!-- /page -->
@@ -1106,7 +1209,7 @@ def lambda_handler(event, context):
         # Parse cookies
         cookie_header = headers.get('cookie') or headers.get('Cookie') or ''
         cookies = parse_cookies(cookie_header)
-        existing_student = cookies.get('fellowship_student')
+        existing_student = cookies.get('fellowship_student_name')  # NEW: fellowship_student_name
         
         logger.info(f"Existing student cookie: {existing_student}")
         
@@ -1124,11 +1227,30 @@ def lambda_handler(event, context):
                 
                 if response.get('Items'):
                     item = response['Items'][0]
+                    instance_id = item.get('instance_id', '')
+                    
+                    # ── Check if instance is still pending (CRITICAL FIX 2) ─────────────────────
+                    # If instance_id is 'PENDING' or empty, user must wait for instance
+                    if instance_id in ('PENDING', '', None):
+                        logger.warning(f"Existing student {existing_student} still waiting for instance assignment")
+                        return {
+                            'statusCode': 503,
+                            'headers': {
+                                'Content-Type': 'text/html; charset=utf-8',
+                                'Retry-After': '30'
+                            },
+                            'body': generate_html_response(
+                                {},
+                                error_message=f"Your instance is being provisioned. Please try again in 30 seconds.",
+                                status_lambda_url=STATUS_LAMBDA_URL
+                            )
+                        }
+                    
                     user_info = {
                         'student_name': existing_student,
                         'password': item.get('password', 'unknown'),
-                        'instance_id': item.get('instance_id'),
-                        'sut_url': item.get('sut_url', item.get('instance_id', '')),
+                        'instance_id': instance_id,
+                        'sut_url': item.get('sut_url', instance_id),
                         'created_at': item.get('created_at', '')
                     }
                     
@@ -1162,6 +1284,24 @@ def lambda_handler(event, context):
                     'body': generate_html_response(
                         {}, 
                         error_message=f"Failed to assign student: {assign_result.get('error')}",
+                        status_lambda_url=STATUS_LAMBDA_URL
+                    )
+                }
+            
+            # ── Check if instance is available (CRITICAL FIX) ──────────────────────────────
+            # When instance_available=False, NO resources are provisioned. Return minimal response.
+            if assign_result.get('instance_available') == False:
+                retry_after = assign_result.get('retry_after_seconds', 30)
+                logger.warning(f"No instances available for student assignment, returning no-instances panel")
+                return {
+                    'statusCode': 503,
+                    'headers': {
+                        'Content-Type': 'text/html; charset=utf-8',
+                        'Retry-After': str(retry_after)
+                    },
+                    'body': generate_html_response(
+                        {}, 
+                        error_message=f"No student instances are currently available. Please try again in {retry_after} seconds.",
                         status_lambda_url=STATUS_LAMBDA_URL
                     )
                 }
