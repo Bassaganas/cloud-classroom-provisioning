@@ -9,6 +9,7 @@ import socket
 import urllib.request
 import urllib.error
 from botocore.exceptions import ClientError
+from boto3.dynamodb.conditions import Attr
 from datetime import datetime, timezone, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
@@ -4354,7 +4355,7 @@ def generate_student_name(workshop_name: str) -> str:
         # Scan DynamoDB for existing student assignments to find highest number
         max_number = 0
         paginator_kwargs = {
-            'FilterExpression': boto3.dynamodb.conditions.Attr('student_name').begins_with(f"{workshop}-student-")
+            'FilterExpression': Attr('student_name').begins_with(f"{workshop}-student-")
         }
         response = assignments_table.scan(**paginator_kwargs)
         
