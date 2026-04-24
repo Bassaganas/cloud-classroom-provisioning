@@ -36,23 +36,46 @@ import requests
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
-# Environment variables
+# ════════════════════════════════════════════════════════════════════════════════
+# ENVIRONMENT CONFIGURATION — Master Configuration for Fellowship Student Assignment
+# ════════════════════════════════════════════════════════════════════════════════
+
+# ─── Regional & Contextualization ──────────────────────────────────────────────
 REGION = os.environ.get('AWS_DEFAULT_REGION', os.environ.get('AWS_REGION', 'eu-west-3'))
 WORKSHOP_NAME = os.environ.get('WORKSHOP_NAME', 'fellowship')
 ENVIRONMENT = os.environ.get('ENVIRONMENT', 'dev')
+
+# ─── Inter-Lambda Communication ────────────────────────────────────────────────
+# Instance manager endpoint (classroom_instance_manager Lambda) for student assignment
+INSTANCE_MANAGER_URL = os.environ.get('INSTANCE_MANAGER_URL', '')
+INSTANCE_MANAGER_PASSWORD_SECRET = os.environ.get('INSTANCE_MANAGER_PASSWORD_SECRET', '')  # Cached in _password_cache
+
+# ─── Fellowship Service Domains ────────────────────────────────────────────────
+# Used to generate URLs returned to frontend after successful assignment
+FELLOWSHIP_SUT_DOMAIN = os.environ.get('FELLOWSHIP_SUT_DOMAIN', 'sut.fellowship.testingfantasy.com')
+FELLOWSHIP_JENKINS_DOMAIN = os.environ.get('FELLOWSHIP_JENKINS_DOMAIN', 'jenkins.fellowship.testingfantasy.com')
+FELLOWSHIP_GITEA_DOMAIN = os.environ.get('FELLOWSHIP_GITEA_DOMAIN', 'gitea.fellowship.testingfantasy.com')
+FELLOWSHIP_GITEA_ORG = os.environ.get('FELLOWSHIP_GITEA_ORG', 'fellowship-org')
+
+# ─── External Documentation & Community Links ──────────────────────────────────
+# Links displayed in HTML response for student reference
+DOCS_LINK = os.environ.get('DOCS_LINK', 'https://docs.fellowship.testingfantasy.com/')
+TESTINGFANTASY_LINK = os.environ.get('TESTINGFANTASY_LINK', 'https://www.testingfantasy.com/')
+
+# ─── Status & Monitoring ──────────────────────────────────────────────────────
 STATUS_LAMBDA_URL = os.environ.get('STATUS_LAMBDA_URL', '')
+
+# ─── Security & Feature Flags ──────────────────────────────────────────────────
 DESTROY_KEY = os.environ.get('DESTROY_KEY', 'default_destroy_key')
 SKIP_IAM_USER_CREATION = os.environ.get('SKIP_IAM_USER_CREATION', 'false').lower() == 'true'
-INSTANCE_MANAGER_URL = os.environ.get('INSTANCE_MANAGER_URL', '')  # URL to the instance_manager Lambda endpoint
-INSTANCE_MANAGER_PASSWORD_SECRET = os.environ.get('INSTANCE_MANAGER_PASSWORD_SECRET', '')  # Secret name in AWS Secrets Manager
 
-logger.info("=" * 60)
+logger.info("=" * 80)
 logger.info("Module fellowship_student_assignment.py loaded")
-logger.info(f"REGION: {REGION}")
-logger.info(f"WORKSHOP_NAME: {WORKSHOP_NAME}")
-logger.info(f"ENVIRONMENT: {ENVIRONMENT}")
-logger.info(f"INSTANCE_MANAGER_PASSWORD_SECRET: {INSTANCE_MANAGER_PASSWORD_SECRET if INSTANCE_MANAGER_PASSWORD_SECRET else 'Not configured'}")
-logger.info("=" * 60)
+logger.info(f"REGION: {REGION} | WORKSHOP: {WORKSHOP_NAME} | ENVIRONMENT: {ENVIRONMENT}")
+logger.info(f"Instance Manager: {INSTANCE_MANAGER_URL if INSTANCE_MANAGER_URL else 'Not configured'}")
+logger.info(f"Auth Secret: {INSTANCE_MANAGER_PASSWORD_SECRET if INSTANCE_MANAGER_PASSWORD_SECRET else 'Not configured'}")
+logger.info(f"Docs: {DOCS_LINK} | Community: {TESTINGFANTASY_LINK}")
+logger.info("=" * 80)
 
 # Initialize AWS clients
 try:
@@ -68,15 +91,14 @@ except Exception as e:
 # Password cache for Secrets Manager
 _password_cache = None
 
-# Fellowship domain configuration
+# ─── Lookup Maps for URL Generation ───────────────────────────────────────────
 FELLOWSHIP_DOMAINS = {
-    'sut': os.environ.get('FELLOWSHIP_SUT_DOMAIN', 'sut.fellowship.testingfantasy.com'),
-    'jenkins': os.environ.get('FELLOWSHIP_JENKINS_DOMAIN', 'jenkins.fellowship.testingfantasy.com'),
-    'gitea': os.environ.get('FELLOWSHIP_GITEA_DOMAIN', 'gitea.fellowship.testingfantasy.com'),
-    'gitea_api': os.environ.get('FELLOWSHIP_GITEA_API_DOMAIN', 'gitea.fellowship.testingfantasy.com'),
+    'sut': FELLOWSHIP_SUT_DOMAIN,
+    'jenkins': FELLOWSHIP_JENKINS_DOMAIN,
+    'gitea': FELLOWSHIP_GITEA_DOMAIN,
+    'gitea_api': FELLOWSHIP_GITEA_DOMAIN,
 }
-
-GITEA_ORG = os.environ.get('FELLOWSHIP_GITEA_ORG', 'fellowship-org')
+GITEA_ORG = FELLOWSHIP_GITEA_ORG
 
 
 # ─── Secrets Management ─────────────────────────────────────────────────────────
@@ -187,15 +209,17 @@ def generate_fellowship_urls(student_name, sut_url):
     }
 
 
-# Environment variable names for secrets passed into this Lambda
+# ─── Azure LLM & Service Credentials (Shared Classroom Config) ────────────────
+# MASTER ENV CONFIGURATION — All variables passed to student .env file
+# If a student has per-student LLM config in DynamoDB, it overrides these
 _AZURE_OPENAI_ENDPOINT = os.environ.get('AZURE_OPENAI_ENDPOINT', '')
 _AZURE_OPENAI_API_KEY = os.environ.get('AZURE_OPENAI_API_KEY', '')
 _AZURE_OPENAI_DEPLOYMENT = os.environ.get('AZURE_OPENAI_DEPLOYMENT', 'gpt-4o')
 _AZURE_OPENAI_API_VERSION = os.environ.get('AZURE_OPENAI_API_VERSION', '2024-12-01-preview')
-_SQS_QUEUE_URL = os.environ.get('SQS_QUEUE_URL', '')
-_MCP_TOKEN = os.environ.get('MCP_TOKEN', '')
-_MAILDOG_API_URL = os.environ.get('MAILDOG_API_URL', '')
-_MAILDOG_TOKEN = os.environ.get('MAILDOG_TOKEN', '')
+_SQS_QUEUE_URL = os.environ.get('SQS_QUEUE_URL', '')  # Event sourcing / progress tracking
+_MCP_TOKEN = os.environ.get('MCP_TOKEN', '')  # Model Context Protocol token
+_MAILDOG_API_URL = os.environ.get('MAILDOG_API_URL', '')  # Email service
+_MAILDOG_TOKEN = os.environ.get('MAILDOG_TOKEN', '')  # Email service credentials
 
 
 def generate_env_content(user_info):
@@ -363,6 +387,10 @@ def generate_html_response(user_info, env_content='', error_message=None, status
     gitea_url = user_info.get('gitea_url', '#')
     llm_configs = user_info.get('llm_configs', [])
     instance_error = user_info.get('instance_error', '')
+    
+    # Local references to module-level link constants
+    docs_link = DOCS_LINK
+    testingfantasy_link = TESTINGFANTASY_LINK
 
     # Get character lore from user_info (comes from instance_manager endpoint)
     lore = user_info.get('character_lore', {})
@@ -914,7 +942,10 @@ def generate_html_response(user_info, env_content='', error_message=None, status
     <!-- ── Footer ── -->
     <div class="footer">
         <p>May your tests be true and your code be strong.</p>
-        <p>Questions? Visit the <a href="https://docs.testingfantasy.com" target="_blank">Fellowship Docs</a></p>
+        <p>
+            <a href="{docs_link}" target="_blank">📖 Fellowship Documentation</a> · 
+            <a href="{testingfantasy_link}" target="_blank">🌐 Testing Fantasy</a>
+        </p>
         <button class="reset-btn" onclick="getNewStudent()">Request New Assignment</button>
     </div>
 
@@ -1127,6 +1158,10 @@ def lambda_handler(event, context):
                 }
             
             # Parse response from instance manager
+            # Determine provisioning status: 'queued' for shared-core provision, 'success' otherwise
+            shared_core_prov = assign_result.get('shared_core_provision')
+            provisioning_status = 'queued' if shared_core_prov else 'success'
+            
             user_info = {
                 'student_name': assign_result.get('student_name', ''),
                 'password': assign_result.get('password', ''),
@@ -1135,7 +1170,8 @@ def lambda_handler(event, context):
                 'jenkins_url': assign_result.get('jenkins_url', ''),
                 'gitea_url': assign_result.get('gitea_url', ''),
                 'llm_configs': assign_result.get('llm_configs', []),
-                'shared_core_provision': assign_result.get('shared_core_provision', None),
+                'shared_core_provision': shared_core_prov,
+                'provisioning_status': provisioning_status,
                 'created_at': assign_result.get('created_at', datetime.utcnow().isoformat())
             }
             
@@ -1153,8 +1189,9 @@ def lambda_handler(event, context):
                         'status': 'active',
                         'assigned_at': user_info['created_at'],
                         'workshop': WORKSHOP_NAME,
+                        'provisioning_status': provisioning_status,
                     })
-                    logger.info(f"Stored assignment for {user_info['student_name']} in fellowship DynamoDB")
+                    logger.info(f"Stored assignment for {user_info['student_name']} in fellowship DynamoDB (provisioning_status: {provisioning_status})")
                 except Exception as ddb_err:
                     logger.warning(f"Could not store assignment in fellowship DynamoDB (non-fatal): {ddb_err}")
             

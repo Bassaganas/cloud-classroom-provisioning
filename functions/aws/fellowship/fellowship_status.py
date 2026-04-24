@@ -302,13 +302,43 @@ def lambda_handler(event, context):
                 except Exception as e:
                     logger.error(f"Failed to update status to 'ready' for {instance_id}: {str(e)}")
             
+            # ─── CHECK PROVISIONING STATUS ────────────────────────────────────────────
+            # Only return links (jenkins_url, gitea_url) if provisioning has completed
+            provisioning_status = item.get('provisioning_status', 'unknown')
+            logger.info(f"Provisioning status for {student_name}: {provisioning_status}")
+            
+            if provisioning_status not in ['success', 'completed']:
+                # Provisioning still in progress or failed; return provisioning_in_progress flag
+                logger.info(f"Provisioning not complete for {student_name} (status: {provisioning_status})")
+                return {
+                    'statusCode': 200,
+                    'headers': {'Content-Type': 'application/json'},
+                    'body': json.dumps({
+                        'ready': False,
+                        'provisioning_in_progress': True,
+                        'provisioning_status': provisioning_status,
+                        'reason': 'provisioning_in_progress',
+                        'message': 'Jenkins folder and Git repository are being created. Please wait...'
+                    })
+                }
+            
+            # Provisioning complete; return all URLs
             # Get SUT URL from assignment or construct it
             sut_url = item.get('sut_url', f"https://sut-{student_name}.testingfantasy.com")
+            jenkins_url = item.get('jenkins_url', f"https://jenkins.fellowship.testingfantasy.com/job/{student_name}/")
+            gitea_url = item.get('gitea_url', f"https://gitea.fellowship.testingfantasy.com/fellowship-org/fellowship-sut-{student_name}")
             
             return {
                 'statusCode': 200,
                 'headers': {'Content-Type': 'application/json'},
-                'body': json.dumps({'ready': True, 'ip': instance.public_ip_address, 'sut_url': sut_url})
+                'body': json.dumps({
+                    'ready': True,
+                    'ip': instance.public_ip_address,
+                    'sut_url': sut_url,
+                    'jenkins_url': jenkins_url,
+                    'gitea_url': gitea_url,
+                    'provisioning_status': provisioning_status
+                })
             }
         else:
             # If instance is not ready but was previously marked as ready, update status
