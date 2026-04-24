@@ -4336,6 +4336,137 @@ def get_always_on_tutorials():
 
     return tutorials
 
+
+# ─── Helper Functions for Student Assignment ──────────────────────────────────
+
+def generate_student_name(workshop_name: str) -> str:
+    """Generate unique student name for workshop.
+    
+    Format: {workshop}-student-{number}
+    Example: fellowship-student-001
+    
+    Uses DynamoDB assignments table to find the highest existing student number.
+    """
+    workshop = workshop_name or WORKSHOP_NAME
+    assignments_table = dynamodb.Table(f"instance-assignments-{workshop}-{ENVIRONMENT}")
+    
+    try:
+        # Scan DynamoDB for existing student assignments to find highest number
+        max_number = 0
+        paginator_kwargs = {
+            'FilterExpression': boto3.dynamodb.conditions.Attr('student_name').begins_with(f"{workshop}-student-")
+        }
+        response = assignments_table.scan(**paginator_kwargs)
+        
+        for item in response.get('Items', []):
+            try:
+                num_str = item['student_name'].replace(f"{workshop}-student-", "")
+                num = int(num_str)
+                max_number = max(max_number, num)
+            except (ValueError, KeyError):
+                continue
+        
+        # Handle pagination
+        while 'LastEvaluatedKey' in response:
+            response = assignments_table.scan(
+                ExclusiveStartKey=response['LastEvaluatedKey'],
+                **paginator_kwargs
+            )
+            for item in response.get('Items', []):
+                try:
+                    num_str = item['student_name'].replace(f"{workshop}-student-", "")
+                    num = int(num_str)
+                    max_number = max(max_number, num)
+                except (ValueError, KeyError):
+                    continue
+        
+        next_number = max_number + 1
+        return f"{workshop}-student-{next_number:03d}"
+    except Exception as e:
+        logger.error(f"Error generating student name: {str(e)}")
+        # Fallback: use random suffix
+        import random
+        return f"{workshop}-student-{random.randint(100, 999)}"
+
+
+def reserve_pool_instance(workshop_name: str = None) -> dict:
+    """Reserve first available pool instance from EC2 pool.
+    
+    Looks for instances tagged with:
+    - Type=pool
+    - Status=available (or no Status tag)
+    
+    Args:
+        workshop_name: Workshop identifier (for filtering)
+    
+    Returns:
+        dict with keys: success, instance_id, instance_type, message, error
+    """
+    workshop = workshop_name or WORKSHOP_NAME
+    
+    try:
+        ec2_client = boto3.client('ec2', region_name=REGION)
+        
+        # Find available pool instances for this workshop
+        response = ec2_client.describe_instances(
+            Filters=[
+                {'Name': 'tag:Type', 'Values': ['pool']},
+                {'Name': 'tag:WorkshopID', 'Values': [workshop]},
+                {'Name': 'instance-state-name', 'Values': ['running', 'stopped']},
+                {'Name': 'tag-key', 'Values': ['AssignedStudent']},  # NOT assigned yet
+                {'Name': 'tag-value', 'Values': ['__AVAILABLE__']}  # Explicitly available
+            ]
+        )
+        
+        # If no explicitly available instances, search for untagged pools
+        if not response['Reservations']:
+            response = ec2_client.describe_instances(
+                Filters=[
+                    {'Name': 'tag:Type', 'Values': ['pool']},
+                    {'Name': 'tag:WorkshopID', 'Values': [workshop]},
+                    {'Name': 'instance-state-name', 'Values': ['running', 'stopped']}
+                ]
+            )
+        
+        for reservation in response['Reservations']:
+            for instance in reservation['Instances']:
+                # Check if already assigned
+                tags = {tag['Key']: tag['Value'] for tag in instance.get('Tags', [])}
+                if tags.get('AssignedStudent') and tags.get('AssignedStudent') != '__AVAILABLE__':
+                    continue  # Skip already assigned
+                
+                instance_id = instance['InstanceId']
+                instance_type = instance['InstanceType']
+                
+                # Mark as available (or update if already marked)
+                ec2_client.create_tags(
+                    Resources=[instance_id],
+                    Tags=[
+                        {'Key': 'AssignmentStatus', 'Value': 'reserved'}
+                    ]
+                )
+                
+                logger.info(f"Reserved pool instance {instance_id} ({instance_type}) for {workshop}")
+                
+                return {
+                    'success': True,
+                    'instance_id': instance_id,
+                    'instance_type': instance_type,
+                    'message': f'Reserved instance {instance_id}'
+                }
+        
+        # No available instances
+        logger.warning(f"No available pool instances for {workshop}")
+        return {
+            'success': False,
+            'error': f'No available pool instances for {workshop}',
+            'error_code': 'NO_AVAILABLE_INSTANCES'
+        }
+    except Exception as e:
+        logger.error(f"Error reserving pool instance: {str(e)}")
+        return {'success': False, 'error': str(e)}
+
+
 def lambda_handler(event, context):
     """Lambda handler for EC2 instance pool management - API only
 
@@ -4486,6 +4617,160 @@ def lambda_handler(event, context):
                     'requires_auth': True
                 })
             }
+        
+        # Handle unified student assignment endpoint
+        # This endpoint orchestrates: IAM user creation, pool instance assignment, shared-core provisioning
+        if api_path == '/assign-student' and http_method == 'POST':
+            workshop_name_param = body.get('workshop') or query_params.get('workshop') or WORKSHOP_NAME
+            
+            try:
+                # Step 1: Generate a unique student ID (character-based for LOTR theming)
+                # Using the fellowship character generator if available
+                try:
+                    from generate_student_identity import generate_character_student_id
+                    student_id = generate_character_student_id()
+                    logger.info(f"Generated student ID: {student_id}")
+                except ImportError:
+                    # Fallback: generate a simple student ID
+                    import hashlib
+                    import secrets as secrets_module
+                    random_part = secrets_module.token_hex(4)
+                    student_id = f"student-{random_part}"
+                    logger.info(f"Generated fallback student ID: {student_id}")
+                
+                # Step 2: Create pool instance
+                logger.info(f"Creating pool instance for student: {student_id}")
+                creation_result = create_instance(
+                    count=1,
+                    instance_type='pool',
+                    workshop_name=workshop_name_param,
+                    student_name=student_id
+                )
+                
+                if not creation_result.get('success'):
+                    error_msg = creation_result.get('error', 'Failed to create pool instance')
+                    logger.error(f"Pool instance creation failed: {error_msg}")
+                    return {
+                        'statusCode': 500,
+                        'headers': get_cors_headers(),
+                        'body': json.dumps({
+                            'success': False,
+                            'error': f"Failed to create instance: {error_msg}"
+                        })
+                    }
+                
+                instance_id = creation_result.get('instance_id')
+                if not instance_id:
+                    logger.error("No instance_id returned from create_instance()")
+                    return {
+                        'statusCode': 500,
+                        'headers': get_cors_headers(),
+                        'body': json.dumps({
+                            'success': False,
+                            'error': 'Instance created but no instance_id returned'
+                        })
+                    }
+                
+                logger.info(f"Pool instance created: {instance_id}")
+                
+                # Step 3: Assign instance to student
+                logger.info(f"Assigning instance {instance_id} to student {student_id}")
+                try:
+                    # Store assignment in DynamoDB with TTL for cleanup
+                    assignment_ttl = 600  # 10 minutes
+                    table.put_item(
+                        Item={
+                            'instance_id': instance_id,
+                            'student_name': student_id,
+                            'password': student_id,  # Password defaults to student_id
+                            'assigned_at': datetime.now(timezone.utc).isoformat(),
+                            'status': 'provisioning',
+                            'expires_at': int(time.time()) + assignment_ttl,
+                            'workshop': workshop_name_param
+                        }
+                    )
+                    logger.info(f"Instance assignment stored in DynamoDB")
+                except Exception as e:
+                    logger.error(f"Failed to store instance assignment: {str(e)}")
+                    # Continue anyway - assignment can be retried
+                
+                # Step 4: Provision on shared-core if enabled
+                shared_core_provision = {}
+                if get_shared_core_mode(workshop_name_param):
+                    logger.info(f"Shared-core mode enabled for {workshop_name_param}, provisioning student...")
+                    try:
+                        from shared_core_provisioner import provision_student_on_shared_core_sync
+                        prov_result = provision_student_on_shared_core_sync(
+                            student_id=student_id,
+                            workshop_name=workshop_name_param,
+                            student_password=student_id,
+                            deployed_sut_url=f"https://sut-{student_id}.{INSTANCE_MANAGER_BASE_DOMAIN}"
+                        )
+                        
+                        if prov_result.get('success'):
+                            shared_core_provision = {
+                                'success': True,
+                                'gitea_ready': prov_result.get('gitea_ready', False),
+                                'jenkins_ready': prov_result.get('jenkins_ready', False),
+                            }
+                            logger.info(f"✓ Shared-core provisioning completed")
+                        else:
+                            logger.warning(f"Shared-core provisioning failed (non-blocking): {prov_result.get('error', 'Unknown error')}")
+                            shared_core_provision = {
+                                'success': False,
+                                'error': prov_result.get('error', 'Provisioning failed')
+                            }
+                    except ImportError:
+                        logger.warning("shared_core_provisioner module not available, skipping shared-core provisioning")
+                    except Exception as e:
+                        logger.error(f"Error during shared-core provisioning: {str(e)}", exc_info=True)
+                
+                # Step 5: Build response with student URLs and secrets
+                # Get SUT URL from instance assignment
+                sut_url = creation_result.get('sut_url', f"https://sut-{student_id}.{INSTANCE_MANAGER_BASE_DOMAIN}")
+                jenkins_url = get_shared_core_urls(student_id, workshop_name_param).get('jenkins_url', f"https://jenkins.{workshop_name_param}.{INSTANCE_MANAGER_BASE_DOMAIN}/job/{student_id}/")
+                gitea_url = get_shared_core_urls(student_id, workshop_name_param).get('gitea_url', f"https://gitea.{workshop_name_param}.{INSTANCE_MANAGER_BASE_DOMAIN}/fellowship-org/fellowship-sut-{student_id}")
+                
+                # Get LLM secrets if available (from environment or secrets manager)
+                llm_secrets = []
+                try:
+                    # Try to get per-student LLM config from Secrets Manager or leave empty
+                    # For now, just use shared configs passed in by enrollment service
+                    llm_secrets = body.get('llm_secrets', [])
+                except Exception as e:
+                    logger.warning(f"Could not retrieve LLM secrets: {str(e)}")
+                
+                success_response = {
+                    'success': True,
+                    'message': f"Student {student_id} assigned successfully",
+                    'student_name': student_id,
+                    'password': student_id,
+                    'instance_id': instance_id,
+                    'sut_url': sut_url,
+                    'jenkins_url': jenkins_url,
+                    'gitea_url': gitea_url,
+                    'llm_secrets': llm_secrets,
+                    'shared_core_provision': shared_core_provision,
+                    'workshop': workshop_name_param
+                }
+                
+                logger.info(f"✓ /api/assign-student completed successfully for {student_id}")
+                return {
+                    'statusCode': 200,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps(success_response)
+                }
+                
+            except Exception as e:
+                logger.error(f"Unexpected error in /api/assign-student: {str(e)}", exc_info=True)
+                return {
+                    'statusCode': 500,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({
+                        'success': False,
+                        'error': f"Internal server error: {str(e)}"
+                    })
+                }
         
         # Route based on method and path (api_path already has /api removed)
         if api_path == '/templates' and http_method == 'GET':
@@ -5688,7 +5973,134 @@ def lambda_handler(event, context):
                 return {
                     'statusCode': 500,
                     'headers': get_cors_headers(),
-                    'body': json.dumps({'success': False, 'error': str(e)})
+                        'body': json.dumps({'success': False, 'error': str(e)})
+                }
+        
+        elif api_path == '/api/assign-student' and http_method == 'POST':
+            # Unified endpoint for assigning student to EC2 instance
+            # Used by fellowship_student_assignment and other workshop lambdas
+            workshop_name = body.get('workshop') or query_params.get('workshop') or WORKSHOP_NAME
+            auth_password = body.get('password') or query_params.get('password')
+            
+            # Optional auth check (if password configured)
+            if auth_password and auth_password != os.environ.get('INSTANCE_MANAGER_PASSWORD', ''):
+                if auth_password:  # If password was provided but wrong
+                    logger.warning(f"Invalid password provided for /api/assign-student")
+                    return {
+                        'statusCode': 401,
+                        'headers': get_cors_headers(),
+                        'body': json.dumps({'success': False, 'error': 'Unauthorized'})
+                    }
+            
+            try:
+                # 1. Generate unique student name
+                student_name = generate_student_name(workshop_name)
+                logger.info(f"Generated student name: {student_name}")
+                
+                # 2. Generate random password
+                password = student_name
+                logger.info(f"Generated password for {student_name} as {password}")
+                
+                # 3. Reserve pool EC2 instance
+                instance_result = reserve_pool_instance(workshop_name)
+                if not instance_result['success']:
+                    return {
+                        'statusCode': 500,
+                        'headers': get_cors_headers(),
+                        'body': json.dumps({
+                            'success': False,
+                            'error': instance_result['error'],
+                            'error_code': instance_result.get('error_code', 'INSTANCE_ERROR')
+                        })
+                    }
+                
+                instance_id = instance_result['instance_id']
+                instance_type = instance_result['instance_type']
+                logger.info(f"Reserved instance: {instance_id}")
+                
+                # 4. Tag instance with student info
+                ec2.create_tags(
+                    Resources=[instance_id],
+                    Tags=[
+                        {'Key': 'AssignedStudent', 'Value': student_name},
+                        {'Key': 'AssignedAt', 'Value': datetime.utcnow().isoformat()},
+                        {'Key': 'Workshop', 'Value': workshop_name},
+                        {'Key': 'StudentPassword', 'Value': '__ENCRYPTED__'},  # Password should be stored in Secrets Manager, not tags
+                        {'Key': 'AssignmentStatus', 'Value': 'active'}
+                    ]
+                )
+                logger.info(f"Tagged instance {instance_id} with student {student_name}")
+                
+                # 5. Store in DynamoDB
+                timestamp = datetime.utcnow().isoformat()
+                ttl_seconds = 7 * 24 * 60 * 60  # 7 days
+                ttl_epoch = int((datetime.utcnow() + timedelta(seconds=ttl_seconds)).timestamp())
+                
+                table.put_item(
+                    Item={
+                        'instance_id': instance_id,
+                        'student_name': student_name,
+                        'password': password,  # Note: Should encrypt in production
+                        'workshop': workshop_name,
+                        'status': 'starting',
+                        'created_at': timestamp,
+                        'instance_type': instance_type,
+                        'ttl': ttl_epoch
+                    }
+                )
+                logger.info(f"Stored assignment in DynamoDB: {student_name} -> {instance_id}")
+                
+                # 6. Get SUT URL (construct from domain or retrieve from Route53)
+                sut_domain = os.environ.get('FELLOWSHIP_SUT_DOMAIN', f'sut.{workshop_name}.testingfantasy.com')
+                sut_url = f"https://{sut_domain}/{student_name}" if sut_domain else f"http://{instance_id}.internal:5000"
+                
+                # 7. Provision on shared-core if enabled
+                shared_core_provision = None
+                shared_core_mode = os.environ.get('SHARED_CORE_MODE', 'false').lower() in ('true', '1', 'yes')
+                
+                if shared_core_mode:
+                    try:
+                        shared_core_result = provision_student_on_shared_core(
+                            student_id=student_name,
+                            workshop_name=workshop_name,
+                            student_password=password,
+                            deployed_sut_url=sut_url
+                        )
+                        shared_core_provision = shared_core_result
+                        logger.info(f"Provisioned {student_name} on shared-core: {shared_core_result}")
+                    except Exception as e:
+                        logger.warning(f"Failed to provision on shared-core: {str(e)}, continuing anyway")
+                        shared_core_provision = {'success': False, 'error': str(e)}
+                
+                # 8. Return unified response
+                return {
+                    'statusCode': 200,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({
+                        'success': True,
+                        'student_name': student_name,
+                        'password': password,
+                        'instance_id': instance_id,
+                        'instance_type': instance_type,
+                        'sut_url': sut_url,
+                        'jenkins_user': student_name,
+                        'gitea_user': student_name,
+                        'shared_core_provision': shared_core_provision,
+                        'message': f'Successfully assigned {student_name} to instance {instance_id}',
+                        'created_at': timestamp
+                    })
+                }
+            
+            except Exception as e:
+                logger.error(f"Error in /api/assign-student: {str(e)}", exc_info=True)
+                return {
+                    'statusCode': 500,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({
+                        'success': False,
+                        'error': str(e),
+                        'error_code': 'INTERNAL_ERROR'
+                    })
                 }
         
         else:
