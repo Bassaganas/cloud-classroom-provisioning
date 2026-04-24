@@ -2562,17 +2562,18 @@ su - ec2-user -c "cd ~/dify/docker && docker compose up -d"
 def get_latest_ami():
     """Get the latest Amazon Linux 2 AMI for the current region"""
     try:
+        # Note: describe_images has no MostRecent parameter — sort by CreationDate manually
         response = ec2.describe_images(
             Owners=['amazon'],
             Filters=[
                 {'Name': 'name', 'Values': ['amzn2-ami-hvm-*-x86_64-gp2']},
                 {'Name': 'virtualization-type', 'Values': ['hvm']},
                 {'Name': 'state', 'Values': ['available']}
-            ],
-            MostRecent=True
+            ]
         )
-        if response['Images']:
-            ami_id = response['Images'][0]['ImageId']
+        images = sorted(response.get('Images', []), key=lambda x: x.get('CreationDate', ''), reverse=True)
+        if images:
+            ami_id = images[0]['ImageId']
             logger.info(f"Found latest Amazon Linux 2 AMI: {ami_id} in region {REGION}")
             return ami_id
         else:
@@ -6032,12 +6033,14 @@ def lambda_handler(event, context):
                 )
                 logger.info(f"Tagged instance {instance_id} with student {student_name}")
                 
-                # 5. Store in DynamoDB
+                # 5. Store in DynamoDB (use workshop-scoped table, not the module-level 'table')
+                # The module-level 'table' may point to a different workshop (e.g. WORKSHOP_NAME='shared')
+                assignment_table = dynamodb.Table(f"instance-assignments-{workshop_name}-{ENVIRONMENT}")
                 timestamp = datetime.utcnow().isoformat()
                 ttl_seconds = 7 * 24 * 60 * 60  # 7 days
                 ttl_epoch = int((datetime.utcnow() + timedelta(seconds=ttl_seconds)).timestamp())
                 
-                table.put_item(
+                assignment_table.put_item(
                     Item={
                         'instance_id': instance_id,
                         'student_name': student_name,
