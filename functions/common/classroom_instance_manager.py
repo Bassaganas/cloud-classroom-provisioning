@@ -16,7 +16,7 @@ from datetime import datetime, timezone, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 import base64
-from generate_student_identity import generate_character_student_id, validate_character_student_id
+from generate_student_identity import generate_character_student_id, validate_character_student_id, get_character_lore
 
 # Initialize test mode BEFORE boto3 clients are created
 # This allows moto mocks to intercept all boto3 calls during testing
@@ -4420,80 +4420,75 @@ def generate_student_name(workshop_name: str) -> str:
 
 
 def reserve_pool_instance(workshop_name: str = None) -> dict:
-    """Reserve first available pool instance from EC2 pool.
+    """Reserve first available (unassigned) pool instance from EC2.
     
-    Looks for instances tagged with:
+    Looks for instances tagged:
     - Type=pool
-    - Status=available (or no Status tag)
+    - WorkshopID=<WORKSHOP_NAME env var>  (NOT the fellowship request param)
+    - No 'AssignedStudent' tag, or AssignedStudent=NONE / empty
+    - instance state: running or stopped
     
-    Args:
-        workshop_name: Workshop identifier (for filtering)
+    When found, tags the instance with AssignmentStatus=reserving to prevent
+    a second concurrent request from grabbing the same instance.
     
     Returns:
-        dict with keys: success, instance_id, instance_type, message, error
+        dict: success, instance_id or error
     """
-    workshop = workshop_name or WORKSHOP_NAME
+    # Pool instances are tagged with WORKSHOP_NAME (e.g. 'shared'), not the
+    # per-request workshop param (e.g. 'fellowship').
+    pool_workshop = WORKSHOP_NAME
     
     try:
-        ec2_client = boto3.client('ec2', region_name=REGION)
-        
-        # Find available pool instances for this workshop
-        response = ec2_client.describe_instances(
+        # Get all pool instances for this deployment's workshop tag
+        response = ec2.describe_instances(
             Filters=[
                 {'Name': 'tag:Type', 'Values': ['pool']},
-                {'Name': 'tag:WorkshopID', 'Values': [workshop]},
+                {'Name': 'tag:WorkshopID', 'Values': [pool_workshop]},
                 {'Name': 'instance-state-name', 'Values': ['running', 'stopped']},
-                {'Name': 'tag-key', 'Values': ['AssignedStudent']},  # NOT assigned yet
-                {'Name': 'tag-value', 'Values': ['__AVAILABLE__']}  # Explicitly available
             ]
         )
         
-        # If no explicitly available instances, search for untagged pools
-        if not response['Reservations']:
-            response = ec2_client.describe_instances(
-                Filters=[
-                    {'Name': 'tag:Type', 'Values': ['pool']},
-                    {'Name': 'tag:WorkshopID', 'Values': [workshop]},
-                    {'Name': 'instance-state-name', 'Values': ['running', 'stopped']}
-                ]
-            )
-        
         for reservation in response['Reservations']:
             for instance in reservation['Instances']:
-                # Check if already assigned
                 tags = {tag['Key']: tag['Value'] for tag in instance.get('Tags', [])}
-                if tags.get('AssignedStudent') and tags.get('AssignedStudent') != '__AVAILABLE__':
-                    continue  # Skip already assigned
+                
+                # Skip instances already assigned to a real student
+                assigned_to = tags.get('AssignedStudent', '')
+                if assigned_to and assigned_to not in ('NONE', '__AVAILABLE__', ''):
+                    continue
+                
+                # Skip instances being reserved by another concurrent request
+                if tags.get('AssignmentStatus') in ('reserving', 'assigned'):
+                    continue
                 
                 instance_id = instance['InstanceId']
                 instance_type = instance['InstanceType']
                 
-                # Mark as available (or update if already marked)
-                ec2_client.create_tags(
-                    Resources=[instance_id],
-                    Tags=[
-                        {'Key': 'AssignmentStatus', 'Value': 'reserved'}
-                    ]
-                )
+                # Optimistically mark as 'reserving' to prevent double-assignment
+                try:
+                    ec2.create_tags(
+                        Resources=[instance_id],
+                        Tags=[{'Key': 'AssignmentStatus', 'Value': 'reserving'}]
+                    )
+                except Exception as tag_err:
+                    logger.warning(f"Could not tag {instance_id} as reserving: {tag_err}")
                 
-                logger.info(f"Reserved pool instance {instance_id} ({instance_type}) for {workshop}")
-                
+                logger.info(f"Reserved pool instance {instance_id} ({instance_type}) from {pool_workshop} pool")
                 return {
                     'success': True,
                     'instance_id': instance_id,
                     'instance_type': instance_type,
-                    'message': f'Reserved instance {instance_id}'
+                    'message': f'Reserved pool instance {instance_id}'
                 }
         
-        # No available instances
-        logger.warning(f"No available pool instances for {workshop}")
+        logger.warning(f"No available pool instances found for WorkshopID={pool_workshop}")
         return {
             'success': False,
-            'error': f'No available pool instances for {workshop}',
+            'error': f'No available pool instances for {pool_workshop}',
             'error_code': 'NO_AVAILABLE_INSTANCES'
         }
     except Exception as e:
-        logger.error(f"Error reserving pool instance: {str(e)}")
+        logger.error(f"Error reserving pool instance: {str(e)}", exc_info=True)
         return {'success': False, 'error': str(e)}
 
 
@@ -4672,63 +4667,61 @@ def lambda_handler(event, context):
                 student_password = generate_random_password(length=14)
                 logger.info(f"Generated secure password for student: {student_id}")
                 
-                # Step 2: Create UNASSIGNED pool instance
-                # CRITICAL FIX: Pool instances should NOT be pre-assigned to a student.
-                # Do NOT pass student_name parameter to create_instance() for pool instances.
-                logger.info(f"Creating unassigned pool instance for student: {student_id}")
-                creation_result = create_instance(
-                    count=1,
-                    instance_type='pool',
-                    workshop_name=workshop_name_param,
-                    student_name=None  # Pool instances are unassigned (CRITICAL FIX)
-                )
+                # Initialize instance_available flag (will be set based on creation result)
+                instance_available = False
+                instance_id = None
                 
-                if not creation_result.get('success'):
-                    error_msg = creation_result.get('error', 'Failed to create pool instance')
-                    logger.error(f"Pool instance creation failed: {error_msg}")
-                    return {
-                        'statusCode': 500,
-                        'headers': get_cors_headers(),
-                        'body': json.dumps({
-                            'success': False,
-                            'error': f"Failed to create instance: {error_msg}"
-                        })
-                    }
+                # Step 2: Reserve an EXISTING pool instance — do NOT create a new one.
+                # Pool instances are pre-provisioned via the admin frontend, tagged
+                # Type=pool, WorkshopID=<workshop> (e.g. 'fellowship', 'testus_patronus').
+                # Use workshop_name_param (from the request body), NOT WORKSHOP_NAME (the
+                # Lambda's own env var = 'shared'), so the correct workshop's instances are found.
+                logger.info(f"Looking for available pool instance for student: {student_id}")
+                reserve_result = reserve_pool_instance(workshop_name=workshop_name_param)
                 
-                instance_id = creation_result.get('instance_id')
-                if not instance_id:
-                    logger.error("No instance_id returned from create_instance()")
-                    return {
-                        'statusCode': 500,
-                        'headers': get_cors_headers(),
-                        'body': json.dumps({
-                            'success': False,
-                            'error': 'Instance created but no instance_id returned'
-                        })
-                    }
+                if not reserve_result.get('success'):
+                    # No pool instances available — return graceful degradation response.
+                    logger.warning(f"No pool instances available for {student_id}: {reserve_result.get('error')}")
+                    instance_available = False
+                    instance_id = None
+                else:
+                    instance_available = True
+                    instance_id = reserve_result.get('instance_id')
+                    logger.info(f"Reserved pool instance {instance_id} for student {student_id}")
                 
-                logger.info(f"Pool instance created: {instance_id}")
+                logger.info(f"Pool instance status: available={instance_available}, instance_id={instance_id}")
                 
-                # Step 3: Assign instance to student
-                logger.info(f"Assigning instance {instance_id} to student {student_id}")
-                try:
-                    # Store assignment in DynamoDB with TTL for cleanup
-                    assignment_ttl = 600  # 10 minutes
-                    table.put_item(
-                        Item={
-                            'instance_id': instance_id,
-                            'student_name': student_id,
-                            'password': student_password,  # Use secure password, not student_id (CRITICAL FIX)
-                            'assigned_at': datetime.now(timezone.utc).isoformat(),
-                            'status': 'provisioning',
-                            'expires_at': int(time.time()) + assignment_ttl,
-                            'workshop': workshop_name_param
-                        }
-                    )
-                    logger.info(f"Instance assignment stored in DynamoDB with student ID: {student_id}")
-                except Exception as e:
-                    logger.error(f"Failed to store instance assignment: {str(e)}")
-                    # Continue anyway - assignment can be retried
+                # Step 3: Tag the reserved instance with student info and store in DynamoDB
+                if instance_available and instance_id:
+                    try:
+                        # Tag the EC2 instance so it is clearly marked as assigned
+                        ec2.create_tags(
+                            Resources=[instance_id],
+                            Tags=[
+                                {'Key': 'AssignedStudent', 'Value': student_id},
+                                {'Key': 'AssignmentStatus', 'Value': 'assigned'},
+                            ]
+                        )
+                        logger.info(f"Tagged instance {instance_id} as assigned to {student_id}")
+                    except Exception as tag_err:
+                        logger.warning(f"Failed to tag instance {instance_id}: {tag_err} (non-fatal)")
+                    
+                    try:
+                        # Store assignment record in DynamoDB
+                        table.put_item(
+                            Item={
+                                'instance_id': instance_id,
+                                'student_name': student_id,
+                                'password': student_password,
+                                'assigned_at': datetime.now(timezone.utc).isoformat(),
+                                'status': 'provisioning',
+                                'workshop': workshop_name_param
+                            }
+                        )
+                        logger.info(f"Instance assignment stored in DynamoDB: {student_id} → {instance_id}")
+                    except Exception as e:
+                        logger.error(f"Failed to store instance assignment: {str(e)}")
+                        # Continue — assignment can be retried
                 
                 # Step 4: Provision on shared-core if enabled
                 shared_core_provision = {}
@@ -4740,7 +4733,7 @@ def lambda_handler(event, context):
                             student_id=student_id,
                             workshop_name=workshop_name_param,
                             student_password=student_password,  # Use secure password, not student_id
-                            deployed_sut_url=f"https://sut-{student_id}.{INSTANCE_MANAGER_BASE_DOMAIN}"
+                            deployed_sut_url=f"https://sut-{student_id}.{HTTPS_BASE_DOMAIN}" if HTTPS_BASE_DOMAIN else None
                         )
                         
                         if prov_result.get('success'):
@@ -4761,46 +4754,46 @@ def lambda_handler(event, context):
                     except Exception as e:
                         logger.error(f"Error during shared-core provisioning: {str(e)}", exc_info=True)
                 
-                # Step 5: Build response with student URLs and secrets
+                # Step 5: Retrieve character lore for display
+                char_key = student_id.split('_')[0] if '_' in student_id else student_id
+                character_lore = get_character_lore(char_key)
+                
+                # Step 6: Build response with student URLs and secrets
                 # Get shared-core URLs if in shared-core mode, otherwise use per-instance URLs
                 shared_core_urls = get_shared_core_urls(student_id, workshop_name_param)
                 
-                if shared_core_urls.get('shared_core_mode'):
-                    # Shared-core mode: all students use the same Jenkins and Gitea services
-                    logger.info(f"Building shared-core URLs for student {student_id}")
-                    sut_url = creation_result.get('sut_url', f"https://sut-{student_id}.{INSTANCE_MANAGER_BASE_DOMAIN}")
-                    jenkins_url = shared_core_urls.get('jenkins_job_url', '#')
-                    gitea_url = shared_core_urls.get('gitea_repo_url', '#')
-                else:
-                    # Per-instance mode (deprecated for fellowship): each student gets their own services
-                    logger.info(f"Building per-instance URLs for student {student_id}")
-                    sut_url = creation_result.get('sut_url', f"https://sut-{student_id}.{INSTANCE_MANAGER_BASE_DOMAIN}")
-                    jenkins_url = f"https://jenkins.{workshop_name_param}.{INSTANCE_MANAGER_BASE_DOMAIN}/job/{student_id}/"
-                    gitea_url = f"https://gitea.{workshop_name_param}.{INSTANCE_MANAGER_BASE_DOMAIN}/fellowship-org/fellowship-sut-{student_id}"
-                
-               
-                # Get LLM secrets if available (from environment or secrets manager)
-                llm_secrets = []
-                try:
-                    # Try to get per-student LLM config from Secrets Manager or leave empty
-                    # For now, just use shared configs passed in by enrollment service
-                    llm_secrets = body.get('llm_secrets', [])
-                except Exception as e:
-                    logger.warning(f"Could not retrieve LLM secrets: {str(e)}")
-                
+                # Build response based on whether instance is available
                 success_response = {
                     'success': True,
-                    'message': f"Student {student_id} assigned successfully",
+                    'message': f"Student {student_id} created successfully" if instance_available else f"Student {student_id} created but no instance available yet",
                     'student_name': student_id,
                     'password': student_password,  # Use secure password, not student_id (CRITICAL FIX)
-                    'instance_id': instance_id,
-                    'sut_url': sut_url,
-                    'jenkins_url': jenkins_url,
-                    'gitea_url': gitea_url,
-                    'llm_secrets': llm_secrets,
+                    'llm_secrets': body.get('llm_secrets', []),
                     'shared_core_provision': shared_core_provision,
-                    'workshop': workshop_name_param
+                    'workshop': workshop_name_param,
+                    'character_lore': character_lore
                 }
+                
+                # Add instance info only if instance is available
+                if instance_available and instance_id:
+                    success_response['instance_id'] = instance_id
+                    # Build SUT URL from instance domain pattern
+                    sut_url = f"https://sut-{student_id}.{HTTPS_BASE_DOMAIN}" if HTTPS_BASE_DOMAIN else None
+                    success_response['sut_url'] = sut_url
+                    success_response['ide_url'] = sut_url  # IDE is at same domain as SUT
+                else:
+                    # No instance available - indicate this in response with flag
+                    success_response['instance_available'] = False
+                    success_response['retry_after_seconds'] = 30
+                    logger.info(f"Instance not available for {student_id}, returning degraded response")
+                
+                # Always include shared-core URLs regardless of instance availability
+                if shared_core_urls.get('shared_core_mode'):
+                    success_response['jenkins_url'] = shared_core_urls.get('jenkins_job_url', '#')
+                    success_response['gitea_url'] = shared_core_urls.get('gitea_repo_url', '#')
+                else:
+                    success_response['jenkins_url'] = f"https://jenkins.{workshop_name_param}.{HTTPS_BASE_DOMAIN}/job/{student_id}/" if HTTPS_BASE_DOMAIN else '#'
+                    success_response['gitea_url'] = f"https://gitea.{workshop_name_param}.{HTTPS_BASE_DOMAIN}/fellowship-org/fellowship-sut-{student_id}" if HTTPS_BASE_DOMAIN else '#'
                 
                 logger.info(f"✓ /api/assign-student completed successfully for {student_id}")
                 return {

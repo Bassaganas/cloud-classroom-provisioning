@@ -364,10 +364,9 @@ def generate_html_response(user_info, env_content='', error_message=None, status
     llm_configs = user_info.get('llm_configs', [])
     instance_error = user_info.get('instance_error', '')
 
-    # Derive character info from student_name (e.g., "legolas_xy37" -> "legolas")
-    char_key = student_name.split('_')[0] if '_' in student_name else student_name
-    lore = get_character_lore(char_key)
-    char_display_name = lore.get('name', char_key.capitalize())
+    # Get character lore from user_info (comes from instance_manager endpoint)
+    lore = user_info.get('character_lore', {})
+    char_display_name = lore.get('name', student_name.split('_')[0].capitalize() if '_' in student_name else student_name.capitalize())
     char_race = lore.get('race', '')
     char_role = lore.get('role', '')
     char_description = lore.get('description', 'A member of the Fellowship, bound by oath to the quest.')
@@ -1137,8 +1136,27 @@ def lambda_handler(event, context):
                 'gitea_url': assign_result.get('gitea_url', ''),
                 'llm_configs': assign_result.get('llm_configs', []),
                 'shared_core_provision': assign_result.get('shared_core_provision', None),
-                'created_at': assign_result.get('created_at', '')
+                'created_at': assign_result.get('created_at', datetime.utcnow().isoformat())
             }
+            
+            # Store assignment in fellowship's DynamoDB so subsequent requests (via cookie)
+            # can look it up without creating a duplicate student.
+            if user_info['student_name']:
+                try:
+                    table.put_item(Item={
+                        'student_name': user_info['student_name'],
+                        'instance_id': user_info.get('instance_id') or 'PENDING',
+                        'password': user_info.get('password', ''),
+                        'sut_url': user_info.get('sut_url', ''),
+                        'jenkins_url': user_info.get('jenkins_url', ''),
+                        'gitea_url': user_info.get('gitea_url', ''),
+                        'status': 'active',
+                        'assigned_at': user_info['created_at'],
+                        'workshop': WORKSHOP_NAME,
+                    })
+                    logger.info(f"Stored assignment for {user_info['student_name']} in fellowship DynamoDB")
+                except Exception as ddb_err:
+                    logger.warning(f"Could not store assignment in fellowship DynamoDB (non-fatal): {ddb_err}")
             
             logger.info(f"New student assigned: {user_info['student_name']} -> {user_info['instance_id']}")
         
@@ -1167,9 +1185,11 @@ def lambda_handler(event, context):
             }
         }
         
-        # Add cookies to header list
+        # Set cookies via top-level 'cookies' field (required for Lambda Function URLs)
+        # Using response['headers']['Set-Cookie'] does NOT work with Lambda Function URLs;
+        # the 'cookies' top-level key is the only way to set multiple cookies.
         if cookie_headers:
-            response['headers']['Set-Cookie'] = cookie_headers
+            response['cookies'] = cookie_headers
         
         response['body'] = html_content
         
