@@ -1053,7 +1053,7 @@ def lambda_handler(event, context):
         if http_method.upper() not in ['POST', 'GET']:
             return {
                 'statusCode': 405,
-                'headers': get_cors_headers(),
+                'headers': {'Content-Type': 'application/json'},
                 'body': json.dumps({'error': 'Method not allowed'})}
         
         # Parse request
@@ -1119,7 +1119,7 @@ def lambda_handler(event, context):
                 logger.error(f"Failed to assign student: {assign_result.get('error')}")
                 return {
                     'statusCode': 500,
-                    'headers': get_cors_headers(),
+                    'headers': {'Content-Type': 'text/html; charset=utf-8'},
                     'body': generate_html_response(
                         {}, 
                         error_message=f"Failed to assign student: {assign_result.get('error')}",
