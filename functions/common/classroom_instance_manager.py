@@ -6121,14 +6121,14 @@ def lambda_handler(event, context):
             auth_password = body.get('password') or query_params.get('password')
             
             # Optional auth check (if password configured)
-            if auth_password and auth_password != os.environ.get('INSTANCE_MANAGER_PASSWORD', ''):
-                if auth_password:  # If password was provided but wrong
-                    logger.warning(f"Invalid password provided for /api/assign-student")
-                    return {
-                        'statusCode': 401,
-                        'headers': get_cors_headers(),
-                        'body': json.dumps({'success': False, 'error': 'Unauthorized'})
-                    }
+            expected_password = get_password_from_secret()
+            if auth_password and expected_password and auth_password != expected_password:
+                logger.warning(f"Invalid password provided for /api/assign-student")
+                return {
+                    'statusCode': 401,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({'success': False, 'error': 'Unauthorized'})
+                }
             
             try:
                 # 1. Reserve pool EC2 instance (may be pre-created with student data)
