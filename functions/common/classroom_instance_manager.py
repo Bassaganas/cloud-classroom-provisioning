@@ -4810,7 +4810,8 @@ def lambda_handler(event, context):
                                 'password': student_password,
                                 'assigned_at': datetime.now(timezone.utc).isoformat(),
                                 'status': 'provisioning',
-                                'workshop': workshop_name_param
+                                'workshop': workshop_name_param,
+                                'provisioning_status': 'pending'  # NEW: Track provisioning state
                             }
                         )
                         logger.info(f"Instance assignment stored in DynamoDB: {student_id} → {instance_id}")
@@ -4820,6 +4821,8 @@ def lambda_handler(event, context):
                 
                 # Step 4: Provision on shared-core if enabled
                 shared_core_provision = {}
+                provisioning_status = 'success'  # Default: no provisioning needed
+                
                 if get_shared_core_mode(workshop_name_param):
                     logger.info(f"Shared-core mode enabled for {workshop_name_param}, provisioning student...")
                     try:
@@ -4837,6 +4840,7 @@ def lambda_handler(event, context):
                                 'gitea_ready': prov_result.get('gitea_ready', False),
                                 'jenkins_ready': prov_result.get('jenkins_ready', False),
                             }
+                            provisioning_status = 'success'  # Provisioning completed successfully
                             logger.info(f"✓ Shared-core provisioning completed")
                         else:
                             logger.warning(f"Shared-core provisioning failed (non-blocking): {prov_result.get('error', 'Unknown error')}")
@@ -4844,10 +4848,29 @@ def lambda_handler(event, context):
                                 'success': False,
                                 'error': prov_result.get('error', 'Provisioning failed')
                             }
+                            provisioning_status = 'failed'  # Provisioning failed
                     except ImportError:
                         logger.warning("shared_core_provisioner module not available, skipping shared-core provisioning")
                     except Exception as e:
                         logger.error(f"Error during shared-core provisioning: {str(e)}", exc_info=True)
+                        provisioning_status = 'failed'
+                
+                # Update DynamoDB with provisioning status
+                if instance_available and instance_id:
+                    try:
+                        table.update_item(
+                            Key={'instance_id': instance_id},
+                            UpdateExpression='SET provisioning_status = :prov_status, jenkins_url = :jenkins_url, gitea_url = :gitea_url, sut_url = :sut_url',
+                            ExpressionAttributeValues={
+                                ':prov_status': provisioning_status,
+                                ':jenkins_url': success_response.get('jenkins_url', '#'),
+                                ':gitea_url': success_response.get('gitea_url', '#'),
+                                ':sut_url': success_response.get('sut_url', '#')
+                            }
+                        )
+                        logger.info(f"Updated assignment with provisioning_status={provisioning_status} for {student_id}")
+                    except Exception as e:
+                        logger.error(f"Failed to update provisioning_status: {str(e)}")
                 
                 # Step 5: Retrieve character lore for display
                 char_key = student_id.split('_')[0] if '_' in student_id else student_id

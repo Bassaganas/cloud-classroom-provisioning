@@ -144,7 +144,24 @@ def lambda_handler(event, context):
             }
         
         status = item.get('status', 'unknown')
-        logger.info(f"Found assignment for {student_name}: {instance_id} with status {status}")
+        # ── NEW: Check provisioning status (must be complete before returning links)
+        provisioning_status = item.get('provisioning_status', 'unknown')
+        logger.info(f"Found assignment for {student_name}: {instance_id} with status {status}, provisioning_status: {provisioning_status}")
+
+        # If provisioning is not yet complete, return provisioning_in_progress flag
+        if provisioning_status not in ['success', 'completed']:
+            logger.info(f"Provisioning not complete for {student_name} (status: {provisioning_status})")
+            return {
+                'statusCode': 200,
+                'headers': {'Content-Type': 'application/json'},
+                'body': json.dumps({
+                    'ready': False,
+                    'provisioning_in_progress': True,
+                    'provisioning_status': provisioning_status,
+                    'reason': 'provisioning_in_progress',
+                    'message': 'Jenkins folder and Gitea repository are being created. Please wait...'
+                })
+            }
 
         # Check EC2 instance state
         instance = None
