@@ -351,7 +351,7 @@ resource "aws_lambda_function" "fellowship_student_assignment" {
       CLASSROOM_REGION                 = var.region
       STATUS_LAMBDA_URL                = var.status_lambda_url != "" ? var.status_lambda_url : (var.enable_status ? aws_lambda_function_url.status_url[0].function_url : "")
       INSTANCE_MANAGER_URL             = var.instance_manager_url != "" ? var.instance_manager_url : (var.enable_instance_manager ? aws_lambda_function_url.instance_manager_url[0].function_url : "")
-      INSTANCE_MANAGER_PASSWORD_SECRET = local.instance_manager_password_secret_name
+      INSTANCE_MANAGER_PASSWORD_SECRET = var.instance_manager_password_secret_name != "" ? var.instance_manager_password_secret_name : local.instance_manager_password_secret_name
       DESTROY_KEY                      = var.destroy_key
       SKIP_IAM_USER_CREATION           = var.skip_iam_user_creation ? "true" : "false"
       FELLOWSHIP_SUT_DOMAIN            = var.fellowship_sut_domain
