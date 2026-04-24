@@ -8,6 +8,8 @@ import time
 import socket
 import urllib.request
 import urllib.error
+import string
+import secrets
 from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Attr
 from datetime import datetime, timezone, timedelta
@@ -610,6 +612,32 @@ def parse_bool(value):
         if normalized in ['false', '0', 'no', 'n', 'off']:
             return False
     return None
+
+
+def generate_random_password(length=14):
+    """Generate a secure random password with mixed character types.
+    
+    Ensures complexity by requiring:
+    - At least one lowercase letter
+    - At least one uppercase letter  
+    - At least one digit
+    - At least one special character from the set: *!?_-
+    
+    Args:
+        length: Password length (default 14)
+    
+    Returns:
+        A cryptographically-secure random password
+    """
+    alphabet = string.ascii_letters + string.digits + "*!?_-"
+    while True:
+        password = ''.join(secrets.choice(alphabet) for _ in range(length))
+        # Verify password has all required character types
+        if (any(c.islower() for c in password)
+                and any(c.isupper() for c in password)
+                and any(c.isdigit() for c in password)
+                and any(c in "*!?_-" for c in password)):
+            return password
 
 INSTANCE_RATES_ESTIMATE_USD = {
     't3.small': {'on_demand': 0.0208, 'spot': 0.0062},
@@ -4624,6 +4652,7 @@ def lambda_handler(event, context):
         # This endpoint orchestrates: IAM user creation, pool instance assignment, shared-core provisioning
         if api_path == '/assign-student' and http_method == 'POST':
             workshop_name_param = body.get('workshop') or query_params.get('workshop') or WORKSHOP_NAME
+            logger.info(f"[/api/assign-student] Received request for workshop: {workshop_name_param}")
             
             try:
                 # Step 1: Generate a unique student ID (character-based for LOTR theming)
@@ -4632,21 +4661,26 @@ def lambda_handler(event, context):
                     from generate_student_identity import generate_character_student_id
                     student_id = generate_character_student_id()
                     logger.info(f"Generated student ID: {student_id}")
-                except ImportError:
-                    # Fallback: generate a simple student ID
-                    import hashlib
-                    import secrets as secrets_module
-                    random_part = secrets_module.token_hex(4)
+                except (ImportError, ValueError) as e:
+                    # Fallback: generate a simple student ID if generation fails
+                    logger.warning(f"Character student ID generation failed ({str(e)}), using fallback")
+                    random_part = secrets.token_hex(4)
                     student_id = f"student-{random_part}"
                     logger.info(f"Generated fallback student ID: {student_id}")
                 
-                # Step 2: Create pool instance
-                logger.info(f"Creating pool instance for student: {student_id}")
+                # Step 1b: Generate a secure password for all systems (IDE, Jenkins, Gitea, SUT)
+                student_password = generate_random_password(length=14)
+                logger.info(f"Generated secure password for student: {student_id}")
+                
+                # Step 2: Create UNASSIGNED pool instance
+                # CRITICAL FIX: Pool instances should NOT be pre-assigned to a student.
+                # Do NOT pass student_name parameter to create_instance() for pool instances.
+                logger.info(f"Creating unassigned pool instance for student: {student_id}")
                 creation_result = create_instance(
                     count=1,
                     instance_type='pool',
                     workshop_name=workshop_name_param,
-                    student_name=student_id
+                    student_name=None  # Pool instances are unassigned (CRITICAL FIX)
                 )
                 
                 if not creation_result.get('success'):
@@ -4684,14 +4718,14 @@ def lambda_handler(event, context):
                         Item={
                             'instance_id': instance_id,
                             'student_name': student_id,
-                            'password': student_id,  # Password defaults to student_id
+                            'password': student_password,  # Use secure password, not student_id (CRITICAL FIX)
                             'assigned_at': datetime.now(timezone.utc).isoformat(),
                             'status': 'provisioning',
                             'expires_at': int(time.time()) + assignment_ttl,
                             'workshop': workshop_name_param
                         }
                     )
-                    logger.info(f"Instance assignment stored in DynamoDB")
+                    logger.info(f"Instance assignment stored in DynamoDB with student ID: {student_id}")
                 except Exception as e:
                     logger.error(f"Failed to store instance assignment: {str(e)}")
                     # Continue anyway - assignment can be retried
@@ -4705,7 +4739,7 @@ def lambda_handler(event, context):
                         prov_result = provision_student_on_shared_core_sync(
                             student_id=student_id,
                             workshop_name=workshop_name_param,
-                            student_password=student_id,
+                            student_password=student_password,  # Use secure password, not student_id
                             deployed_sut_url=f"https://sut-{student_id}.{INSTANCE_MANAGER_BASE_DOMAIN}"
                         )
                         
@@ -4728,11 +4762,23 @@ def lambda_handler(event, context):
                         logger.error(f"Error during shared-core provisioning: {str(e)}", exc_info=True)
                 
                 # Step 5: Build response with student URLs and secrets
-                # Get SUT URL from instance assignment
-                sut_url = creation_result.get('sut_url', f"https://sut-{student_id}.{INSTANCE_MANAGER_BASE_DOMAIN}")
-                jenkins_url = get_shared_core_urls(student_id, workshop_name_param).get('jenkins_url', f"https://jenkins.{workshop_name_param}.{INSTANCE_MANAGER_BASE_DOMAIN}/job/{student_id}/")
-                gitea_url = get_shared_core_urls(student_id, workshop_name_param).get('gitea_url', f"https://gitea.{workshop_name_param}.{INSTANCE_MANAGER_BASE_DOMAIN}/fellowship-org/fellowship-sut-{student_id}")
+                # Get shared-core URLs if in shared-core mode, otherwise use per-instance URLs
+                shared_core_urls = get_shared_core_urls(student_id, workshop_name_param)
                 
+                if shared_core_urls.get('shared_core_mode'):
+                    # Shared-core mode: all students use the same Jenkins and Gitea services
+                    logger.info(f"Building shared-core URLs for student {student_id}")
+                    sut_url = creation_result.get('sut_url', f"https://sut-{student_id}.{INSTANCE_MANAGER_BASE_DOMAIN}")
+                    jenkins_url = shared_core_urls.get('jenkins_job_url', '#')
+                    gitea_url = shared_core_urls.get('gitea_repo_url', '#')
+                else:
+                    # Per-instance mode (deprecated for fellowship): each student gets their own services
+                    logger.info(f"Building per-instance URLs for student {student_id}")
+                    sut_url = creation_result.get('sut_url', f"https://sut-{student_id}.{INSTANCE_MANAGER_BASE_DOMAIN}")
+                    jenkins_url = f"https://jenkins.{workshop_name_param}.{INSTANCE_MANAGER_BASE_DOMAIN}/job/{student_id}/"
+                    gitea_url = f"https://gitea.{workshop_name_param}.{INSTANCE_MANAGER_BASE_DOMAIN}/fellowship-org/fellowship-sut-{student_id}"
+                
+               
                 # Get LLM secrets if available (from environment or secrets manager)
                 llm_secrets = []
                 try:
@@ -4746,7 +4792,7 @@ def lambda_handler(event, context):
                     'success': True,
                     'message': f"Student {student_id} assigned successfully",
                     'student_name': student_id,
-                    'password': student_id,
+                    'password': student_password,  # Use secure password, not student_id (CRITICAL FIX)
                     'instance_id': instance_id,
                     'sut_url': sut_url,
                     'jenkins_url': jenkins_url,
