@@ -151,19 +151,28 @@ def call_assign_student_endpoint(password=None):
     try:
         # Build request to /api/assign-student endpoint
         url = INSTANCE_MANAGER_URL.rstrip('/') + '/api/assign-student'
-        request_body = {
-            'workshop': WORKSHOP_NAME,
-        }
         
         # Get password from parameter or retrieve from Secrets Manager
         auth_password = password or get_password_from_secret()
+        
+        # Build request body with password for endpoint authentication
+        request_body = {
+            'workshop': WORKSHOP_NAME,
+        }
         if auth_password:
             request_body['password'] = auth_password
+            logger.info(f"Adding password to request body for endpoint authentication")
         else:
             logger.warning("No instance manager password available - request may fail with 401 if authentication is required")
         
-        logger.info(f"Calling /api/assign-student endpoint on {INSTANCE_MANAGER_URL}")
+        logger.info(f"Calling /api/assign-student endpoint on {INSTANCE_MANAGER_URL} with workshop={WORKSHOP_NAME}")
         response = requests.post(url, json=request_body, timeout=60)
+        
+        # Log response details for debugging
+        logger.info(f"Response status code: {response.status_code}")
+        if response.status_code != 200:
+            logger.warning(f"Response body: {response.text[:500]}")
+        
         response.raise_for_status()
         
         data = response.json()
