@@ -16,6 +16,7 @@ This function is themed for Lord of the Rings and integrates with:
 """
 
 from botocore.exceptions import ClientError
+from boto3.dynamodb.conditions import Key
 import json
 import boto3
 import os
@@ -28,12 +29,6 @@ import urllib.parse
 from datetime import datetime, timedelta
 import requests
 
-# Import LOTR character lore for student identity display
-try:
-    from generate_student_identity import get_character_lore
-except ImportError:
-    def get_character_lore(char):
-        return {}
 
 # Initialize AWS clients first
 # (No import of common module - we'll call instance_manager via HTTP endpoint instead)
@@ -329,7 +324,7 @@ NODE_ENV=development
     return env_content.lstrip()
 
 
-def generate_html_response(user_info, error_message=None, status_lambda_url=None):
+def generate_html_response(user_info, env_content='', error_message=None, status_lambda_url=None):
     """Generate LOTR-themed HTML response with student assignment information"""
     if error_message:
         return f"""<!DOCTYPE html>
@@ -439,6 +434,21 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                 <div class="section-box">
                     <h3 class="section-title">🤖 Azure LLM Configuration</h3>
                     <div class="config-grid">{llm_rows}</div>
+                </div>"""
+
+    # Build .env section
+    env_section = ""
+    if env_content:
+        # Escape for HTML display
+        env_display = env_content.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+        env_section = f"""
+                <div class="env-section">
+                    <div class="env-section-title">📝 Environment Configuration (.env)</div>
+                    <div class="env-preview">{env_display}</div>
+                    <div class="env-actions">
+                        <button class="env-btn env-btn-download" onclick="downloadEnv()">⬇️ Download .env</button>
+                        <button class="env-btn env-btn-copy" onclick="copyEnv()">📋 Copy to Clipboard</button>
+                    </div>
                 </div>"""
 
     return f"""<!DOCTYPE html>
@@ -857,6 +867,8 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
             </div>
         </div>
 
+        {env_section}
+
         {sut_section}
 
         <!-- Links -->
@@ -1004,117 +1016,163 @@ def cleanup_expired_sessions():
         logger.error(f"Error in cleanup_expired_sessions: {str(e)}")
 
 
+def parse_cookies(cookie_header: str) -> dict:
+    """Parse Cookie header string into dict.
+    
+    Input: 'fellowship_student=frodo-001; fellowship_instance_id=i-xxx'
+    Output: {'fellowship_student': 'frodo-001', 'fellowship_instance_id': 'i-xxx'}
+    """
+    cookies = {}
+    if cookie_header:
+        for part in cookie_header.split(';'):
+            part = part.strip()
+            if '=' in part:
+                key, val = part.split('=', 1)
+                cookies[key.strip()] = urllib.parse.unquote(val.strip())
+    return cookies
+
+
 def lambda_handler(event, context):
-    """Main Lambda handler for fellowship student assignment"""
+    """Main Lambda handler for fellowship student assignment.
+    
+    POST /api/fellowship/assign -> Assign student or return existing assignment
+    
+    Flow:
+    1. Check for existing assignment via fellowship_student cookie
+    2. If exists: return stored assignment info + .env
+    3. If new: Call /api/assign-student on instance_manager
+    4. Generate .env file content
+    5. Generate LOTR-themed HTML response
+    6. Set 7-day TTL cookies for session persistence
+    """
     try:
-        logger.info(f"Lambda handler invoked. Event: {json.dumps(event)}")
-        logger.info(f"Status Lambda URL: {STATUS_LAMBDA_URL}")
-
-        if not STATUS_LAMBDA_URL:
-            logger.warning("STATUS_LAMBDA_URL not configured")
-            return {
-                'statusCode': 200,
-                'headers': {'Content-Type': 'text/html'},
-                'body': generate_html_response(
-                    {},
-                    error_message="The status service is not properly configured. Please try again in a few minutes.",
-                    status_lambda_url=None
-                )
-            }
-
-        # Check if GET request
-        if event.get('requestContext', {}).get('http', {}).get('method') != 'GET':
+        logger.info(f"Lambda handler invoked")
+        logger.info(f"Event method: {event.get('requestContext', {}).get('http', {}).get('method') if isinstance(event, dict) else 'N/A'}")
+        
+        http_method = event.get('requestContext', {}).get('http', {}).get('method', 'POST')
+        if http_method.upper() not in ['POST', 'GET']:
             return {
                 'statusCode': 405,
-                'headers': {'Content-Type': 'text/html'},
-                'body': '<html><body><h1>Method Not Allowed</h1><p>Only GET requests are supported.</p></body></html>'
-            }
-
-        # Get request path
-        path = event.get('requestContext', {}).get('http', {}).get('path', '/').rstrip('/')
-        logger.info(f"Request path: {path}")
-
-        # Handle destroy endpoint
-        if path == '/destroy':
-            query_params = event.get('queryStringParameters', {}) or {}
-            if query_params.get('key') == DESTROY_KEY:
-                logger.info("Destroy request initiated")
-                cleanup_expired_sessions()
-                return {
-                    'statusCode': 200,
-                    'headers': {'Content-Type': 'application/json'},
-                    'body': json.dumps({'status': 'cleanup_initiated'})
-                }
-            else:
-                logger.warning("Invalid destroy key")
-                return {
-                    'statusCode': 403,
-                    'headers': {'Content-Type': 'application/json'},
-                    'body': json.dumps({'error': 'Invalid destroy key'})
-                }
-
-        # Get student from cookies or create new one
-        headers = event.get('headers', {}) or {}
-        cookies_list = event.get('cookies', [])
-        student_name = None
-
-        # Try to get student from cookies
-        if cookies_list:
-            for cookie in cookies_list:
-                if cookie.startswith('fellowship_student='):
-                    student_name = urllib.parse.unquote(cookie.split('=', 1)[1])
-                    break
-
-        # If no student in cookies, create new one
-        if not student_name:
-            logger.info("Creating new student assignment")
-            user_info = create_student()
-        else:
-            logger.info(f"Using existing student: {student_name}")
-            # Retrieve existing student info from DynamoDB
+                'headers': get_cors_headers(),
+                'body': json.dumps({'error': 'Method not allowed'})}
+        
+        # Parse request
+        body = json.loads(event.get('body') or '{}') if event.get('body') else {}
+        query_params = event.get('queryStringParameters') or {}
+        headers = event.get('headers') or {}
+        
+        logger.info(f"Body: {body}")
+        logger.info(f"Query params: {query_params}")
+        
+        # Parse cookies
+        cookie_header = headers.get('cookie') or headers.get('Cookie') or ''
+        cookies = parse_cookies(cookie_header)
+        existing_student = cookies.get('fellowship_student')
+        
+        logger.info(f"Existing student cookie: {existing_student}")
+        
+        user_info = None
+        
+        # ── Path 1: Existing Assignment ──────────────────────────────────────
+        if existing_student:
+            logger.info(f"Found existing student in cookie: {existing_student}")
             try:
-                response = table.get_item(Key={'student_name': student_name})
-                if 'Item' in response:
-                    item = response['Item']
+                # Retrieve from DynamoDB using GSI
+                response = table.query(
+                    IndexName='student_name-index',
+                    KeyConditionExpression=Key('student_name').eq(existing_student)
+                )
+                
+                if response.get('Items'):
+                    item = response['Items'][0]
                     user_info = {
-                        'student_name': student_name,
+                        'student_name': existing_student,
+                        'password': item.get('password', 'unknown'),
                         'instance_id': item.get('instance_id'),
-                        'sut_url': item.get('sut_url'),
+                        'sut_url': item.get('sut_url', item.get('instance_id', '')),
+                        'created_at': item.get('created_at', '')
                     }
-                    if item.get('llm_config_name'):
-                        user_info['llm_configs'] = [{
-                            'config_name': item.get('llm_config_name'),
-                            'api_key': item.get('llm_api_key'),
-                        }]
-                    # Regenerate URLs
-                    urls = generate_fellowship_urls(student_name, item.get('sut_url', ''))
+                    
+                    # Generate URLs
+                    urls = generate_fellowship_urls(existing_student, user_info['sut_url'])
                     user_info.update(urls)
+                    
+                    # Generate .env
+                    env_content = generate_env_content(user_info)
+                    
+                    logger.info(f"Returning existing assignment for {existing_student}")
                 else:
-                    logger.warning(f"Student {student_name} not found in DynamoDB, creating new")
-                    user_info = create_student()
+                    logger.warning(f"Student {existing_student} not found in DynamoDB, treating as new")
+                    user_info = None
             except Exception as e:
-                logger.error(f"Error retrieving student info: {str(e)}")
-                user_info = create_student()
-
-        # Generate HTML response
+                logger.error(f"Error retrieving existing student: {str(e)}")
+                user_info = None
+        
+        # ── Path 2: New Assignment ───────────────────────────────────────────
+        if not user_info:
+            logger.info("Creating new student assignment")
+            
+            # Call /api/assign-student endpoint
+            assign_result = call_assign_student_endpoint()
+            
+            if not assign_result.get('success'):
+                logger.error(f"Failed to assign student: {assign_result.get('error')}")
+                return {
+                    'statusCode': 500,
+                    'headers': get_cors_headers(),
+                    'body': generate_html_response(
+                        {}, 
+                        error_message=f"Failed to assign student: {assign_result.get('error')}",
+                        status_lambda_url=STATUS_LAMBDA_URL
+                    )
+                }
+            
+            # Parse response from instance manager
+            user_info = {
+                'student_name': assign_result.get('student_name', ''),
+                'password': assign_result.get('password', ''),
+                'instance_id': assign_result.get('instance_id', ''),
+                'sut_url': assign_result.get('sut_url', ''),
+                'jenkins_url': assign_result.get('jenkins_url', ''),
+                'gitea_url': assign_result.get('gitea_url', ''),
+                'llm_configs': assign_result.get('llm_configs', []),
+                'shared_core_provision': assign_result.get('shared_core_provision', None),
+                'created_at': assign_result.get('created_at', '')
+            }
+            
+            logger.info(f"New student assigned: {user_info['student_name']} -> {user_info['instance_id']}")
+        
+        # ── Generate Response ────────────────────────────────────────────────
+        
+        # Generate .env file content
+        env_content = generate_env_content(user_info)
+        
+        # Generate HTML response with .env display
         html_content = generate_html_response(
             user_info=user_info,
+            env_content=env_content,
             error_message=None,
             status_lambda_url=STATUS_LAMBDA_URL
         )
-
+        
+        # Create Set-Cookie headers
+        cookie_headers = create_cookie_headers(user_info)
+        
         # Build response
         response = {
             'statusCode': 200,
-            'headers': {'Content-Type': 'text/html'},
-            'body': html_content,
+            'headers': {
+                'Content-Type': 'text/html; charset=utf-8',
+                'Cache-Control': 'no-cache, no-store, must-revalidate'
+            }
         }
-
-        # Add cookies if present
-        cookie_headers = create_cookie_headers(user_info)
+        
+        # Add cookies to header list
         if cookie_headers:
-            response['cookies'] = cookie_headers
-
+            response['headers']['Set-Cookie'] = cookie_headers
+        
+        response['body'] = html_content
+        
         logger.info(f"Returning response with {len(cookie_headers) if cookie_headers else 0} cookies")
         return response
 
