@@ -47,6 +47,27 @@ logger.info(f"WORKSHOP_NAME: {WORKSHOP_NAME}")
 logger.info(f"ENVIRONMENT: {ENVIRONMENT}")
 logger.info("=" * 60)
 
+# ════════════════════════════════════════════════════════════════
+# NOTE: Data Consistency Fix (Applied 2026-04-24)
+# ════════════════════════════════════════════════════════════════
+# ISSUE: Pool instances created with pre-assigned students (via /api/create?student_name=X)
+#        were tagged with 'Student=X' but reserve_pool_instance() only checked 'AssignedStudent'.
+#        This allowed pre-configured instances to be reassigned to different students.
+# 
+# FIX APPLIED (Phase 1): reserve_pool_instance() now checks BOTH tags:
+#        assigned_to = tags.get('AssignedStudent', '') or tags.get('Student', '')
+#
+# PHASE 2 TODO (Next Sprint):
+#        1. Normalize all instances to use 'AssignedStudent' tag instead of 'Student'
+#        2. Create migration script to batch-tag existing instances
+#        3. Update create_instance() to use 'AssignedStudent' when setting student
+#        4. Remove 'Student' tag usage to eliminate dual-tag technical debt
+#        5. Add validation tests for tag consistency
+#
+# VERIFICATION:
+#        See: DATA_CONSISTENCY_BUG_ANALYSIS.md (root repo root)
+# ════════════════════════════════════════════════════════════════
+
 # Initialize AWS clients
 try:
     logger.info("Initializing AWS clients...")
@@ -2899,6 +2920,14 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
                     {'Key': 'TerminateTimeout', 'Value': str(final_terminate_timeout)},
                     {'Key': 'HardTerminateTimeout', 'Value': str(final_hard_terminate_timeout)}
                 ]
+                
+                # ── PRE-ASSIGNMENT TAGS for pool instances ──
+                # Pool instances are created with Student and AssignedStudent tags to support
+                # the pre-assignment workflow where instances are prepared with student data
+                # but held available (not yet assigned) for later assignment.
+                tags.append({'Key': 'Student', 'Value': instance_student_name})
+                tags.append({'Key': 'AssignedStudent', 'Value': 'false'})
+                logger.info(f"Pool instance {i+1}/{count} tagged with pre-assignment: Student={instance_student_name}, AssignedStudent=false")
             
             # Add TutorialSessionID tag if provided
             if tutorial_session_id:
@@ -3264,6 +3293,33 @@ export GITEA_REPO_NAME={_gitea_repo}
                 'purchase_type': purchase_type,
                 'spot_max_price': float(spot_max_price) if (purchase_type == 'spot' and spot_max_price is not None) else None
             })
+            
+            # Store pre-created instance data in DynamoDB for pool instances (pre-assignment phase)
+            # This data will be retrieved when the instance is later assigned to a student
+            if instance_type == 'pool':
+                try:
+                    assignment_table = dynamodb.Table(f"instance-assignments-{workshop_name}-{ENVIRONMENT}")
+                    timestamp = datetime.utcnow().isoformat()
+                    ttl_seconds = 90 * 24 * 60 * 60  # 90 days for pool instances
+                    ttl_epoch = int((datetime.utcnow() + timedelta(seconds=ttl_seconds)).timestamp())
+                    
+                    assignment_table.put_item(
+                        Item={
+                            'instance_id': instance_id,
+                            'student_name': instance_student_name,  # Pre-assigned student name
+                            'password': instance_student_name,  # Use student_name as default password
+                            'workshop': workshop_name,
+                            'status': 'pool_created',  # Pre-assignment status
+                            'created_at': timestamp,
+                            'instance_type': instance_type,
+                            'machine_name': machine_name or '',
+                            'provisioning_status': 'initializing',  # Will be updated as instance provisions
+                            'ttl': ttl_epoch
+                        }
+                    )
+                    logger.info(f"Stored pre-assignment data in DynamoDB for pool instance {instance_id}: student_name={instance_student_name}")
+                except Exception as e:
+                    logger.warning(f"Failed to store pre-assignment data in DynamoDB for {instance_id}: {str(e)}")
             
             logger.info(f"Created {instance_type} instance {instance_id} ({i+1}/{count}) - will be stopped automatically once running")
             
@@ -4420,22 +4476,29 @@ def generate_student_name(workshop_name: str) -> str:
 
 
 def reserve_pool_instance(workshop_name: str = None) -> dict:
-    """Reserve first available (unassigned) pool instance from EC2.
+    """Reserve first available (unassigned) pool instance from EC2 with pre-created data.
     
     Looks for instances tagged:
     - Type=pool
-    - WorkshopID=<WORKSHOP_NAME env var>  (NOT the fellowship request param)
-    - No 'AssignedStudent' tag, or AssignedStudent=NONE / empty
+    - WorkshopID=<WORKSHOP_NAME env var>
+    - AssignedStudent=false (pre-assignment) or empty
+    - Student tag (for pre-created student name)
     - instance state: running or stopped
     
-    When found, tags the instance with AssignmentStatus=reserving to prevent
-    a second concurrent request from grabbing the same instance.
+    When found, retrieves pre-created student data from DynamoDB and returns both
+    instance info and pre-created data (student_name, password, etc).
     
     Returns:
-        dict: success, instance_id or error
+        dict: {
+            success: bool,
+            instance_id: str,
+            instance_type: str,
+            student_name: str (from Student tag if pre-created),
+            pre_created_data: dict (from DynamoDB if exists),
+            message: str
+        }
     """
-    # Pool instances are tagged with WORKSHOP_NAME (e.g. 'shared'), not the
-    # per-request workshop param (e.g. 'fellowship').
+    # Pool instances are tagged with WORKSHOP_NAME (from Lambda env)
     pool_workshop = WORKSHOP_NAME
     
     try:
@@ -4453,8 +4516,11 @@ def reserve_pool_instance(workshop_name: str = None) -> dict:
                 tags = {tag['Key']: tag['Value'] for tag in instance.get('Tags', [])}
                 
                 # Skip instances already assigned to a real student
-                assigned_to = tags.get('AssignedStudent', '')
-                if assigned_to and assigned_to not in ('NONE', '__AVAILABLE__', ''):
+                # Check both 'AssignedStudent' (from /api/assign-student) and 'Student' (from pool creation)
+                # to handle both dynamically assigned instances and pre-provisioned pool instances
+                assigned_to = tags.get('AssignedStudent', '') or tags.get('Student', '')
+                if assigned_to and assigned_to not in ('NONE', '__AVAILABLE__', '', 'false', 'False'):
+                    logger.debug(f"Skipping instance {instance['InstanceId']}: already assigned to {assigned_to}")
                     continue
                 
                 # Skip instances being reserved by another concurrent request
@@ -4463,6 +4529,7 @@ def reserve_pool_instance(workshop_name: str = None) -> dict:
                 
                 instance_id = instance['InstanceId']
                 instance_type = instance['InstanceType']
+                pre_created_student_name = tags.get('Student', '')  # Get pre-assigned student name
                 
                 # Optimistically mark as 'reserving' to prevent double-assignment
                 try:
@@ -4474,10 +4541,38 @@ def reserve_pool_instance(workshop_name: str = None) -> dict:
                     logger.warning(f"Could not tag {instance_id} as reserving: {tag_err}")
                 
                 logger.info(f"Reserved pool instance {instance_id} ({instance_type}) from {pool_workshop} pool")
+                logger.info(f"  Pre-assigned student: {pre_created_student_name}")
+                
+                # Fetch pre-created data from DynamoDB if available
+                pre_created_data = None
+                if pre_created_student_name:
+                    try:
+                        assignment_table = dynamodb.Table(f"instance-assignments-{pool_workshop}-{ENVIRONMENT}")
+                        response = assignment_table.get_item(Key={'instance_id': instance_id})
+                        pre_created_item = response.get('Item', {})
+                        
+                        if pre_created_item:
+                            pre_created_data = {
+                                'student_name': pre_created_item.get('student_name', pre_created_student_name),
+                                'password': pre_created_item.get('password', pre_created_student_name),
+                                'machine_name': pre_created_item.get('machine_name', ''),
+                                'provisioning_status': pre_created_item.get('provisioning_status', 'initializing'),
+                                'workshop': pre_created_item.get('workshop', pool_workshop),
+                                'created_at': pre_created_item.get('created_at', '')
+                            }
+                            logger.info(f"Retrieved pre-created data for {instance_id}: student_name={pre_created_data['student_name']}, status={pre_created_data['provisioning_status']}")
+                        else:
+                            logger.info(f"No pre-created data found in DynamoDB for {instance_id}, instance will use generated data")
+                    except Exception as db_err:
+                        logger.warning(f"Failed to retrieve pre-created data from DynamoDB for {instance_id}: {str(db_err)}")
+                        logger.warning(f"Instance will be assigned with generated data instead")
+                
                 return {
                     'success': True,
                     'instance_id': instance_id,
                     'instance_type': instance_type,
+                    'student_name': pre_created_student_name,  # Pre-assigned student name (may be empty for legacy instances)
+                    'pre_created_data': pre_created_data,  # Full pre-created data from DynamoDB (if exists)
                     'message': f'Reserved pool instance {instance_id}'
                 }
         
@@ -6019,6 +6114,8 @@ def lambda_handler(event, context):
         
         elif api_path == '/api/assign-student' and http_method == 'POST':
             # Unified endpoint for assigning student to EC2 instance
+            # Supports both pre-assignment workflow (pool instances with pre-created data)
+            # and dynamic assignment workflow (new student names generated on demand)
             # Used by fellowship_student_assignment and other workshop lambdas
             workshop_name = body.get('workshop') or query_params.get('workshop') or WORKSHOP_NAME
             auth_password = body.get('password') or query_params.get('password')
@@ -6034,15 +6131,7 @@ def lambda_handler(event, context):
                     }
             
             try:
-                # 1. Generate unique student name
-                student_name = generate_student_name(workshop_name)
-                logger.info(f"Generated student name: {student_name}")
-                
-                # 2. Generate random password
-                password = student_name
-                logger.info(f"Generated password for {student_name} as {password}")
-                
-                # 3. Reserve pool EC2 instance
+                # 1. Reserve pool EC2 instance (may be pre-created with student data)
                 instance_result = reserve_pool_instance(workshop_name)
                 if not instance_result['success']:
                     return {
@@ -6059,45 +6148,78 @@ def lambda_handler(event, context):
                 instance_type = instance_result['instance_type']
                 logger.info(f"Reserved instance: {instance_id}")
                 
-                # 4. Tag instance with student info
+                # 2. Determine student assignment source: PRE-CREATED or GENERATED
+                pre_created_data = instance_result.get('pre_created_data')
+                assignment_source = 'pre_created' if pre_created_data else 'generated'
+                
+                if assignment_source == 'pre_created':
+                    # Use pre-created student data from pool instance
+                    student_name = pre_created_data['student_name']
+                    password = pre_created_data['password']
+                    logger.info(f"Using pre-created student data: student_name={student_name} (source=pool_instance)")
+                else:
+                    # Generate new student name and password (backward compatibility)
+                    student_name = generate_student_name(workshop_name)
+                    password = student_name
+                    logger.info(f"Generated new student data: student_name={student_name} (source=generated)")
+                
+                # 3. Tag instance with assignment info
                 ec2.create_tags(
                     Resources=[instance_id],
                     Tags=[
-                        {'Key': 'AssignedStudent', 'Value': student_name},
+                        {'Key': 'AssignedStudent', 'Value': 'true'},  # Mark as assigned
                         {'Key': 'AssignedAt', 'Value': datetime.utcnow().isoformat()},
                         {'Key': 'Workshop', 'Value': workshop_name},
+                        {'Key': 'AssignmentSource', 'Value': assignment_source},  # Track source
                         {'Key': 'StudentPassword', 'Value': '__ENCRYPTED__'},  # Password should be stored in Secrets Manager, not tags
                         {'Key': 'AssignmentStatus', 'Value': 'active'}
                     ]
                 )
-                logger.info(f"Tagged instance {instance_id} with student {student_name}")
+                logger.info(f"Tagged instance {instance_id} with assignment: student={student_name}, source={assignment_source}")
                 
-                # 5. Store in DynamoDB (use workshop-scoped table, not the module-level 'table')
-                # The module-level 'table' may point to a different workshop (e.g. WORKSHOP_NAME='shared')
+                # 4. Store/update assignment in DynamoDB
                 assignment_table = dynamodb.Table(f"instance-assignments-{workshop_name}-{ENVIRONMENT}")
                 timestamp = datetime.utcnow().isoformat()
                 ttl_seconds = 7 * 24 * 60 * 60  # 7 days
                 ttl_epoch = int((datetime.utcnow() + timedelta(seconds=ttl_seconds)).timestamp())
                 
-                assignment_table.put_item(
-                    Item={
-                        'instance_id': instance_id,
-                        'student_name': student_name,
-                        'password': password,  # Note: Should encrypt in production
-                        'workshop': workshop_name,
-                        'status': 'starting',
-                        'created_at': timestamp,
-                        'instance_type': instance_type,
-                        'ttl': ttl_epoch
-                    }
-                )
-                logger.info(f"Stored assignment in DynamoDB: {student_name} -> {instance_id}")
+                if assignment_source == 'pre_created':
+                    # Update existing pre-created record with assignment info
+                    assignment_table.update_item(
+                        Key={'instance_id': instance_id},
+                        UpdateExpression='SET assigned_to = :assigned_to, assigned_at = :assigned_at, #status = :status, assignment_source = :source',
+                        ExpressionAttributeNames={'#status': 'status'},
+                        ExpressionAttributeValues={
+                            ':assigned_to': student_name,
+                            ':assigned_at': timestamp,
+                            ':status': 'assigned',
+                            ':source': assignment_source
+                        }
+                    )
+                    logger.info(f"Updated pre-created assignment in DynamoDB: {student_name} -> {instance_id}")
+                else:
+                    # Create new record for dynamically assigned instance
+                    assignment_table.put_item(
+                        Item={
+                            'instance_id': instance_id,
+                            'student_name': student_name,
+                            'password': password,
+                            'workshop': workshop_name,
+                            'status': 'assigned',
+                            'assignment_source': assignment_source,
+                            'created_at': timestamp,
+                            'assigned_at': timestamp,
+                            'instance_type': instance_type,
+                            'ttl': ttl_epoch
+                        }
+                    )
+                    logger.info(f"Created assignment in DynamoDB: {student_name} -> {instance_id}")
                 
-                # 6. Get SUT URL (construct from domain or retrieve from Route53)
+                # 5. Get SUT URL (construct from domain or retrieve from Route53)
                 sut_domain = os.environ.get('FELLOWSHIP_SUT_DOMAIN', f'sut.{workshop_name}.testingfantasy.com')
                 sut_url = f"https://{sut_domain}/{student_name}" if sut_domain else f"http://{instance_id}.internal:5000"
                 
-                # 7. Provision on shared-core if enabled
+                # 6. Provision on shared-core if enabled
                 shared_core_provision = None
                 shared_core_mode = os.environ.get('SHARED_CORE_MODE', 'false').lower() in ('true', '1', 'yes')
                 
@@ -6115,23 +6237,30 @@ def lambda_handler(event, context):
                         logger.warning(f"Failed to provision on shared-core: {str(e)}, continuing anyway")
                         shared_core_provision = {'success': False, 'error': str(e)}
                 
-                # 8. Return unified response
+                # 7. Return unified response
+                response_body = {
+                    'success': True,
+                    'student_name': student_name,
+                    'password': password,
+                    'instance_id': instance_id,
+                    'instance_type': instance_type,
+                    'sut_url': sut_url,
+                    'jenkins_user': student_name,
+                    'gitea_user': student_name,
+                    'assignment_source': assignment_source,  # Indicate source of assignment
+                    'shared_core_provision': shared_core_provision,
+                    'message': f'Successfully assigned {student_name} to instance {instance_id}',
+                    'created_at': timestamp
+                }
+                
+                # Include pre-created data fields if available (e.g., provisioning_status)
+                if pre_created_data:
+                    response_body['provisioning_status'] = pre_created_data.get('provisioning_status', 'initializing')
+                
                 return {
                     'statusCode': 200,
                     'headers': get_cors_headers(),
-                    'body': json.dumps({
-                        'success': True,
-                        'student_name': student_name,
-                        'password': password,
-                        'instance_id': instance_id,
-                        'instance_type': instance_type,
-                        'sut_url': sut_url,
-                        'jenkins_user': student_name,
-                        'gitea_user': student_name,
-                        'shared_core_provision': shared_core_provision,
-                        'message': f'Successfully assigned {student_name} to instance {instance_id}',
-                        'created_at': timestamp
-                    })
+                    'body': json.dumps(response_body)
                 }
             
             except Exception as e:
