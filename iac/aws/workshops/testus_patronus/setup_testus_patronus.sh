@@ -59,6 +59,40 @@ for i in {1..5}; do
 done
 [ -z "$AWS_REGION" ] && AWS_REGION="eu-west-3" && log "Using default region: $AWS_REGION" || log "Region: $AWS_REGION"
 
+CURRENT_DIFY_VERSION="1.13.3"
+PREVIOUS_DIFY_VERSION="1.9.1"
+
+resolve_dify_version() {
+    local strategy="${1:-current}"
+
+    case "$strategy" in
+        previous)
+            echo "$PREVIOUS_DIFY_VERSION"
+            return 0
+            ;;
+        latest)
+            local latest_tag
+            latest_tag=$(git ls-remote --tags --refs https://github.com/langgenius/dify.git 2>/dev/null \
+                | awk '{print $2}' \
+                | sed 's#refs/tags/##' \
+                | grep -E '^[0-9]+\.[0-9]+\.[0-9]+$' \
+                | sort -V \
+                | tail -n 1)
+            if [ -n "$latest_tag" ]; then
+                echo "$latest_tag"
+                return 0
+            fi
+            log "WARNING: Failed to resolve latest Dify tag, falling back to current version ${CURRENT_DIFY_VERSION}"
+            echo "$CURRENT_DIFY_VERSION"
+            return 0
+            ;;
+        current|*)
+            echo "$CURRENT_DIFY_VERSION"
+            return 0
+            ;;
+    esac
+}
+
 # Function to wait for yum lock
 wait_for_yum() {
     while sudo fuser /var/run/yum.pid >/dev/null 2>&1; do
@@ -100,14 +134,26 @@ run_as_ec2user_docker() {
     sg docker -c "su - ec2-user -c '$cmd'"
 }
 
+DIFY_VERSION_STRATEGY=$(echo "${DIFY_VERSION_STRATEGY:-current}" | tr '[:upper:]' '[:lower:]')
+case "$DIFY_VERSION_STRATEGY" in
+    current|previous|latest) ;;
+    *)
+    log "WARNING: Invalid DIFY_VERSION_STRATEGY='$DIFY_VERSION_STRATEGY', using 'current'"
+    DIFY_VERSION_STRATEGY="current"
+        ;;
+esac
+
+DIFY_VERSION=$(resolve_dify_version "$DIFY_VERSION_STRATEGY")
+log "Resolved Dify strategy '${DIFY_VERSION_STRATEGY}' to Dify version '${DIFY_VERSION}'"
+
 # Clone and configure Dify as ec2-user with specific version
 log "Setting up Dify..."
 su - ec2-user -c "git clone https://github.com/langgenius/dify.git ~/dify"
-su - ec2-user -c "cd ~/dify && git checkout 1.13.3"  # Pin to stable version 1.9.1
+su - ec2-user -c "cd ~/dify && git checkout ${DIFY_VERSION}"
 su - ec2-user -c "cp ~/dify/docker/.env.example ~/dify/docker/.env"
 
 # Configure Dify with minimal, documented configuration
-cat >> /home/ec2-user/dify/docker/.env << 'EOF'
+cat >> /home/ec2-user/dify/docker/.env << EOF
 
 # ===== MINIMAL DIFY CONFIGURATION =====
 
@@ -120,10 +166,10 @@ NEXT_PUBLIC_PUBLIC_API_PREFIX=/v1
 
 # ===== VERSION PINNING FOR STABILITY =====
 # Pin Docker image versions to avoid compatibility issues
-DIFY_API_VERSION=1.9.1
-DIFY_WEB_VERSION=1.9.1
-DIFY_WORKER_VERSION=1.9.1
-DIFY_WORKER_BEAT_VERSION=1.9.1
+DIFY_API_VERSION=${DIFY_VERSION}
+DIFY_WEB_VERSION=${DIFY_VERSION}
+DIFY_WORKER_VERSION=${DIFY_VERSION}
+DIFY_WORKER_BEAT_VERSION=${DIFY_VERSION}
 
 # Database and Redis versions (stable versions)
 POSTGRES_VERSION=15-alpine
@@ -154,7 +200,7 @@ log "Waiting for Dify services to start..."
 sleep 120
 
 log "✓ Dify setup completed successfully"
-log "Dify version: 1.9.1 (pinned for stability)"
+log "Dify version: ${DIFY_VERSION} (strategy: ${DIFY_VERSION_STRATEGY})"
 
 # Install Caddy for HTTPS
 log "Installing Caddy for HTTPS..."

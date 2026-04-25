@@ -117,7 +117,7 @@ app.get('/api/list', checkAuth, async (req, res) => {
 
 app.post('/api/create', checkAuth, async (req, res) => {
   await delay(500)
-  const { count, type, workshop, tutorial_session_id, cleanup_days, purchase_type, spot_max_price } = req.body
+  const { count, type, workshop, tutorial_session_id, cleanup_days, purchase_type, spot_max_price, dify_version_strategy } = req.body
   
   const newInstances = []
   for (let i = 0; i < (count || 1); i++) {
@@ -132,6 +132,7 @@ app.post('/api/create', checkAuth, async (req, res) => {
       tutorial_session_id: tutorial_session_id || null,
       purchase_type: purchase_type || 'on-demand',
       spot_max_price: purchase_type === 'spot' && spot_max_price ? spot_max_price : null,
+      dify_version_strategy: (workshop || 'fellowship') === 'testus_patronus' ? (dify_version_strategy || 'current') : null,
       assigned_to: null,
       created_at: new Date().toISOString(),
       https_url: null,

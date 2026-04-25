@@ -53,6 +53,11 @@ import {
 const APPROX_RATES_USD = EC2_ON_DEMAND_RATES
 
 const FALLBACK_RATES_USD = { onDemand: 0.0416, spot: 0.0125 }
+const DIFY_VERSION_OPTIONS = [
+  { value: 'current', label: 'Current (stable pin)' },
+  { value: 'previous', label: 'Previous (legacy pin)' },
+  { value: 'latest', label: 'Latest (resolve on launch)' }
+]
 
 function parseNumber(value) {
   if (value === null || value === undefined || value === '') return null
@@ -142,7 +147,8 @@ function TutorialDashboard() {
     count: 1,
     cleanup_days: 7,
     ec2_instance_type: DEFAULT_EC2_INSTANCE_TYPE,
-    spot_max_price: ''
+    spot_max_price: '',
+    dify_version_strategy: 'current'
   })
 
   useEffect(() => {
@@ -260,6 +266,10 @@ function TutorialDashboard() {
         ec2_instance_type: createFormData.ec2_instance_type || DEFAULT_EC2_INSTANCE_TYPE,
         purchase_type: enforcedPurchaseType,
         spot_max_price: enforcedPurchaseType === 'spot' ? effectiveSpotMaxPrice : null
+      }
+
+      if (workshop === 'testus_patronus') {
+        payload.dify_version_strategy = createFormData.dify_version_strategy || 'current'
       }
 
       if (createFormData.type === 'admin') {
@@ -556,6 +566,7 @@ function TutorialDashboard() {
 
   const isProductiveTutorial = session?.productive_tutorial === true ||
     (session?.productive_tutorial === undefined && session?.purchase_type === 'on-demand')
+  const isTestusPatronus = workshop === 'testus_patronus'
 
   const total = Math.max(stats?.total_instances || instances.length || 0, 1)
   const runningPct = Math.round(((stats?.running || 0) / total) * 100)
@@ -935,6 +946,24 @@ function TutorialDashboard() {
                   ))}
                 </Select>
               </FormControl>
+
+              {isTestusPatronus && (
+                <FormControl fullWidth>
+                  <InputLabel id="dify-version-label">Dify Version</InputLabel>
+                  <Select
+                    labelId="dify-version-label"
+                    value={createFormData.dify_version_strategy}
+                    label="Dify Version"
+                    onChange={(event) => setCreateFormData({ ...createFormData, dify_version_strategy: event.target.value })}
+                  >
+                    {DIFY_VERSION_OPTIONS.map((option) => (
+                      <MenuItem key={option.value} value={option.value}>
+                        {option.label}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+              )}
 
               {createFormData.type === 'admin' && (
                 <TextField
