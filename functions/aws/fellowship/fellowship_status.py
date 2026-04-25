@@ -305,12 +305,35 @@ def lambda_handler(event, context):
 
         # Extract SUT domain from EC2 instance tags (HttpsDomain tag set during pool creation)
         sut_domain = None
+        jenkins_url = None
+        gitea_url = None
+        ide_url = None
+        student_tag = None
         if instance.tags:
-            for tag in instance.tags:
-                if tag['Key'] == 'HttpsDomain':
-                    sut_domain = tag['Value']
-                    logger.info(f"Found SUT domain from EC2 tags: {sut_domain}")
-                    break
+            tags_dict = {tag['Key']: tag['Value'] for tag in instance.tags}
+            sut_domain = tags_dict.get('HttpsDomain')
+            student_tag = tags_dict.get('Student', '')
+            
+            # Build Jenkins URL from domain + student name
+            jenkins_domain_raw = tags_dict.get('JenkinsDomain', '')
+            if jenkins_domain_raw and student_tag:
+                jd = jenkins_domain_raw.replace('https://', '').replace('http://', '').split('/')[0]
+                jenkins_url = f"https://{jd}/job/{student_tag}/"
+            
+            # Build Gitea URL from domain + org + student name
+            gitea_domain_raw = tags_dict.get('GiteaDomain', '')
+            gitea_org = tags_dict.get('GiteaOrg', 'fellowship-org')
+            if gitea_domain_raw and student_tag:
+                gd = gitea_domain_raw.replace('https://', '').replace('http://', '').split('/')[0]
+                gitea_url = f"https://{gd}/{gitea_org}/fellowship-sut-{student_tag}"
+            
+            # Build IDE URL
+            ide_domain = tags_dict.get('IdeDomain', '')
+            if ide_domain:
+                ide_url = f"https://{ide_domain}"
+            
+            if sut_domain:
+                logger.info(f"Found SUT domain from EC2 tags: {sut_domain}")
         
         if not sut_domain:
             logger.warning(f"HttpsDomain tag not found for instance {instance_id}")
@@ -352,6 +375,9 @@ def lambda_handler(event, context):
                 'body': json.dumps({
                     'ready': True,
                     'url': sut_domain,
+                    'jenkins_url': jenkins_url,
+                    'gitea_url': gitea_url,
+                    'ide_url': ide_url,
                     'credentials': credentials
                 })
             }
