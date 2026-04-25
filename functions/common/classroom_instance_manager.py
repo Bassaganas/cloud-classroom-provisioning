@@ -3567,7 +3567,7 @@ def list_instances(include_terminated=False, tutorial_session_id=None, include_h
                     'type': instance_type,
                     'workshop': workshop_value,
                     'tutorial_session_id': resolved_tutorial_session_id,
-                    'assigned_to': assignment.get('student_name'),
+                    'assigned_to': assignment.get('student_name') or tags.get('AssignedStudent') or tags.get('Student') or None,
                     'assignment_status': assignment.get('status'),
                     'assigned_at': assignment.get('assigned_at'),
                     'cleanup_days': cleanup_days,  # Total cleanup days configured
@@ -5260,7 +5260,7 @@ def lambda_handler(event, context):
                         'error': str(e)
                     })
                 }
-        
+        # Manual assignment endpoint for pool instances (bypasses IAM user creation and shared-core provisioning)
         elif api_path == '/assign' and http_method == 'POST':
             # Manual assignment endpoint
             instance_id = body.get('instance_id') or query_params.get('instance_id')
@@ -5355,6 +5355,7 @@ def lambda_handler(event, context):
                     Tags=[
                         {'Key': 'Status', 'Value': 'starting'},
                         {'Key': 'Student', 'Value': student_name},
+                        {'Key': 'AssignedStudent', 'Value': student_name},
                         {'Key': 'Company', 'Value': 'TestingFantasy'}
                     ]
                 )

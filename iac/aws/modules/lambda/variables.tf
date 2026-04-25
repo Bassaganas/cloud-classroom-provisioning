@@ -54,20 +54,20 @@ variable "enable_dify_jira_api" {
   default     = true
 }
 
-variable "enable_fellowship_student_assignment" {
-  description = "Whether to create the Fellowship Student Assignment Lambda (for student credential/URL provisioning)"
+variable "enable_fellowship_lambdas" {
+  description = "Whether to create the Fellowship User Management and Status Lambdas"
   type        = bool
   default     = true
 }
 
-variable "fellowship_student_assignment_memory_size" {
-  description = "Memory size (MB) for fellowship_student_assignment Lambda"
+variable "fellowship_lambdas_memory_size" {
+  description = "Memory size (MB) for fellowship Lambda functions"
   type        = number
   default     = 512
 }
 
-variable "fellowship_student_assignment_timeout" {
-  description = "Timeout (seconds) for fellowship_student_assignment Lambda"
+variable "fellowship_lambdas_timeout" {
+  description = "Timeout (seconds) for fellowship Lambda functions"
   type        = number
   default     = 120
 }

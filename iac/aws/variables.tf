@@ -368,14 +368,14 @@ variable "fellowship_instance_manager_timeout" {
   default     = 300
 }
 
-variable "fellowship_student_assignment_memory_size" {
-  description = "Fellowship student assignment Lambda memory size"
+variable "fellowship_lambdas_memory_size" {
+  description = "Fellowship Lambda functions (user management + status) memory size"
   type        = number
   default     = 512
 }
 
-variable "fellowship_student_assignment_timeout" {
-  description = "Fellowship student assignment Lambda timeout"
+variable "fellowship_lambdas_timeout" {
+  description = "Fellowship Lambda functions (user management + status) timeout"
   type        = number
   default     = 120
 }
@@ -399,7 +399,7 @@ variable "fellowship_leaderboard_api_domain" {
 }
 
 variable "fellowship_student_assignment_domain" {
-  description = "Fellowship student assignment Lambda domain (e.g., fellowship.testingfantasy.com)"
+  description = "Domain for fellowship student entry point (fellowship_classroom_user_management Lambda)"
   type        = string
   default     = "fellowship.testingfantasy.com"
 }

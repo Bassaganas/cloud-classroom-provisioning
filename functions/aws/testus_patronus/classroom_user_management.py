@@ -14,6 +14,7 @@ import threading
 from datetime import datetime, timedelta
 import random
 import time as _debug_time
+import uuid
 
 # Get region and workshop context from environment variables
 REGION = os.environ.get('AWS_DEFAULT_REGION', os.environ.get('AWS_REGION', 'eu-west-3'))
@@ -59,6 +60,36 @@ def _debug_log(hypothesis_id, location, message, data=None):
     except Exception:
         pass
 # endregion agent debug log
+
+# ── Headers to prevent CloudFront from caching/collapsing responses ──────────
+NO_CACHE_HEADERS = {
+    'Content-Type': 'text/html',
+    'Cache-Control': 'no-store, no-cache, must-revalidate, private, max-age=0',
+    'Pragma': 'no-cache',
+    'Vary': '*',
+}
+
+def _build_response(status_code, body, cookies=None, content_type='text/html'):
+    """Build an HTTP response with anti-caching headers.
+    
+    Every response from this Lambda MUST go through this helper so that
+    CloudFront never caches or collapses user-specific responses.
+    """
+    headers = {
+        'Content-Type': content_type,
+        'Cache-Control': 'no-store, no-cache, must-revalidate, private, max-age=0',
+        'Pragma': 'no-cache',
+        'Vary': '*',
+    }
+    response = {
+        'statusCode': status_code,
+        'body': body,
+        'headers': headers,
+    }
+    if cookies:
+        response['cookies'] = cookies
+    return response
+
 
 def create_cookie_headers(user_info):
     """Create Set-Cookie headers for user session information"""
@@ -207,29 +238,8 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
         </body>
         </html>
         """
-    
-    # Extract user info
-    user_name = user_info.get('user_name', 'Unknown')
+    # Always ensure azure_configs is present
     azure_configs = user_info.get('azure_configs', [])
-    instance_id = user_info.get('instance_id', '')
-    
-    # NEW: Extract character lore
-    lore = user_info.get('character_lore', {})
-    char_name = lore.get('name', user_name.replace('-', ' ').title())
-    char_race = lore.get('race', 'Wanderer')
-    char_role = lore.get('role', 'Tester')
-    char_description = lore.get('description', 'A member of the testing fellowship.')
-    
-    # Character icon by race
-    race_icons = {
-        'Hobbit': '🌿', 'Human': '⚔️', 'Elf': '🏹', 'Dwarf': '⛏️',
-        'Wizard': '🧙', 'Maiar': '🔥', 'Ent': '🌳', 'Spider': '🕷️',
-        'Nazgûl': '💀', 'Uruk-hai': '🛡️', 'Orc': '🪓', 'Horse': '🐎',
-        'Creature': '👁️', 'Hobbit-like': '🌿', 'Demon': '🔥', 'Wanderer': '🧭'
-    }
-    char_icon = race_icons.get(char_race, '⚔️')
-    
-    # Build LLM configs section
     azure_configs_html = """
     <div class=\"info-box\">
         <h2>LLM Models</h2>
@@ -300,8 +310,8 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                             </summary>
                             <div class=\"config-row\" style=\"margin-top: 8px;\">
                                 <span class=\"credential-label\">Password</span>
-                                <span class=\"credential-value\">AutomationSTAR2025</span>
-                                <button class=\"copy-btn\" onclick=\"copyToClipboard('AutomationSTAR2025')\" title=\"Copy\"><i class=\"fas fa-copy\"></i></button>
+                                <span class=\"credential-value\">{user_info.get('admin_password', user_info.get('user_name', 'testus_patronus'))}</span>
+                                <button class=\"copy-btn\" onclick=\"copyToClipboard('{user_info.get('admin_password', user_info.get('user_name', 'testus_patronus'))}')\"><i class=\"fas fa-copy\"></i></button>
                             </div>
                         </details>
                     </div>
@@ -322,9 +332,11 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
     <head>
         <meta charset=\"UTF-8\">
         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
-        <title>Testus Patronus</title>
-        <subtitle>No magic, just AI with your company context</subtitle>
-        <link rel=\"icon\" href=\"https://automation.eurostarsoftwaretesting.com/wp-content/uploads/2025/04/AS2025-Amsterdam-Header-Graphic-1.webp">
+        <title>Testus Patronus ⚡</title>
+        <link rel=\"icon\" href=\"https://docs.bassagan.com/img/hp_icon.png\" type=\"image/png\">
+        <link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">
+        <link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin>
+        <link href=\"https://fonts.googleapis.com/css2?family=EB+Garamond:wght@400;500;700&family=Lato:wght@400;700&display=swap\" rel=\"stylesheet\">
         <link rel=\"stylesheet\" href=\"https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css\">
         
         <!-- Google tag (gtag.js) -->
@@ -338,16 +350,16 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
         
         <style>
             :root {{
-                --blue: #1B1464;
-                --pink: #f452cb;
-                --yellow: #ffd101;
+                --blue: #19181b;
+                --pink: #7c3aed;
+                --yellow: #e0c97f;
                 --white: #fff;
                 --gray: #f4f7fa;
-                --shadow: 0 8px 32px rgba(30,52,178,0.12);
+                --shadow: 0 8px 32px rgba(76,3,201,0.18);
             }}
             body {{
                 background: var(--blue);
-                font-family: 'Open Sans', 'Segoe UI', Arial, sans-serif;
+                font-family: 'EB Garamond', Georgia, serif;
                 margin: 0;
                 padding: 0;
                 color: var(--blue);
@@ -646,8 +658,8 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                 100% {{ transform: rotate(360deg); }}
             }}
             .get-new-user-btn {{
-                background: ##82d642;
-                color: #1B1464;
+                background: var(--pink);
+                color: var(--white);
                 border: none;
                 padding: 10px 22px;
                 border-radius: 6px;
@@ -657,7 +669,8 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                 margin-bottom: 8px;
             }}
             .get-new-user-btn:hover {{
-                background: #fff;
+                background: var(--yellow);
+                color: var(--blue);
             }}
             
             /* Responsive design */
@@ -748,6 +761,10 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                 var statusLambdaUrl = "{status_lambda_url}";
                 var pollCount = 0;
 
+                function setStatus(msg) {{
+                    if (statusMsg) statusMsg.textContent = msg;
+                }}
+
                 function pollStatus() {{
                     fetch(statusLambdaUrl + '?user_name=' + encodeURIComponent(userName))
                         .then(res => res.json())
@@ -756,8 +773,15 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                             
                             // Check if reassignment is needed (instance was deleted/terminated)
                             if (data.reassign_needed) {{
-                                console.log('[Testus Patronus] Instance was deleted/terminated, triggering reassignment. Reason:', data.reason);
-                                statusMsg.textContent = 'Your previous instance was deleted. Reassigning a new instance...';
+                                console.log('[Testus Patronus] Reassignment needed. Reason:', data.reason);
+                                // 'no_assignment' on early polls means the assignment is still in-flight
+                                // (e.g. just after page load for a new user). Retry a few times first.
+                                if (data.reason === 'no_assignment' && pollCount <= 5) {{
+                                    setStatus('Waiting for instance assignment...');
+                                    setTimeout(pollStatus, 5000);
+                                    return;
+                                }}
+                                setStatus('Your previous instance was deleted. Reassigning a new instance...');
                                 // Stop polling
                                 pollCount = 999; // Prevent further polling
                                 // Clear the instance_id cookie to force reassignment
@@ -770,25 +794,27 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                                 return;
                             }}
                             
-                            if (data.ready && data.ip) {{
-                                difyLink.href = 'http://' + data.ip;
-                                difyLink.textContent = 'http://' + data.ip;
-                                difyLink.classList.add('ready');
-                                difyLink.style.pointerEvents = 'auto';
-                                spinner.style.display = 'none';
-                                statusMsg.textContent = 'Your Dify instance is ready!';
-                                // Update cookies with IP
-                                setCookie('testus_patronus_ip', data.ip, 7);
-                                console.log('[Testus Patronus] Updated cookies with IP:', data.ip);
+                            if (data.ready && (data.url || data.ip)) {{
+                                var difyUrl = data.url || ('http://' + data.ip);
+                                if (difyLink) {{
+                                    difyLink.href = difyUrl;
+                                    difyLink.textContent = difyUrl;
+                                    difyLink.classList.add('ready');
+                                    difyLink.style.pointerEvents = 'auto';
+                                }}
+                                if (spinner) spinner.style.display = 'none';
+                                setStatus('Your Dify instance is ready!');
+                                if (data.ip) setCookie('testus_patronus_ip', data.ip, 7);
+                                console.log('[Testus Patronus] Dify ready at:', difyUrl);
                             }} else {{
-                                statusMsg.textContent = 'Starting your Dify instance...';
+                                setStatus('Starting your Dify instance...');
                                 if (pollCount < 60) setTimeout(pollStatus, 5000);
-                                else statusMsg.textContent = 'Still waiting for your instance. Please refresh if this takes too long.';
+                                else setStatus('Still waiting for your instance. Please refresh if this takes too long.');
                             }}
                         }})
                         .catch(err => {{
                             console.error('[Testus Patronus] Error polling status:', err);
-                            statusMsg.textContent = 'Checking instance status...';
+                            setStatus('Checking instance status...');
                             if (pollCount < 60) setTimeout(pollStatus, 5000);
                         }});
                 }}
@@ -873,28 +899,17 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
         <div class="container">
             <div class="header-row">
                 <a href="https://testingfantasy.com" class="header-link" target="_blank" rel="noopener noreferrer">Visit Testing Fantasy</a>
-                <img src="https://automation.eurostarsoftwaretesting.com/wp-content/uploads/2025/04/AS2025-Amsterdam-Header-Graphic-1.webp" alt="AutomationSTAR 2025 Amsterdam Logo" class="logo">
+                <img src="https://docs.bassagan.com/img/hp_icon.png" alt="Testus Patronus Logo" class="logo">
                 <a href="https://docs-tp.testingfantasy.com" class="header-link" target="_blank" rel="noopener noreferrer">Visit Testus Patronus Documentation</a>
             </div>
             <div class="main-title">Testus Patronus</div>
             <div class="subtitle">No magic, just AI with your company context</div>
-            <h2>Welcome! Here are your Azure LLM credentials and your Dify instance. This is your user: {user_info['user_name']}</h2>
+            <h2>Welcome, {user_info['user_name']}! Your magical Dify instance awaits. Here are your Azure LLM credentials.</h2>
             <button class="get-new-user-btn" onclick="getNewUser()">Get a new user</button>
-            
-            <!-- Character Card -->
-            <div style="background: linear-gradient(135deg, #1a0000 0%, #250000 100%); border: 1px solid #d4af37; border-radius: 8px; padding: 20px; margin-bottom: 24px; display: flex; gap: 16px; align-items: center;">
-                <div style="font-size: 48px; flex-shrink: 0;">{char_icon}</div>
-                <div style="flex: 1;">
-                    <div style="color: #d4af37; font-size: 1.3em; font-weight: bold;">{char_name}</div>
-                    <div style="color: #c0c0c0; font-size: 0.9em; margin: 4px 0;">{char_race} · {char_role}</div>
-                    <div style="color: #c8b89a; font-size: 0.9em; line-height: 1.4; margin-top: 8px;">{char_description}</div>
-                </div>
-            </div>
-            
             {instance_info_html}
             {azure_configs_html}
             <div class="warning">
-                <strong>Note:</strong> This Dify instance will be deleted after the tutorial. Please save any important information before the session ends.
+                <strong>⚡ Note:</strong> This Dify instance will vanish when the workshop ends. Save your spellwork before time runs out.
             </div>
         </div>
     </body>
@@ -1021,16 +1036,13 @@ def lambda_handler(event, context):
         
         if not status_lambda_url:
             print("Warning: STATUS_LAMBDA_URL environment variable is not set")
-            return {
-                'statusCode': 200,
-                'headers': {
-                    'Content-Type': 'text/html'
-                },
-                'body': generate_html_response(
+            return _build_response(
+                200,
+                generate_html_response(
                     error_message="The status service is not properly configured. Please try again in a few minutes.",
                     status_lambda_url=None
                 )
-            }
+            )
         
         logger.info(f"Lambda handler invoked. Event: {json.dumps(event)}")
         # region agent debug log
@@ -1264,17 +1276,8 @@ def lambda_handler(event, context):
                                         user_info['azure_configs'] = []
                                     
                                     html_content = generate_html_response(user_info=user_info, error_message=None, status_lambda_url=status_lambda_url)
-                                    headers = {'Content-Type': 'text/html'}
                                     cookie_headers = create_cookie_headers(user_info)
-                                    response = {
-                                        'statusCode': 200,
-                                        'body': html_content,
-                                        'headers': headers
-                                    }
-                                    if cookie_headers:
-                                        # Lambda Function URLs (payload v2) use the "cookies" array
-                                        response['cookies'] = cookie_headers
-                                    return response
+                                    return _build_response(200, html_content, cookies=cookie_headers)
                                 elif instance_state in ['terminated', 'shutting-down']:
                                     logger.warning(f"Instance {instance_id_from_cookie} is {instance_state}, cannot be reused")
                                     # Instance is terminated - clear cookie and continue to find/create new assignment
@@ -1487,16 +1490,8 @@ def lambda_handler(event, context):
                             user_info['azure_configs'] = []
                         
                         html_content = generate_html_response(user_info=user_info, error_message=None, status_lambda_url=status_lambda_url)
-                        headers = {'Content-Type': 'text/html'}
                         cookie_headers = create_cookie_headers(user_info)
-                        response = {
-                            'statusCode': 200,
-                            'body': html_content,
-                            'headers': headers
-                        }
-                        if cookie_headers:
-                            response['cookies'] = cookie_headers
-                        return response
+                        return _build_response(200, html_content, cookies=cookie_headers)
                     else:
                         # User found in cookie but NOT in DynamoDB - check if IAM user exists and if instance is already assigned
                         logger.info(f"User {user_name} not found in DynamoDB (Items: {response.get('Items', [])}), checking IAM and EC2")
@@ -1583,16 +1578,8 @@ def lambda_handler(event, context):
                                 user_info['azure_configs'] = []
                             
                             html_content = generate_html_response(user_info=user_info, error_message=None, status_lambda_url=status_lambda_url)
-                            headers = {'Content-Type': 'text/html'}
                             cookie_headers = create_cookie_headers(user_info)
-                            response = {
-                                'statusCode': 200,
-                                'body': html_content,
-                                'headers': headers
-                            }
-                            if cookie_headers:
-                                response['cookies'] = cookie_headers
-                            return response
+                            return _build_response(200, html_content, cookies=cookie_headers)
                         
                         # No existing instance found - check if IAM user exists
                         try:
@@ -1632,16 +1619,8 @@ def lambda_handler(event, context):
                                     user_info['azure_configs'] = []
                                 
                                 html_content = generate_html_response(user_info=user_info, error_message=None, status_lambda_url=status_lambda_url)
-                                headers = {'Content-Type': 'text/html'}
                                 cookie_headers = create_cookie_headers(user_info)
-                                response = {
-                                    'statusCode': 200,
-                                    'body': html_content,
-                                    'headers': headers
-                                }
-                                if cookie_headers:
-                                    response['cookies'] = cookie_headers
-                                return response
+                                return _build_response(200, html_content, cookies=cookie_headers)
                             else:
                                 iam_user_exists = user_exists(user_name)
                             
@@ -1672,16 +1651,8 @@ def lambda_handler(event, context):
                                     user_info['azure_configs'] = []
                                 
                                 html_content = generate_html_response(user_info=user_info, error_message=None, status_lambda_url=status_lambda_url)
-                                headers = {'Content-Type': 'text/html'}
                                 cookie_headers = create_cookie_headers(user_info)
-                                response = {
-                                    'statusCode': 200,
-                                    'body': html_content,
-                                    'headers': headers
-                                }
-                                if cookie_headers:
-                                    response['cookies'] = cookie_headers
-                                return response
+                                return _build_response(200, html_content, cookies=cookie_headers)
                             else:
                                 # Cookie has invalid user (doesn't exist in IAM and no EC2 instance found)
                                 # This means the user was deleted - clear cookies and create new user
@@ -1693,7 +1664,33 @@ def lambda_handler(event, context):
                             # Fall through to create new user below
                 
                 # No user_name in cookie or cookie user invalid: create a new user
-                logger.info(f"[Azure Config] New user path")
+                # ── Anti-collapsing nonce redirect ──────────────────────────────
+                # CloudFront may collapse concurrent cache-miss requests with the
+                # same cache key (identical URL + no cookies) during the Lambda
+                # cold-start window.  To guarantee each browser gets its own Lambda
+                # invocation, redirect cookieless visitors to a URL with a unique
+                # _nonce query parameter.  This makes the cache keys different so
+                # CloudFront cannot serve the same response to multiple browsers.
+                query_params_new = event.get('queryStringParameters', {}) or {}
+                if not query_params_new.get('_nonce'):
+                    nonce = uuid.uuid4().hex[:12]
+                    # Preserve existing query params
+                    redirect_qs = urllib.parse.urlencode({**query_params_new, '_nonce': nonce})
+                    redirect_url = f"/?{redirect_qs}"
+                    logger.info(f"Redirecting cookieless request with nonce: {nonce}")
+                    return {
+                        'statusCode': 302,
+                        'headers': {
+                            'Location': redirect_url,
+                            'Cache-Control': 'no-store, no-cache, must-revalidate, private, max-age=0',
+                            'Pragma': 'no-cache',
+                            'Vary': '*',
+                            'Content-Type': 'text/html',
+                        },
+                        'body': '',
+                    }
+                
+                logger.info(f"[Azure Config] New user path (nonce={query_params_new.get('_nonce')})")
                 user_info = create_user()
                 # region agent debug log
                 _debug_log(
@@ -1718,15 +1715,8 @@ def lambda_handler(event, context):
                     logger.error(f"Error loading Azure configurations: {str(e)}")
                     user_info['azure_configs'] = []
                 html_content = generate_html_response(user_info=user_info, error_message=None, status_lambda_url=status_lambda_url)
-                headers = {'Content-Type': 'text/html'}
                 cookie_headers = create_cookie_headers(user_info)
-                response = {
-                    'statusCode': 200,
-                    'body': html_content,
-                    'headers': headers
-                }
-                if cookie_headers:
-                    response['cookies'] = cookie_headers
+                response = _build_response(200, html_content, cookies=cookie_headers)
                 # region agent debug log
                 _debug_log(
                     "H1",
@@ -1743,13 +1733,7 @@ def lambda_handler(event, context):
                 return response
             else:
                 logger.warning(f"Unknown path requested: {path}")
-                return {
-                    'statusCode': 404,
-                    'body': json.dumps({'error': 'Not found'}),
-                    'headers': {
-                        'Content-Type': 'application/json'
-                    }
-                }
+                return _build_response(404, json.dumps({'error': 'Not found'}), content_type='application/json')
         else:
             logger.warning("Method not allowed. Only GET is supported.")
             method_not_allowed_html = """
@@ -1763,13 +1747,7 @@ def lambda_handler(event, context):
                 </body>
             </html>
             """
-            return {
-                'statusCode': 405,
-                'body': method_not_allowed_html,
-                'headers': {
-                    'Content-Type': 'text/html'
-                }
-            }
+            return _build_response(405, method_not_allowed_html)
     except Exception as e:
         logger.error(f"Error in lambda_handler: {str(e)}")
         # region agent debug log
@@ -1783,16 +1761,14 @@ def lambda_handler(event, context):
             }
         )
         # endregion agent debug log
-        return {
-            'statusCode': 500,
-            'body': json.dumps({
+        return _build_response(
+            500,
+            json.dumps({
                 'error': str(e),
                 'traceback': traceback.format_exc()
             }),
-            'headers': {
-                'Content-Type': 'application/json'
-            }
-        }
+            content_type='application/json'
+        )
 
 def create_user():
     account_id = ACCOUNT_ID
@@ -1801,15 +1777,6 @@ def create_user():
     console_user_name = f"conference-user-{suffix}"
     logger.info(f"Generated user name: {console_user_name}")
     
-    # NEW: Get character lore (Harry Potter theming consistency)
-    logger.warning(f"Get character lore for harry potter is not implemented yet, using placeholder lore for {console_user_name}")
-    character_lore = {
-        'name': console_user_name.replace('-', ' ').title(),
-        'race': 'Wanderer',
-        'role': 'Tester',
-        'description': 'A skilled member of the Dumbledore\'s Army.'
-        }
-    
     # Only check if user exists if IAM creation is enabled
     if not SKIP_IAM_USER_CREATION:
         if user_exists(console_user_name):
@@ -1817,7 +1784,6 @@ def create_user():
             raise Exception("User already exists. Try again.")
 
     user = create_console_user(console_user_name, account_id)
-    user['character_lore'] = character_lore  # NEW: Include lore in user dict
 
     # Get all Azure OpenAI configurations
     azure_configs = get_secret()
@@ -1939,11 +1905,10 @@ def cleanup_expired_assignments():
                     ]
                 )
                 
-                # Delete DynamoDB record
+                # Delete DynamoDB record (table key is instance_id only, no sort key)
                 table.delete_item(
                     Key={
-                        'instance_id': instance_id,
-                        'student_name': item['student_name']
+                        'instance_id': instance_id
                     }
                 )
                 
@@ -2007,6 +1972,8 @@ def assign_ec2_instance_to_student(student_name):
                 raise Exception("No available EC2 instances in the pool.")
 
             # Filter out instances that are already assigned in DynamoDB
+            # Available statuses: no record, 'stopped', 'pool_created' (pre-provisioned pool instances)
+            AVAILABLE_STATUSES = {'stopped', 'pool_created'}
             available_instances = []
             for instance in instances:
                 try:
@@ -2015,11 +1982,12 @@ def assign_ec2_instance_to_student(student_name):
                     if 'Item' not in response:
                         # No record exists, instance is available
                         available_instances.append(instance)
-                    elif response['Item'].get('status') == 'stopped':
-                        # Instance is stopped but not assigned to a student
-                        # We can reuse it, but need to preserve the last_stopped_at time
+                    elif response['Item'].get('status') in AVAILABLE_STATUSES:
+                        # Instance is available (stopped or pool_created placeholder)
                         available_instances.append(instance)
-                    # Skip instances with other statuses (assigning, starting, assigned)
+                    # Skip instances with other statuses (assigning, starting, assigned, ready)
+                    else:
+                        logger.debug(f"Skipping instance {instance['InstanceId']} with DynamoDB status: {response['Item'].get('status')}")
                 except Exception as e:
                     logger.error(f"Error checking DynamoDB for instance {instance['InstanceId']}: {str(e)}")
                     continue
@@ -2053,9 +2021,9 @@ def assign_ec2_instance_to_student(student_name):
                     
                     table.put_item(
                         Item=item,
-                        ConditionExpression='attribute_not_exists(instance_id) OR #status = :stopped',
+                        ConditionExpression='attribute_not_exists(instance_id) OR #status = :stopped OR #status = :pool_created',
                         ExpressionAttributeNames={'#status': 'status'},
-                        ExpressionAttributeValues={':stopped': 'stopped'}
+                        ExpressionAttributeValues={':stopped': 'stopped', ':pool_created': 'pool_created'}
                     )
                 except ClientError as e:
                     if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
@@ -2073,6 +2041,7 @@ def assign_ec2_instance_to_student(student_name):
                         Tags=[
                             {'Key': 'Status', 'Value': 'starting'},
                             {'Key': 'Student', 'Value': student_name},
+                            {'Key': 'AssignedStudent', 'Value': student_name},
                             {'Key': 'Company', 'Value': 'TestingFantasy'}
                         ]
                     )

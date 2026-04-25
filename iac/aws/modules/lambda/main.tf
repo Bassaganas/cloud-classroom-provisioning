@@ -324,41 +324,31 @@ resource "aws_lambda_function_url" "dify_jira_api_url" {
 
 
 # ============================================================================
-# Fellowship Student Assignment Lambda Function
+# Fellowship Lambdas — User Management + Status
 # ============================================================================
-# Provisions student credentials, EC2 instances, and service URLs for the
-# Fellowship workshop. Provides an HTML interface for students to initiate
-# their provisioning workflow.
+# fellowship_classroom_user_management: HTML front-door for students; claims a
+#   pre-provisioned pool instance and returns SUT credentials.
+# fellowship_status: Health-check endpoint; reads HttpsDomain EC2 tag and
+#   polls /login to determine if the SUT is ready.
 
-# Lambda Function for Fellowship Student Assignment
-resource "aws_lambda_function" "fellowship_student_assignment" {
-  count            = var.enable_fellowship_student_assignment ? 1 : 0
-  filename         = "${path.root}/../../functions/packages/fellowship_student_assignment.zip"
-  function_name    = "lambda-fellowship-student-assignment-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
+# Fellowship Status Lambda (created first so its URL can be wired into user management)
+resource "aws_lambda_function" "fellowship_status" {
+  count            = var.enable_fellowship_lambdas ? 1 : 0
+  filename         = "${path.root}/../../functions/packages/fellowship_status.zip"
+  function_name    = "lambda-fellowship-status-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   role             = var.lambda_role_arn
-  handler          = "fellowship_student_assignment.lambda_handler"
+  handler          = "fellowship_status.lambda_handler"
   runtime          = "python3.11"
-  timeout          = var.fellowship_student_assignment_timeout
-  memory_size      = var.fellowship_student_assignment_memory_size
+  timeout          = var.fellowship_lambdas_timeout
+  memory_size      = var.fellowship_lambdas_memory_size
   package_type     = "Zip"
-  source_code_hash = filebase64sha256("${path.root}/../../functions/packages/fellowship_student_assignment.zip")
+  source_code_hash = filebase64sha256("${path.root}/../../functions/packages/fellowship_status.zip")
 
   environment {
     variables = {
-      ENVIRONMENT                      = var.environment
-      WORKSHOP_NAME                    = var.workshop_name
-      CLASSROOM_NAME                   = var.classroom_name
-      CLASSROOM_REGION                 = var.region
-      STATUS_LAMBDA_URL                = var.status_lambda_url != "" ? var.status_lambda_url : (var.enable_status ? aws_lambda_function_url.status_url[0].function_url : "")
-      INSTANCE_MANAGER_URL             = var.instance_manager_url != "" ? var.instance_manager_url : (var.enable_instance_manager ? aws_lambda_function_url.instance_manager_url[0].function_url : "")
-      INSTANCE_MANAGER_PASSWORD_SECRET = var.instance_manager_password_secret_name != "" ? var.instance_manager_password_secret_name : local.instance_manager_password_secret_name
-      DESTROY_KEY                      = var.destroy_key
-      SKIP_IAM_USER_CREATION           = var.skip_iam_user_creation ? "true" : "false"
-      FELLOWSHIP_SUT_DOMAIN            = var.fellowship_sut_domain
-      FELLOWSHIP_JENKINS_DOMAIN        = var.fellowship_jenkins_domain
-      FELLOWSHIP_GITEA_DOMAIN          = var.fellowship_gitea_domain
-      FELLOWSHIP_GITEA_API_DOMAIN      = var.fellowship_gitea_api_domain
-      FELLOWSHIP_GITEA_ORG             = var.fellowship_gitea_org
+      ENVIRONMENT      = var.environment
+      WORKSHOP_NAME    = var.workshop_name
+      CLASSROOM_REGION = var.region
     }
   }
 
@@ -367,15 +357,14 @@ resource "aws_lambda_function" "fellowship_student_assignment" {
     Owner       = var.owner
     Project     = "classroom"
     WorkshopID  = var.workshop_name
-    Service     = "fellowship-student-assignment"
+    Service     = "fellowship-status"
     Company     = "TestingFantasy"
   }
 }
 
-# Lambda Function URL for Fellowship Student Assignment
-resource "aws_lambda_function_url" "fellowship_student_assignment_url" {
-  count              = var.enable_fellowship_student_assignment ? 1 : 0
-  function_name      = aws_lambda_function.fellowship_student_assignment[0].function_name
+resource "aws_lambda_function_url" "fellowship_status_url" {
+  count              = var.enable_fellowship_lambdas ? 1 : 0
+  function_name      = aws_lambda_function.fellowship_status[0].function_name
   authorization_type = "NONE"
   invoke_mode        = "BUFFERED"
 
@@ -389,13 +378,72 @@ resource "aws_lambda_function_url" "fellowship_student_assignment_url" {
   }
 }
 
-# Explicit permission for public access to Function URL
-resource "aws_lambda_permission" "fellowship_student_assignment_url_public" {
-  count = var.enable_fellowship_student_assignment ? 1 : 0
-
+resource "aws_lambda_permission" "fellowship_status_url_public" {
+  count                  = var.enable_fellowship_lambdas ? 1 : 0
   statement_id           = "AllowPublicInvoke"
   action                 = "lambda:InvokeFunctionUrl"
-  function_name          = aws_lambda_function.fellowship_student_assignment[0].function_name
+  function_name          = aws_lambda_function.fellowship_status[0].function_name
+  principal              = "*"
+  function_url_auth_type = "NONE"
+}
+
+# Fellowship User Management Lambda (depends on status URL)
+resource "aws_lambda_function" "fellowship_classroom_user_management" {
+  count            = var.enable_fellowship_lambdas ? 1 : 0
+  filename         = "${path.root}/../../functions/packages/fellowship_classroom_user_management.zip"
+  function_name    = "lambda-fellowship-user-mgmt-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
+  role             = var.lambda_role_arn
+  handler          = "fellowship_classroom_user_management.lambda_handler"
+  runtime          = "python3.11"
+  timeout          = var.fellowship_lambdas_timeout
+  memory_size      = var.fellowship_lambdas_memory_size
+  package_type     = "Zip"
+  source_code_hash = filebase64sha256("${path.root}/../../functions/packages/fellowship_classroom_user_management.zip")
+
+  environment {
+    variables = {
+      ENVIRONMENT       = var.environment
+      WORKSHOP_NAME     = var.workshop_name
+      CLASSROOM_NAME    = var.classroom_name
+      CLASSROOM_REGION  = var.region
+      STATUS_LAMBDA_URL = aws_lambda_function_url.fellowship_status_url[0].function_url
+      DESTROY_KEY       = var.destroy_key
+    }
+  }
+
+  tags = {
+    Environment = var.environment
+    Owner       = var.owner
+    Project     = "classroom"
+    WorkshopID  = var.workshop_name
+    Service     = "fellowship-user-management"
+    Company     = "TestingFantasy"
+  }
+
+  depends_on = [aws_lambda_function_url.fellowship_status_url]
+}
+
+resource "aws_lambda_function_url" "fellowship_classroom_user_management_url" {
+  count              = var.enable_fellowship_lambdas ? 1 : 0
+  function_name      = aws_lambda_function.fellowship_classroom_user_management[0].function_name
+  authorization_type = "NONE"
+  invoke_mode        = "BUFFERED"
+
+  cors {
+    allow_credentials = true
+    allow_headers     = ["*"]
+    allow_methods     = ["*"]
+    allow_origins     = ["*"]
+    expose_headers    = ["*"]
+    max_age           = 86400
+  }
+}
+
+resource "aws_lambda_permission" "fellowship_classroom_user_management_url_public" {
+  count                  = var.enable_fellowship_lambdas ? 1 : 0
+  statement_id           = "AllowPublicInvoke"
+  action                 = "lambda:InvokeFunctionUrl"
+  function_name          = aws_lambda_function.fellowship_classroom_user_management[0].function_name
   principal              = "*"
   function_url_auth_type = "NONE"
 }

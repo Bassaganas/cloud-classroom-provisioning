@@ -48,14 +48,24 @@ output "dify_jira_api_url" {
   value       = try(aws_lambda_function_url.dify_jira_api_url[0].function_url, null)
 }
 
-output "fellowship_student_assignment_function_arn" {
-  description = "ARN of the fellowship student assignment Lambda function"
-  value       = try(aws_lambda_function.fellowship_student_assignment[0].arn, null)
+output "fellowship_classroom_user_management_function_arn" {
+  description = "ARN of the fellowship user management Lambda function"
+  value       = try(aws_lambda_function.fellowship_classroom_user_management[0].arn, null)
 }
 
-output "fellowship_student_assignment_url" {
-  description = "URL of the fellowship student assignment Lambda function"
-  value       = try(aws_lambda_function_url.fellowship_student_assignment_url[0].function_url, null)
+output "fellowship_classroom_user_management_url" {
+  description = "URL of the fellowship user management Lambda function"
+  value       = try(aws_lambda_function_url.fellowship_classroom_user_management_url[0].function_url, null)
+}
+
+output "fellowship_status_function_arn" {
+  description = "ARN of the fellowship status Lambda function"
+  value       = try(aws_lambda_function.fellowship_status[0].arn, null)
+}
+
+output "fellowship_status_url" {
+  description = "URL of the fellowship status Lambda function"
+  value       = try(aws_lambda_function_url.fellowship_status_url[0].function_url, null)
 }
 
 

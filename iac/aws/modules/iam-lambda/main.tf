@@ -139,6 +139,13 @@ resource "aws_iam_role_policy" "lambda_iam_policy" {
       {
         Effect = "Allow"
         Action = [
+          "ssm:PutParameter"
+        ]
+        Resource = "*"
+      },
+      {
+        Effect = "Allow"
+        Action = [
           "elasticloadbalancing:CreateLoadBalancer",
           "elasticloadbalancing:DeleteLoadBalancer",
           "elasticloadbalancing:DescribeLoadBalancers",

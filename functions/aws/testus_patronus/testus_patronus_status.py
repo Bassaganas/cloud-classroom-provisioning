@@ -50,20 +50,20 @@ def check_instance_status(instance_id):
         logger.error(f"Error checking instance status: {str(e)}")
         return False
 
-def check_dify_service(ip_address, max_retries=2, delay=1):
-    """Check if Dify service is up with retries"""
-    endpoints = ["/v1/", "/install", "/"]
-    for endpoint in endpoints:
-        for attempt in range(max_retries):
-            try:
-                logger.info(f"Checking Dify service at http://{ip_address}{endpoint}")
-                resp = requests.get(f'http://{ip_address}{endpoint}', timeout=1)
-                logger.info(f"Response: {resp.status_code}")
-                if resp.status_code == 200:
-                    return endpoint  # Return the endpoint that is ready
-            except Exception:
-                if attempt < max_retries - 1:
-                    time.sleep(delay)
+def check_dify_service(instance_id, max_retries=2, delay=1):
+    """Check if Dify HTTPS service is up via the instance domain"""
+    url = f'https://dify-{instance_id}.testingfantasy.com/'
+    for attempt in range(max_retries):
+        try:
+            logger.info(f"Checking Dify service at {url}")
+            resp = requests.get(url, timeout=5, allow_redirects=True)
+            logger.info(f"Response: {resp.status_code}")
+            if resp.status_code == 200:
+                return "/"
+        except Exception as e:
+            logger.info(f"Dify check attempt {attempt + 1} failed: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(delay)
     return None
 
 def lambda_handler(event, context):
@@ -276,8 +276,8 @@ def lambda_handler(event, context):
                 'body': json.dumps({'ready': False})
             }
 
-        # Check Dify service
-        endpoint_ready = check_dify_service(instance.public_ip_address)
+        # Check Dify service via HTTPS domain
+        endpoint_ready = check_dify_service(instance_id)
         if endpoint_ready in ["/install", "/", "/v1/"]:
             # Update DynamoDB status to 'ready' if not already
             if status != 'ready':
@@ -294,7 +294,7 @@ def lambda_handler(event, context):
             return {
                 'statusCode': 200,
                 'headers': {'Content-Type': 'application/json'},
-                'body': json.dumps({'ready': True, 'ip': instance.public_ip_address})
+                'body': json.dumps({'ready': True, 'url': f'https://dify-{instance_id}.testingfantasy.com/'})
             }
         else:
             # If instance is not ready but was previously marked as ready, update status
