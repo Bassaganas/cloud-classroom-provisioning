@@ -807,6 +807,7 @@ ALLOWED_EC2_INSTANCE_TYPES = {
     't3.medium',
     't3.large',
 }
+ALLOWED_DIFY_VERSION_STRATEGIES = {'current', 'previous', 'latest'}
 SUBNET_ID = os.environ.get('EC2_SUBNET_ID')
 SECURITY_GROUP_IDS = os.environ.get('EC2_SECURITY_GROUP_IDS', '').split(',') if os.environ.get('EC2_SECURITY_GROUP_IDS') else []
 IAM_INSTANCE_PROFILE = os.environ.get('EC2_IAM_INSTANCE_PROFILE', f'ec2-ssm-profile-{WORKSHOP_NAME}-{ENVIRONMENT}')
@@ -2638,7 +2639,7 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
                     stop_timeout=None, terminate_timeout=None, hard_terminate_timeout=None,
                     tutorial_session_id=None, purchase_type='on-demand', spot_duration_hours=2,
                     spot_max_price=None, idempotency_key=None, fallback_to_on_demand=False,
-                    ec2_instance_type=None, student_name=None):
+                    ec2_instance_type=None, student_name=None, dify_version_strategy='current'):
     """Create EC2 instance(s) for a workshop template
     
     Args:
@@ -2656,6 +2657,7 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
         fallback_to_on_demand: If True, retry with on-demand instances if Spot capacity is exhausted (default: False)
         ec2_instance_type: Override EC2 instance type (optional)
         student_name: Student identifier for shared-core provisioning (optional, auto-generated with UUID if not provided)
+        dify_version_strategy: Dify version selection ('current', 'previous', 'latest') for testus_patronus
     """
     try:
         if purchase_type == 'spot':
@@ -2670,6 +2672,14 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
                     spot_max_price = None
         
         workshop_name = workshop_name or WORKSHOP_NAME
+        normalized_workshop_name = str(workshop_name).strip().lower()
+        dify_version_strategy = str(dify_version_strategy or 'current').strip().lower() or 'current'
+        if dify_version_strategy not in ALLOWED_DIFY_VERSION_STRATEGIES:
+            logger.warning(
+                "Invalid dify_version_strategy '%s'; defaulting to 'current'",
+                dify_version_strategy
+            )
+            dify_version_strategy = 'current'
         
         # Store whether student_name was explicitly provided (if not, generate unique ones per instance)
         student_name_provided = bool(student_name)
@@ -2727,6 +2737,8 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
         if purchase_type == 'spot':
             logger.info(f"  Spot Max Price: {spot_max_price if spot_max_price is not None else 'market default'}")
         logger.info(f"  Tutorial Session ID: {tutorial_session_id}")
+        if normalized_workshop_name == 'testus_patronus':
+            logger.info(f"  Dify Version Strategy: {dify_version_strategy}")
         logger.info(f"  Idempotency Key: {idempotency_key or 'N/A'}")
         logger.info(f"  Region: {REGION}")
         logger.info(f"  Environment: {ENVIRONMENT}")
@@ -2932,6 +2944,16 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
             # Add TutorialSessionID tag if provided
             if tutorial_session_id:
                 tags.append({'Key': 'TutorialSessionID', 'Value': tutorial_session_id})
+
+            if normalized_workshop_name == 'testus_patronus':
+                tags.append({'Key': 'DifyVersionStrategy', 'Value': dify_version_strategy})
+
+            user_data_exports = ""
+            if normalized_workshop_name == 'testus_patronus':
+                user_data_exports += (
+                    "# Dify version selection injected by Lambda\n"
+                    f"export DIFY_VERSION_STRATEGY={dify_version_strategy}\n"
+                )
             
             # Add spot instance tags if using spot
             if purchase_type == 'spot':
@@ -3043,6 +3065,7 @@ export SHARED_GITEA_URL={SHARED_GITEA_URL}
 export GITEA_ORG_NAME={_gitea_org}
 export GITEA_REPO_NAME={_gitea_repo}
 """
+                domain_exports += user_data_exports
                 # Only inject CADDY_DOMAIN when it is known pre-creation (not for testus_patronus)
                 if domain:
                     domain_exports += f"export CADDY_DOMAIN={domain}\n"
@@ -3088,6 +3111,17 @@ export GITEA_REPO_NAME={_gitea_repo}
             else:
                 domain = None
                 machine_name = None
+                if user_data_exports:
+                    if user_data.startswith('#!/bin/bash'):
+                        lines = user_data.split('\n')
+                        insert_pos = 1
+                        if len(lines) > 1 and lines[1].strip().startswith('set '):
+                            insert_pos = 2
+                        lines.insert(insert_pos, user_data_exports.rstrip())
+                        user_data = '\n'.join(lines)
+                    else:
+                        user_data = user_data_exports + user_data
+                    logger.info("Injected DIFY_VERSION_STRATEGY into user_data without HTTPS domain metadata")
                 logger.warning("HTTPS not configured - domain tags will not be set")
                 logger.warning("  Domain will not be injected into user_data (HTTPS may not work initially)")
             
@@ -4958,6 +4992,7 @@ def lambda_handler(event, context):
             )
             cleanup_days = body.get('cleanup_days') or query_params.get('cleanup_days')
             workshop_name = body.get('workshop') or query_params.get('workshop') or WORKSHOP_NAME
+            dify_version_strategy = body.get('dify_version_strategy') or query_params.get('dify_version_strategy') or 'current'
             purchase_type = body.get('purchase_type') or query_params.get('purchase_type', 'on-demand')
             spot_max_price_raw = body.get('spot_max_price') or query_params.get('spot_max_price')
             if cleanup_days is not None:
@@ -5018,6 +5053,17 @@ def lambda_handler(event, context):
                     'body': json.dumps({
                         'success': False,
                         'error': 'purchase_type must be "on-demand" or "spot"'
+                    })
+                }
+
+            dify_version_strategy = str(dify_version_strategy).strip().lower() or 'current'
+            if dify_version_strategy not in ALLOWED_DIFY_VERSION_STRATEGIES:
+                return {
+                    'statusCode': 400,
+                    'headers': get_cors_headers(),
+                    'body': json.dumps({
+                        'success': False,
+                        'error': 'dify_version_strategy must be one of: ' + ', '.join(sorted(ALLOWED_DIFY_VERSION_STRATEGIES))
                     })
                 }
 
@@ -5124,7 +5170,8 @@ def lambda_handler(event, context):
                 spot_max_price=spot_max_price,
                 idempotency_key=idempotency_key,
                 ec2_instance_type=ec2_instance_type,
-                student_name=student_name
+                student_name=student_name,
+                dify_version_strategy=dify_version_strategy
             )
             # Add a message indicating the operation is async
             if result['success']:

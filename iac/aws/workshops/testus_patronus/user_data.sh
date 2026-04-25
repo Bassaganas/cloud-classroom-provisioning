@@ -97,6 +97,10 @@ if [ -n "$WORKSHOP_NAME" ]; then
     export WORKSHOP_NAME
     log "Workshop name from user_data: $WORKSHOP_NAME"
 fi
+if [ -n "$DIFY_VERSION_STRATEGY" ]; then
+    export DIFY_VERSION_STRATEGY
+    log "Dify version strategy from user_data: $DIFY_VERSION_STRATEGY"
+fi
 
 # Execute setup script (preserves environment)
 log "Executing setup script..."
