@@ -14,7 +14,6 @@ import threading
 from datetime import datetime, timedelta
 import random
 import time as _debug_time
-import uuid
 
 # Get region and workshop context from environment variables
 REGION = os.environ.get('AWS_DEFAULT_REGION', os.environ.get('AWS_REGION', 'eu-west-3'))
@@ -25,6 +24,7 @@ ENVIRONMENT = os.environ.get('ENVIRONMENT', 'dev')
 iam = boto3.client('iam')
 secretsmanager = boto3.client('secretsmanager', region_name=REGION)
 dynamodb = boto3.resource('dynamodb', region_name=REGION)
+ec2 = boto3.client('ec2', region_name=REGION)
 table = dynamodb.Table(f"instance-assignments-{WORKSHOP_NAME}-{ENVIRONMENT}")
 
 # Get account ID from environment variable
@@ -60,36 +60,6 @@ def _debug_log(hypothesis_id, location, message, data=None):
     except Exception:
         pass
 # endregion agent debug log
-
-# ── Headers to prevent CloudFront from caching/collapsing responses ──────────
-NO_CACHE_HEADERS = {
-    'Content-Type': 'text/html',
-    'Cache-Control': 'no-store, no-cache, must-revalidate, private, max-age=0',
-    'Pragma': 'no-cache',
-    'Vary': '*',
-}
-
-def _build_response(status_code, body, cookies=None, content_type='text/html'):
-    """Build an HTTP response with anti-caching headers.
-    
-    Every response from this Lambda MUST go through this helper so that
-    CloudFront never caches or collapses user-specific responses.
-    """
-    headers = {
-        'Content-Type': content_type,
-        'Cache-Control': 'no-store, no-cache, must-revalidate, private, max-age=0',
-        'Pragma': 'no-cache',
-        'Vary': '*',
-    }
-    response = {
-        'statusCode': status_code,
-        'body': body,
-        'headers': headers,
-    }
-    if cookies:
-        response['cookies'] = cookies
-    return response
-
 
 def create_cookie_headers(user_info):
     """Create Set-Cookie headers for user session information"""
@@ -150,6 +120,242 @@ def get_next_available_api_key():
             return config
     
     return None
+
+def get_available_pool_instances(workshop_name=None, region=None):
+    """
+    Query EC2 for ALL available pool instances (FIFO fairness).
+    
+    Returns a list so callers can iterate and claim atomically,
+    preventing race conditions when multiple requests arrive concurrently.
+    
+    Filters:
+    - AssignedStudent=false (not yet assigned)
+    - Type=pool
+    - WorkshopID=<workshop> (prevents cross-workshop pickup)
+    - instance-state-name: running, pending, stopped, stopping
+    - Sort by CreatedAt ascending (FIFO fairness)
+    
+    Returns:
+        list of dicts, each with instance details (sorted oldest-first):
+        [{
+          'instance_id': str,
+          'student_name': str (from Student tag),
+          'machine_name': str (from MachineName tag),
+          'https_domain': str (from HttpsDomain tag),
+          'jenkins_domain': str (from JenkinsDomain tag),
+          'gitea_domain': str (from GiteaDomain tag),
+          'ide_domain': str (from IdeDomain tag),
+          'tags': dict (all EC2 tags)
+        }]
+    """
+    workshop = workshop_name or WORKSHOP_NAME
+    region_to_use = region or REGION
+    
+    try:
+        ec2_client = boto3.client('ec2', region_name=region_to_use)
+        response = ec2_client.describe_instances(
+            Filters=[
+                {'Name': 'tag:AssignedStudent', 'Values': ['false']},
+                {'Name': 'tag:Type', 'Values': ['pool']},
+                {'Name': 'tag:WorkshopID', 'Values': [workshop]},
+                {'Name': 'instance-state-name', 'Values': ['running', 'pending', 'stopped', 'stopping']}
+            ]
+        )
+        
+        available_instances = []
+        for reservation in response.get('Reservations', []):
+            for instance in reservation.get('Instances', []):
+                tags = {tag['Key']: tag['Value'] for tag in instance.get('Tags', [])}
+                created_at = instance.get('LaunchTime') or datetime.utcnow()
+                available_instances.append({
+                    'instance_id': instance['InstanceId'],
+                    'created_at': created_at,
+                    'tags': tags,
+                    'state': instance['State']['Name']
+                })
+        
+        if not available_instances:
+            logger.warning(f"No available pool instances found for workshop '{workshop}'")
+            return []
+        
+        # Sort by CreatedAt ascending (FIFO fairness - oldest first)
+        available_instances.sort(key=lambda x: x['created_at'])
+        
+        results = []
+        for inst in available_instances:
+            tags = inst['tags']
+            results.append({
+                'instance_id': inst['instance_id'],
+                'student_name': tags.get('Student', ''),
+                'machine_name': tags.get('MachineName', ''),
+                'https_domain': tags.get('HttpsDomain', ''),
+                'jenkins_domain': tags.get('JenkinsDomain', ''),
+                'gitea_domain': tags.get('GiteaDomain', ''),
+                'ide_domain': tags.get('IdeDomain', ''),
+                'tags': tags
+            })
+        
+        logger.info(f"Found {len(results)} available pool instances for workshop '{workshop}'")
+        return results
+    
+    except Exception as e:
+        logger.error(f"Error getting available pool instance: {str(e)}", exc_info=True)
+        return None
+
+def claim_pool_instance(instance_id, student_name, workshop_name=None, environment=None):
+    """
+    Finalize the assignment of a pool instance to a student.
+    
+    Steps:
+    1. Update EC2 tags: AssignedStudent + Status = assigned
+    2. Start the instance if stopped
+    3. Update DynamoDB: Convert pool_created → assigned
+    
+    Args:
+        instance_id: EC2 instance ID
+        student_name: Student identifier (e.g., legolas_xy37)
+        workshop_name: Workshop identifier (defaults to WORKSHOP_NAME)
+        environment: Environment (defaults to ENVIRONMENT)
+    
+    Returns:
+        dict: {'success': bool, 'instance_id': str, 'student_name': str, 'message': str}
+    """
+    workshop = workshop_name or WORKSHOP_NAME
+    env = environment or ENVIRONMENT
+    
+    try:
+        # Step 1: Atomic DynamoDB conditional write (prevents race condition)
+        # This MUST happen BEFORE EC2 tag updates to act as a distributed lock.
+        # Only succeeds if:
+        #   - No record exists for this instance_id, OR
+        #   - Existing record has a non-assigned status (pool_created, stopped, available)
+        assignment_table = dynamodb.Table(f"instance-assignments-{workshop}-{env}")
+        timestamp = datetime.utcnow().isoformat()
+        ttl_seconds = 90 * 24 * 60 * 60  # 90 days
+        ttl_epoch = int((datetime.utcnow() + timedelta(seconds=ttl_seconds)).timestamp())
+        
+        try:
+            assignment_table.put_item(
+                Item={
+                    'instance_id': instance_id,
+                    'student_name': student_name,
+                    'password': student_name,  # Default password = student name
+                    'workshop': workshop,
+                    'status': 'assigned',
+                    'assignment_source': 'fellowship_user_management',
+                    'created_at': timestamp,
+                    'assigned_at': timestamp,
+                    'instance_type': 'pool',
+                    'ttl': ttl_epoch
+                },
+                ConditionExpression='attribute_not_exists(instance_id) OR #s IN (:pool_created, :stopped, :available)',
+                ExpressionAttributeNames={'#s': 'status'},
+                ExpressionAttributeValues={
+                    ':pool_created': 'pool_created',
+                    ':stopped': 'stopped',
+                    ':available': 'available'
+                }
+            )
+            logger.info(f"✓ DynamoDB atomic claim succeeded: instance {instance_id} assigned to {student_name}")
+        except ClientError as e:
+            if e.response['Error']['Code'] == 'ConditionalCheckFailedException':
+                logger.warning(f"Instance {instance_id} already claimed by another request (conditional check failed)")
+                return {
+                    'success': False,
+                    'instance_id': instance_id,
+                    'student_name': student_name,
+                    'reason': 'already_claimed',
+                    'message': f'Instance {instance_id} was already claimed by another concurrent request'
+                }
+            raise  # Re-raise other ClientErrors
+        
+        # Step 2: Update EC2 tags (AssignedStudent + Status)
+        # This is now safe because DynamoDB conditional write succeeded
+        ec2.create_tags(
+            Resources=[instance_id],
+            Tags=[
+                {'Key': 'AssignedStudent', 'Value': student_name},
+                {'Key': 'Status', 'Value': 'assigned'},
+            ]
+        )
+        logger.info(f"✓ Updated EC2 tags AssignedStudent={student_name}, Status=assigned for instance {instance_id}")
+        
+        # Step 3: Start instance if stopped
+        try:
+            instance_response = ec2.describe_instances(InstanceIds=[instance_id])
+            instance_state = instance_response['Reservations'][0]['Instances'][0]['State']['Name']
+            if instance_state in ('stopped', 'stopping'):
+                ec2.start_instances(InstanceIds=[instance_id])
+                logger.info(f"✓ Started stopped instance {instance_id}")
+        except Exception as start_err:
+            logger.warning(f"Could not start instance {instance_id}: {str(start_err)}")
+        
+        return {
+            'success': True,
+            'instance_id': instance_id,
+            'student_name': student_name,
+            'message': f'Successfully claimed instance {instance_id} for student {student_name}'
+        }
+    
+    except Exception as e:
+        logger.error(f"Error claiming pool instance {instance_id}: {str(e)}", exc_info=True)
+        return {
+            'success': False,
+            'instance_id': instance_id,
+            'student_name': student_name,
+            'message': f'Failed to claim instance: {str(e)}'
+        }
+
+def extract_sut_urls_from_instance(tags):
+    """
+    Extract service URLs from EC2 instance tags.
+    
+    Builds proper URLs from domain tags and student name.
+    JenkinsDomain/GiteaDomain may be just the domain or may contain
+    legacy full-URL values (with 'None') — handles both cases.
+    
+    Args:
+        tags: dict of EC2 tags (Key-Value pairs)
+    
+    Returns:
+        dict: {
+          'sut_url': str,
+          'jenkins_url': str,
+          'gitea_url': str,
+          'ide_url': str
+        }
+    """
+    student_name = tags.get('Student', '')
+    https_domain = tags.get('HttpsDomain', '')
+    sut_url = f"https://{https_domain}" if https_domain else ''
+    
+    # Build Jenkins URL: domain + /job/{student_name}/
+    jenkins_domain_raw = tags.get('JenkinsDomain', '')
+    jenkins_url = ''
+    if jenkins_domain_raw and student_name:
+        # Strip protocol and path to get just the domain
+        jd = jenkins_domain_raw.replace('https://', '').replace('http://', '').split('/')[0]
+        jenkins_url = f"https://{jd}/job/{student_name}/"
+    
+    # Build Gitea URL: domain + /{org}/fellowship-sut-{student_name}
+    gitea_domain_raw = tags.get('GiteaDomain', '')
+    gitea_org = tags.get('GiteaOrg', 'fellowship-org')
+    gitea_url = ''
+    if gitea_domain_raw and student_name:
+        # Strip protocol and path to get just the domain
+        gd = gitea_domain_raw.replace('https://', '').replace('http://', '').split('/')[0]
+        gitea_url = f"https://{gd}/{gitea_org}/fellowship-sut-{student_name}"
+    
+    # Build IDE URL
+    ide_domain = tags.get('IdeDomain', '')
+    ide_url = f"https://{ide_domain}" if ide_domain else ''
+    
+    return {
+        'sut_url': sut_url,
+        'jenkins_url': jenkins_url,
+        'gitea_url': gitea_url,
+        'ide_url': ide_url
+    }
 
 def generate_html_response(user_info, error_message=None, status_lambda_url=None):
     if error_message:
@@ -278,42 +484,71 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
     # Create instance info HTML based on whether instance assignment was successful
     instance_info_html = ""
     if 'instance_id' in user_info and user_info['instance_id']:
+        # Build Fellowship-specific instance HTML with SUT URL and credentials
+        sut_url = user_info.get('sut_url', '')
+        credentials = user_info.get('credentials', {'username': '', 'password': ''})
+        jenkins_url = user_info.get('jenkins_url', '')
+        gitea_url = user_info.get('gitea_url', '')
+        ide_url = user_info.get('ide_url', '')
+        
         instance_info_html = f"""
         <div class=\"instance-section\">
-            <h2>Dify Instance Information</h2>
+            <h2>Fellowship Instance Information</h2>
             <div class=\"instance-cards\">
                 <div class=\"instance-card\">
                     <div class=\"card-header\">
                         <i class=\"fas fa-server\"></i>
-                        <span>Dify Instance</span>
+                        <span>SUT Instance</span>
                     </div>
-                    <div class=\"dify-link-container\">
-                        <a id=\"dify-link\" class=\"dify-link\" href=\"#\" target=\"_blank\" tabindex=\"-1\">Loading...</a>
-                        <span id=\"dify-spinner\" class=\"spinner\"></span>
+                    <div class=\"sut-link-container\" id=\"sut-link-container\">
+                        <div id=\"sut-spinner\" class=\"spinner\"></div>
+                        <a id=\"sut-link\" href=\"{sut_url}\" target=\"_blank\" class=\"service-link{' ready' if sut_url else ''}\">
+                            <i class=\"fas fa-external-link-alt\"></i> {sut_url if sut_url else 'Starting SUT...'}
+                        </a>
+                        <p id=\"sut-status-msg\" class=\"status-message\">{'' if sut_url else 'Waiting for SUT to become ready...'}</p>
                     </div>
-                    <div id=\"dify-status-msg\" class=\"status-message\"></div>
                 </div>
                 <div class=\"instance-card\">
                     <div class=\"card-header\">
                         <i class=\"fas fa-user-shield\"></i>
-                        <span>Admin Credentials</span>
+                        <span>Credentials</span>
                     </div>
                     <div class=\"credentials-info\">
                         <div class=\"config-row\">
-                            <span class=\"credential-label\">Username & Email</span>
-                            <span class=\"credential-value\">admin@dify.local</span>
-                            <button class=\"copy-btn\" onclick=\"copyToClipboard('admin@dify.local')\" title=\"Copy\"><i class=\"fas fa-copy\"></i></button>
+                            <span class=\"credential-label\">Username</span>
+                            <span class=\"credential-value\">{credentials.get('username', '')}</span>
+                            <button class=\"copy-btn\" onclick=\"copyToClipboard('{credentials.get('username', '')}')\" title=\"Copy\"><i class=\"fas fa-copy\"></i></button>
                         </div>
-                        <details>
-                            <summary style=\"cursor: pointer; font-weight: 600; color: var(--blue); margin: 8px 0; padding: 8px; background: #f7f8fa; border-radius: 6px; border: 1px solid #e0e0e0;\">
-                                <i class=\"fas fa-key\"></i> Show Password
-                            </summary>
-                            <div class=\"config-row\" style=\"margin-top: 8px;\">
-                                <span class=\"credential-label\">Password</span>
-                                <span class=\"credential-value\">AutomationSTAR2025</span>
-                                <button class=\"copy-btn\" onclick=\"copyToClipboard('AutomationSTAR2025')\" title=\"Copy\"><i class=\"fas fa-copy\"></i></button>
-                            </div>
-                        </details>
+                        <div class=\"config-row\">
+                            <span class=\"credential-label\">Password</span>
+                            <span class=\"credential-value\">{credentials.get('password', '')}</span>
+                            <button class=\"copy-btn\" onclick=\"copyToClipboard('{credentials.get('password', '')}')\" title=\"Copy\"><i class=\"fas fa-copy\"></i></button>
+                        </div>
+                    </div>
+                </div>
+                <div class=\"instance-card\">
+                    <div class=\"card-header\">
+                        <i class=\"fas fa-laptop-code\"></i>
+                        <span>IDE</span>
+                    </div>
+                    <div class=\"sut-link-container\" id=\"ide-link-container\">
+                        <div id=\"ide-spinner\" class=\"spinner\"></div>
+                        <a id=\"ide-link\" href=\"{ide_url}\" target=\"_blank\" class=\"service-link{' ready' if ide_url else ''}\">
+                            <i class=\"fas fa-laptop-code\"></i> {ide_url if ide_url else 'Starting IDE...'}
+                        </a>
+                        <p id=\"ide-status-msg\" class=\"status-message\">{'' if ide_url else 'Waiting for IDE to become ready...'}</p>
+                    </div>
+                </div>
+                <div class=\"instance-card\">
+                    <div class=\"card-header\">
+                        <i class=\"fas fa-tools\"></i>
+                        <span>Development Tools</span>
+                    </div>
+                    <div class=\"service-links\" id=\"dev-tools-container\">
+                        <div id=\"dev-tools-spinner\" class=\"spinner\"></div>
+                        <p id=\"dev-tools-status\" class=\"status-message\">{'Loading development tools...' if not jenkins_url else ''}</p>
+                        <a id=\"jenkins-link\" href=\"{jenkins_url}\" target=\"_blank\" class=\"service-link\" style=\"display:{'block' if jenkins_url else 'none'}\"><i class=\"fas fa-gears\"></i> Jenkins</a>
+                        <a id=\"gitea-link\" href=\"{gitea_url}\" target=\"_blank\" class=\"service-link\" style=\"display:{'block' if gitea_url else 'none'}\"><i class=\"fas fa-code-branch\"></i> Gitea</a>
                     </div>
                 </div>
             </div>
@@ -616,8 +851,9 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                 font-size: 1rem;
                 text-align: center;
             }}
-            .dify-link-container {{
+            .dify-link-container, .sut-link-container {{
                 display: flex;
+                flex-direction: column;
                 align-items: center;
                 justify-content: center;
                 gap: 10px;
@@ -630,10 +866,19 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                 opacity: 0.6;
                 transition: opacity 0.2s;
             }}
-            .dify-link.ready {{
+            .dify-link.ready, .service-link.ready {{
                 pointer-events: auto;
                 opacity: 1;
                 font-weight: bold;
+            }}
+            .service-link {{
+                color: var(--blue);
+                text-decoration: underline;
+                font-size: 1.05rem;
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                padding: 6px 0;
             }}
             .spinner {{
                 border: 4px solid #f3f3f3;
@@ -751,15 +996,22 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                 var userCookie = getCookie('testus_patronus_user');
                 var ipCookie = getCookie('testus_patronus_ip');
                 var instanceIdCookie = getCookie('testus_patronus_instance_id');
-                var difyLink = document.getElementById('dify-link');
-                var spinner = document.getElementById('dify-spinner');
-                var statusMsg = document.getElementById('dify-status-msg');
+                var sutLink = document.getElementById('sut-link');
+                var sutSpinner = document.getElementById('sut-spinner');
+                var sutStatusMsg = document.getElementById('sut-status-msg');
+                var ideLink = document.getElementById('ide-link');
+                var ideSpinner = document.getElementById('ide-spinner');
+                var ideStatusMsg = document.getElementById('ide-status-msg');
+                var jenkinsLink = document.getElementById('jenkins-link');
+                var giteaLink = document.getElementById('gitea-link');
+                var devToolsSpinner = document.getElementById('dev-tools-spinner');
+                var devToolsStatus = document.getElementById('dev-tools-status');
                 var userName = "{user_info['user_name']}";
                 var statusLambdaUrl = "{status_lambda_url}";
                 var pollCount = 0;
 
-                function setStatus(msg) {{
-                    if (statusMsg) statusMsg.textContent = msg;
+                function setSutStatus(msg) {{
+                    if (sutStatusMsg) sutStatusMsg.textContent = msg;
                 }}
 
                 function pollStatus() {{
@@ -770,74 +1022,91 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                             
                             // Check if reassignment is needed (instance was deleted/terminated)
                             if (data.reassign_needed) {{
-                                console.log('[Testus Patronus] Reassignment needed. Reason:', data.reason);
-                                // 'no_assignment' on early polls means the assignment is still in-flight
-                                // (e.g. just after page load for a new user). Retry a few times first.
+                                console.log('[Fellowship] Reassignment needed. Reason:', data.reason);
                                 if (data.reason === 'no_assignment' && pollCount <= 5) {{
-                                    setStatus('Waiting for instance assignment...');
+                                    setSutStatus('Waiting for instance assignment...');
                                     setTimeout(pollStatus, 5000);
                                     return;
                                 }}
-                                setStatus('Your previous instance was deleted. Reassigning a new instance...');
-                                // Stop polling
-                                pollCount = 999; // Prevent further polling
-                                // Clear the instance_id cookie to force reassignment
+                                setSutStatus('Your previous instance was deleted. Reassigning a new instance...');
+                                pollCount = 999;
                                 setCookie('testus_patronus_instance_id', '', -1);
                                 setCookie('testus_patronus_ip', '', -1);
-                                // Reload the page to trigger reassignment in user_management Lambda
                                 setTimeout(() => {{
                                     window.location.href = window.location.origin + window.location.pathname;
                                 }}, 1500);
                                 return;
                             }}
                             
-                            if (data.ready && (data.url || data.ip)) {{
-                                var difyUrl = data.url || ('http://' + data.ip);
-                                if (difyLink) {{
-                                    difyLink.href = difyUrl;
-                                    difyLink.textContent = difyUrl;
-                                    difyLink.classList.add('ready');
-                                    difyLink.style.pointerEvents = 'auto';
+                            if (data.ready && data.url) {{
+                                var sutUrl = data.url;
+                                if (!sutUrl.startsWith('http')) sutUrl = 'https://' + sutUrl;
+                                
+                                // Update SUT link
+                                if (sutLink) {{
+                                    sutLink.href = sutUrl;
+                                    sutLink.innerHTML = '<i class="fas fa-external-link-alt"></i> Open SUT';
+                                    sutLink.classList.add('ready');
+                                    sutLink.style.pointerEvents = 'auto';
                                 }}
-                                if (spinner) spinner.style.display = 'none';
-                                setStatus('Your Dify instance is ready!');
-                                if (data.ip) setCookie('testus_patronus_ip', data.ip, 7);
-                                console.log('[Testus Patronus] Dify ready at:', difyUrl);
+                                if (sutSpinner) sutSpinner.style.display = 'none';
+                                setSutStatus('Your SUT instance is ready!');
+                                
+                                // Update IDE link  
+                                if (data.ide_url && ideLink) {{
+                                    ideLink.href = data.ide_url;
+                                    ideLink.innerHTML = '<i class="fas fa-laptop-code"></i> Open IDE';
+                                    ideLink.classList.add('ready');
+                                    ideLink.style.pointerEvents = 'auto';
+                                    if (ideSpinner) ideSpinner.style.display = 'none';
+                                    if (ideStatusMsg) ideStatusMsg.textContent = 'IDE is ready!';
+                                }}
+                                
+                                // Update Jenkins link
+                                if (data.jenkins_url && jenkinsLink) {{
+                                    jenkinsLink.href = data.jenkins_url;
+                                    jenkinsLink.style.display = 'block';
+                                }}
+                                
+                                // Update Gitea link
+                                if (data.gitea_url && giteaLink) {{
+                                    giteaLink.href = data.gitea_url;
+                                    giteaLink.style.display = 'block';
+                                }}
+                                
+                                // Hide dev tools spinner
+                                if (devToolsSpinner) devToolsSpinner.style.display = 'none';
+                                if (devToolsStatus) devToolsStatus.style.display = 'none';
+                                
+                                console.log('[Fellowship] Services ready. SUT:', sutUrl);
                             }} else {{
-                                setStatus('Starting your Dify instance...');
+                                setSutStatus('Starting your Fellowship instance...');
+                                if (ideStatusMsg) ideStatusMsg.textContent = 'Waiting for IDE...';
                                 if (pollCount < 60) setTimeout(pollStatus, 5000);
-                                else setStatus('Still waiting for your instance. Please refresh if this takes too long.');
+                                else setSutStatus('Still waiting for your instance. Please refresh if this takes too long.');
                             }}
                         }})
                         .catch(err => {{
-                            console.error('[Testus Patronus] Error polling status:', err);
-                            setStatus('Checking instance status...');
+                            console.error('[Fellowship] Error polling status:', err);
+                            setSutStatus('Checking instance status...');
                             if (pollCount < 60) setTimeout(pollStatus, 5000);
                         }});
                 }}
 
                 if (userCookie) {{
-                    // We have a user, always start polling
-                    console.log('[Testus Patronus] User found in cookies, starting status polling');
-                    // Ensure instance_id cookie is set if we have it in the response
+                    console.log('[Fellowship] User found in cookies, starting status polling');
                     var instanceId = "{user_info.get('instance_id', '')}";
                     if (instanceId && !instanceIdCookie) {{
                         setCookie('testus_patronus_instance_id', instanceId, 7);
-                        console.log('[Testus Patronus] Stored instance_id in cookie from response:', instanceId);
                     }}
-                    // Start polling immediately
                     pollStatus();
                 }} else {{
-                    // No user in cookies, let backend/user creation logic run as normal
-                    console.log('[Testus Patronus] No user in cookies, proceeding with normal logic.');
-                    // After assignment, store the user and instance_id in cookies if not already present
+                    console.log('[Fellowship] No user in cookies, storing and polling.');
                     setCookie('testus_patronus_user', "{user_info['user_name']}", 7);
                     var instanceId = "{user_info.get('instance_id', '')}";
                     if (instanceId) {{
                         setCookie('testus_patronus_instance_id', instanceId, 7);
-                        console.log('[Testus Patronus] Stored instance_id in cookie:', instanceId);
                     }}
-                    // Start polling for new assignments
                     pollStatus();
                 }}
             }});
@@ -897,16 +1166,16 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
             <div class="header-row">
                 <a href="https://testingfantasy.com" class="header-link" target="_blank" rel="noopener noreferrer">Visit Testing Fantasy</a>
                 <img src="https://automation.eurostarsoftwaretesting.com/wp-content/uploads/2025/04/AS2025-Amsterdam-Header-Graphic-1.webp" alt="AutomationSTAR 2025 Amsterdam Logo" class="logo">
-                <a href="https://docs-tp.testingfantasy.com" class="header-link" target="_blank" rel="noopener noreferrer">Visit Testus Patronus Documentation</a>
+                <a href="https://docs.fellowship.testingfantasy.com" class="header-link" target="_blank" rel="noopener noreferrer">Visit Fellowship Documentation</a>
             </div>
-            <div class="main-title">Testus Patronus</div>
-            <div class="subtitle">No magic, just AI with your company context</div>
-            <h2>Welcome! Here are your Azure LLM credentials and your Dify instance. This is your user: {user_info['user_name']}</h2>
+            <div class="main-title">Fellowship Workshop</div>
+            <div class="subtitle">CI/CD and AI-assisted testing with Lord of the Rings</div>
+            <h2>Welcome! Here is your Fellowship instance. This is your user: {user_info['user_name']}</h2>
             <button class="get-new-user-btn" onclick="getNewUser()">Get a new user</button>
             {instance_info_html}
             {azure_configs_html}
             <div class="warning">
-                <strong>Note:</strong> This Dify instance will be deleted after the tutorial. Please save any important information before the session ends.
+                <strong>Note:</strong> This instance will be deleted after the tutorial. Please save any important information before the session ends.
             </div>
         </div>
     </body>
@@ -1033,13 +1302,17 @@ def lambda_handler(event, context):
         
         if not status_lambda_url:
             print("Warning: STATUS_LAMBDA_URL environment variable is not set")
-            return _build_response(
-                200,
-                generate_html_response(
+            return {
+                'statusCode': 200,
+                'headers': {
+                    'Content-Type': 'text/html'
+                },
+                'body': generate_html_response(
+                    user_info={},
                     error_message="The status service is not properly configured. Please try again in a few minutes.",
                     status_lambda_url=None
                 )
-            )
+            }
         
         logger.info(f"Lambda handler invoked. Event: {json.dumps(event)}")
         # region agent debug log
@@ -1273,8 +1546,17 @@ def lambda_handler(event, context):
                                         user_info['azure_configs'] = []
                                     
                                     html_content = generate_html_response(user_info=user_info, error_message=None, status_lambda_url=status_lambda_url)
+                                    headers = {'Content-Type': 'text/html'}
                                     cookie_headers = create_cookie_headers(user_info)
-                                    return _build_response(200, html_content, cookies=cookie_headers)
+                                    response = {
+                                        'statusCode': 200,
+                                        'body': html_content,
+                                        'headers': headers
+                                    }
+                                    if cookie_headers:
+                                        # Lambda Function URLs (payload v2) use the "cookies" array
+                                        response['cookies'] = cookie_headers
+                                    return response
                                 elif instance_state in ['terminated', 'shutting-down']:
                                     logger.warning(f"Instance {instance_id_from_cookie} is {instance_state}, cannot be reused")
                                     # Instance is terminated - clear cookie and continue to find/create new assignment
@@ -1487,8 +1769,16 @@ def lambda_handler(event, context):
                             user_info['azure_configs'] = []
                         
                         html_content = generate_html_response(user_info=user_info, error_message=None, status_lambda_url=status_lambda_url)
+                        headers = {'Content-Type': 'text/html'}
                         cookie_headers = create_cookie_headers(user_info)
-                        return _build_response(200, html_content, cookies=cookie_headers)
+                        response = {
+                            'statusCode': 200,
+                            'body': html_content,
+                            'headers': headers
+                        }
+                        if cookie_headers:
+                            response['cookies'] = cookie_headers
+                        return response
                     else:
                         # User found in cookie but NOT in DynamoDB - check if IAM user exists and if instance is already assigned
                         logger.info(f"User {user_name} not found in DynamoDB (Items: {response.get('Items', [])}), checking IAM and EC2")
@@ -1575,8 +1865,16 @@ def lambda_handler(event, context):
                                 user_info['azure_configs'] = []
                             
                             html_content = generate_html_response(user_info=user_info, error_message=None, status_lambda_url=status_lambda_url)
+                            headers = {'Content-Type': 'text/html'}
                             cookie_headers = create_cookie_headers(user_info)
-                            return _build_response(200, html_content, cookies=cookie_headers)
+                            response = {
+                                'statusCode': 200,
+                                'body': html_content,
+                                'headers': headers
+                            }
+                            if cookie_headers:
+                                response['cookies'] = cookie_headers
+                            return response
                         
                         # No existing instance found - check if IAM user exists
                         try:
@@ -1616,8 +1914,16 @@ def lambda_handler(event, context):
                                     user_info['azure_configs'] = []
                                 
                                 html_content = generate_html_response(user_info=user_info, error_message=None, status_lambda_url=status_lambda_url)
+                                headers = {'Content-Type': 'text/html'}
                                 cookie_headers = create_cookie_headers(user_info)
-                                return _build_response(200, html_content, cookies=cookie_headers)
+                                response = {
+                                    'statusCode': 200,
+                                    'body': html_content,
+                                    'headers': headers
+                                }
+                                if cookie_headers:
+                                    response['cookies'] = cookie_headers
+                                return response
                             else:
                                 iam_user_exists = user_exists(user_name)
                             
@@ -1648,8 +1954,16 @@ def lambda_handler(event, context):
                                     user_info['azure_configs'] = []
                                 
                                 html_content = generate_html_response(user_info=user_info, error_message=None, status_lambda_url=status_lambda_url)
+                                headers = {'Content-Type': 'text/html'}
                                 cookie_headers = create_cookie_headers(user_info)
-                                return _build_response(200, html_content, cookies=cookie_headers)
+                                response = {
+                                    'statusCode': 200,
+                                    'body': html_content,
+                                    'headers': headers
+                                }
+                                if cookie_headers:
+                                    response['cookies'] = cookie_headers
+                                return response
                             else:
                                 # Cookie has invalid user (doesn't exist in IAM and no EC2 instance found)
                                 # This means the user was deleted - clear cookies and create new user
@@ -1660,35 +1974,78 @@ def lambda_handler(event, context):
                             logger.warning(f"Exception during IAM check, falling through to create new user")
                             # Fall through to create new user below
                 
-                # No user_name in cookie or cookie user invalid: create a new user
-                # ── Anti-collapsing nonce redirect ──────────────────────────────
-                # CloudFront may collapse concurrent cache-miss requests with the
-                # same cache key (identical URL + no cookies) during the Lambda
-                # cold-start window.  To guarantee each browser gets its own Lambda
-                # invocation, redirect cookieless visitors to a URL with a unique
-                # _nonce query parameter.  This makes the cache keys different so
-                # CloudFront cannot serve the same response to multiple browsers.
-                query_params_new = event.get('queryStringParameters', {}) or {}
-                if not query_params_new.get('_nonce'):
-                    nonce = uuid.uuid4().hex[:12]
-                    # Preserve existing query params
-                    redirect_qs = urllib.parse.urlencode({**query_params_new, '_nonce': nonce})
-                    redirect_url = f"/?{redirect_qs}"
-                    logger.info(f"Redirecting cookieless request with nonce: {nonce}")
+                # No user_name in cookie or cookie user invalid: claim a pool instance (Fellowship workflow)
+                logger.info(f"[Fellowship] Pool instance claim path")
+                
+                # Step 1: Get ALL available pool instances (sorted FIFO)
+                available_instances = get_available_pool_instances(WORKSHOP_NAME, REGION)
+                if not available_instances:
+                    logger.error("[Fellowship] No pool instances available")
                     return {
-                        'statusCode': 302,
-                        'headers': {
-                            'Location': redirect_url,
-                            'Cache-Control': 'no-store, no-cache, must-revalidate, private, max-age=0',
-                            'Pragma': 'no-cache',
-                            'Vary': '*',
-                            'Content-Type': 'text/html',
-                        },
-                        'body': '',
+                        'statusCode': 503,
+                        'headers': {'Content-Type': 'text/html'},
+                        'body': generate_html_response(
+                            user_info={},
+                            error_message="No instances available at this time. Please try again later.",
+                            status_lambda_url=status_lambda_url
+                        )
                     }
                 
-                logger.info(f"[Azure Config] New user path (nonce={query_params_new.get('_nonce')})")
-                user_info = create_user()
+                # Step 2: Try to atomically claim each instance until one succeeds
+                # This prevents the race condition where two concurrent requests
+                # both see the same instance as available
+                pool_instance = None
+                claim_result = None
+                for candidate in available_instances:
+                    student_name = candidate.get('student_name', '')
+                    if not student_name:
+                        logger.warning(f"[Fellowship] Pool instance {candidate['instance_id']} has no Student tag, skipping")
+                        continue
+                    
+                    claim_result = claim_pool_instance(candidate['instance_id'], student_name, WORKSHOP_NAME, ENVIRONMENT)
+                    if claim_result['success']:
+                        pool_instance = candidate
+                        logger.info(f"[Fellowship] Successfully claimed instance {candidate['instance_id']} for student {student_name}")
+                        break
+                    elif claim_result.get('reason') == 'already_claimed':
+                        logger.info(f"[Fellowship] Instance {candidate['instance_id']} already claimed, trying next")
+                        continue
+                    else:
+                        logger.error(f"[Fellowship] Failed to claim instance {candidate['instance_id']}: {claim_result['message']}")
+                        continue
+                
+                if not pool_instance or not claim_result or not claim_result['success']:
+                    logger.error("[Fellowship] Could not claim any available pool instance")
+                    return {
+                        'statusCode': 503,
+                        'headers': {'Content-Type': 'text/html'},
+                        'body': generate_html_response(
+                            user_info={},
+                            error_message="All instances are currently being assigned. Please try again in a moment.",
+                            status_lambda_url=status_lambda_url
+                        )
+                    }
+                
+                student_name = pool_instance.get('student_name', '')
+                
+                # Step 3: Extract URLs from EC2 tags
+                urls = extract_sut_urls_from_instance(pool_instance['tags'])
+                
+                # Step 5: Build user_info with credentials
+                user_info = {
+                    'user_name': student_name,
+                    'instance_id': pool_instance['instance_id'],
+                    'sut_url': urls.get('sut_url', ''),
+                    'jenkins_url': urls.get('jenkins_url', ''),
+                    'gitea_url': urls.get('gitea_url', ''),
+                    'ide_url': urls.get('ide_url', ''),
+                    'credentials': {
+                        'username': student_name,
+                        'password': student_name
+                    }
+                }
+                logger.info(f"[Fellowship] Successfully claimed instance {pool_instance['instance_id']} for student {student_name}")
+
                 # region agent debug log
                 _debug_log(
                     "H2",
@@ -1712,8 +2069,15 @@ def lambda_handler(event, context):
                     logger.error(f"Error loading Azure configurations: {str(e)}")
                     user_info['azure_configs'] = []
                 html_content = generate_html_response(user_info=user_info, error_message=None, status_lambda_url=status_lambda_url)
+                headers = {'Content-Type': 'text/html'}
                 cookie_headers = create_cookie_headers(user_info)
-                response = _build_response(200, html_content, cookies=cookie_headers)
+                response = {
+                    'statusCode': 200,
+                    'body': html_content,
+                    'headers': headers
+                }
+                if cookie_headers:
+                    response['cookies'] = cookie_headers
                 # region agent debug log
                 _debug_log(
                     "H1",
@@ -1730,7 +2094,13 @@ def lambda_handler(event, context):
                 return response
             else:
                 logger.warning(f"Unknown path requested: {path}")
-                return _build_response(404, json.dumps({'error': 'Not found'}), content_type='application/json')
+                return {
+                    'statusCode': 404,
+                    'body': json.dumps({'error': 'Not found'}),
+                    'headers': {
+                        'Content-Type': 'application/json'
+                    }
+                }
         else:
             logger.warning("Method not allowed. Only GET is supported.")
             method_not_allowed_html = """
@@ -1744,7 +2114,13 @@ def lambda_handler(event, context):
                 </body>
             </html>
             """
-            return _build_response(405, method_not_allowed_html)
+            return {
+                'statusCode': 405,
+                'body': method_not_allowed_html,
+                'headers': {
+                    'Content-Type': 'text/html'
+                }
+            }
     except Exception as e:
         logger.error(f"Error in lambda_handler: {str(e)}")
         # region agent debug log
@@ -1758,14 +2134,16 @@ def lambda_handler(event, context):
             }
         )
         # endregion agent debug log
-        return _build_response(
-            500,
-            json.dumps({
+        return {
+            'statusCode': 500,
+            'body': json.dumps({
                 'error': str(e),
                 'traceback': traceback.format_exc()
             }),
-            content_type='application/json'
-        )
+            'headers': {
+                'Content-Type': 'application/json'
+            }
+        }
 
 def create_user():
     account_id = ACCOUNT_ID
@@ -1902,10 +2280,11 @@ def cleanup_expired_assignments():
                     ]
                 )
                 
-                # Delete DynamoDB record (table key is instance_id only, no sort key)
+                # Delete DynamoDB record
                 table.delete_item(
                     Key={
-                        'instance_id': instance_id
+                        'instance_id': instance_id,
+                        'student_name': item['student_name']
                     }
                 )
                 
@@ -1960,6 +2339,7 @@ def assign_ec2_instance_to_student(student_name):
             # 1. Find available instances in the pool (both stopped and running)
             filters = [
                 {'Name': 'tag:Type', 'Values': ['pool']},
+                {'Name': 'tag:WorkshopID', 'Values': [WORKSHOP_NAME]},
                 {'Name': 'instance-state-name', 'Values': ['stopped', 'running']}
             ]
             response = client.describe_instances(Filters=filters)

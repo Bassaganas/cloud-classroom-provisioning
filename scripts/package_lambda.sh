@@ -569,77 +569,117 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
     echo "✓ Verified: shared_core_provisioner.py packaged correctly"
     rm -rf "$TEMP_DIR9"
 
-    # Package fellowship student assignment Lambda function
-    echo "Packaging AWS Lambda fellowship student assignment function..."
+    # Package fellowship user management Lambda function
+    echo "Packaging AWS Lambda fellowship user management function..."
     
     # Delete existing zip file to ensure clean packaging
-    PACKAGE_PATH="$PROJECT_ROOT/functions/packages/fellowship_student_assignment.zip"
+    PACKAGE_PATH="$PROJECT_ROOT/functions/packages/fellowship_classroom_user_management.zip"
     if [ -f "$PACKAGE_PATH" ]; then
         echo "Deleting existing zip file to ensure clean packaging..."
         rm -f "$PACKAGE_PATH"
     fi
     
-    TEMP_DIR10=$(mktemp -d)
-    cp "$PROJECT_ROOT/functions/aws/fellowship/fellowship_student_assignment.py" "$TEMP_DIR10/"
+    TEMP_DIR11=$(mktemp -d)
+    cp "$PROJECT_ROOT/functions/aws/fellowship/fellowship_classroom_user_management.py" "$TEMP_DIR11/"
     
-    # Copy the common module directory (required for fellowship_student_assignment imports)
-    cp -r "$PROJECT_ROOT/functions/common" "$TEMP_DIR10/"
-    
-    # Verify temp directory contains the main file before installing dependencies
-    if [ ! -f "$TEMP_DIR10/fellowship_student_assignment.py" ]; then
-        echo "ERROR: fellowship_student_assignment.py not found in temp directory"
-        rm -rf "$TEMP_DIR10"
+    # Verify temp directory only contains the intended file before installing dependencies
+    PYTHON_FILES_IN_TEMP=$(find "$TEMP_DIR11" -maxdepth 1 -name "*.py" -type f | wc -l)
+    if [ "$PYTHON_FILES_IN_TEMP" -ne 1 ]; then
+        echo "ERROR: Temp directory contains unexpected Python files before dependency installation"
+        echo "Found $PYTHON_FILES_IN_TEMP Python files, expected 1"
+        find "$TEMP_DIR11" -maxdepth 1 -name "*.py" -type f
+        rm -rf "$TEMP_DIR11"
         exit 1
     fi
     
-    # Verify common module was copied
-    if [ ! -d "$TEMP_DIR10/common" ]; then
-        echo "ERROR: common module directory not found in temp directory"
-        rm -rf "$TEMP_DIR10"
-        exit 1
-    fi
-    
-    $PIP_CMD install -q -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR10/"
+    $PIP_CMD install -q -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR11/"
     
     # Verify no unwanted Lambda function files in root directory
-    # (allow common/* subdirectory, fellowship_student_assignment.py is our main function)
-    UNWANTED_LAMBDA_FILES=$(find "$TEMP_DIR10" -maxdepth 1 -type f \( -name "classroom_*.py" -o -name "testus_patronus_*.py" -o -name "dify_jira_*.py" \) ! -name "fellowship_student_assignment.py")
+    UNWANTED_LAMBDA_FILES=$(find "$TEMP_DIR11" -maxdepth 1 -type f \( -name "classroom_*.py" -o -name "testus_patronus_*.py" -o -name "fellowship_*.py" -o -name "dify_jira_*.py" \) ! -name "fellowship_classroom_user_management.py")
     if [ -n "$UNWANTED_LAMBDA_FILES" ]; then
         echo "ERROR: Unwanted Lambda function files found in root directory:"
         echo "$UNWANTED_LAMBDA_FILES"
-        echo "Expected only: fellowship_student_assignment.py with common/ subdirectory"
-        rm -rf "$TEMP_DIR10"
+        echo "Expected only: fellowship_classroom_user_management.py"
+        rm -rf "$TEMP_DIR11"
         exit 1
     fi
     
-    cd "$TEMP_DIR10"
+    cd "$TEMP_DIR11"
     zip -r9q "$PACKAGE_PATH" .
     cd "$PROJECT_ROOT"
     
     # Verify package contents
-    PACKAGE_PATH="$PROJECT_ROOT/functions/packages/fellowship_student_assignment.zip"
-    if ! unzip -l "$PACKAGE_PATH" | grep -q "fellowship_student_assignment.py"; then
-        echo "ERROR: Package does not contain fellowship_student_assignment.py"
-        rm -rf "$TEMP_DIR10"
-        exit 1
-    fi
-    
-    # Verify common module is in the package
-    if ! unzip -l "$PACKAGE_PATH" | grep -q "common/classroom_instance_manager.py"; then
-        echo "ERROR: Package does not contain common/classroom_instance_manager.py"
-        rm -rf "$TEMP_DIR10"
+    if ! unzip -l "$PACKAGE_PATH" | grep -q "fellowship_classroom_user_management.py"; then
+        echo "ERROR: Package does not contain fellowship_classroom_user_management.py"
+        rm -rf "$TEMP_DIR11"
         exit 1
     fi
     
     # Verify lambda_handler function exists in the package
-    if ! unzip -p "$PACKAGE_PATH" fellowship_student_assignment.py | grep -q "def lambda_handler"; then
+    if ! unzip -p "$PACKAGE_PATH" fellowship_classroom_user_management.py | grep -q "def lambda_handler"; then
         echo "ERROR: lambda_handler function not found in packaged file"
-        rm -rf "$TEMP_DIR10"
+        rm -rf "$TEMP_DIR11"
         exit 1
     fi
-    echo "✓ Verified: fellowship_student_assignment.py packaged with common/ module"
+    echo "✓ Verified: fellowship_classroom_user_management.py packaged correctly"
     
-    rm -rf "$TEMP_DIR10"
+    rm -rf "$TEMP_DIR11"
+
+    # Package fellowship status Lambda function
+    echo "Packaging AWS Lambda fellowship status function..."
+    
+    # Delete existing zip file to ensure clean packaging
+    PACKAGE_PATH="$PROJECT_ROOT/functions/packages/fellowship_status.zip"
+    if [ -f "$PACKAGE_PATH" ]; then
+        echo "Deleting existing zip file to ensure clean packaging..."
+        rm -f "$PACKAGE_PATH"
+    fi
+    
+    TEMP_DIR12=$(mktemp -d)
+    cp "$PROJECT_ROOT/functions/aws/fellowship/fellowship_status.py" "$TEMP_DIR12/"
+    
+    # Verify temp directory only contains the intended file before installing dependencies
+    PYTHON_FILES_IN_TEMP=$(find "$TEMP_DIR12" -maxdepth 1 -name "*.py" -type f | wc -l)
+    if [ "$PYTHON_FILES_IN_TEMP" -ne 1 ]; then
+        echo "ERROR: Temp directory contains unexpected Python files before dependency installation"
+        echo "Found $PYTHON_FILES_IN_TEMP Python files, expected 1"
+        find "$TEMP_DIR12" -maxdepth 1 -name "*.py" -type f
+        rm -rf "$TEMP_DIR12"
+        exit 1
+    fi
+    
+    $PIP_CMD install -q -r "$PROJECT_ROOT/functions/aws/requirements.txt" -t "$TEMP_DIR12/"
+    
+    # Verify no unwanted Lambda function files in root directory
+    UNWANTED_LAMBDA_FILES=$(find "$TEMP_DIR12" -maxdepth 1 -type f \( -name "classroom_*.py" -o -name "testus_patronus_*.py" -o -name "fellowship_*.py" -o -name "dify_jira_*.py" \) ! -name "fellowship_status.py")
+    if [ -n "$UNWANTED_LAMBDA_FILES" ]; then
+        echo "ERROR: Unwanted Lambda function files found in root directory:"
+        echo "$UNWANTED_LAMBDA_FILES"
+        echo "Expected only: fellowship_status.py"
+        rm -rf "$TEMP_DIR12"
+        exit 1
+    fi
+    
+    cd "$TEMP_DIR12"
+    zip -r9q "$PACKAGE_PATH" .
+    cd "$PROJECT_ROOT"
+    
+    # Verify package contents
+    if ! unzip -l "$PACKAGE_PATH" | grep -q "fellowship_status.py"; then
+        echo "ERROR: Package does not contain fellowship_status.py"
+        rm -rf "$TEMP_DIR12"
+        exit 1
+    fi
+    
+    # Verify lambda_handler function exists in the package
+    if ! unzip -p "$PACKAGE_PATH" fellowship_status.py | grep -q "def lambda_handler"; then
+        echo "ERROR: lambda_handler function not found in packaged file"
+        rm -rf "$TEMP_DIR12"
+        exit 1
+    fi
+    echo "✓ Verified: fellowship_status.py packaged correctly"
+    
+    rm -rf "$TEMP_DIR12"
 
 else
     # Azure Function packaging

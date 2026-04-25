@@ -139,10 +139,10 @@ module "lambda" {
   instance_manager_memory_size            = var.instance_manager_memory_size
   instance_manager_timeout                = var.instance_manager_timeout
 
-  # Fellowship Student Assignment Lambda configuration
-  enable_fellowship_student_assignment      = var.fellowship_student_assignment_domain != ""
-  fellowship_student_assignment_memory_size = var.fellowship_student_assignment_memory_size
-  fellowship_student_assignment_timeout     = var.fellowship_student_assignment_timeout
+  # Fellowship Lambdas configuration (user management + status)
+  enable_fellowship_lambdas      = var.fellowship_user_management_domain != ""
+  fellowship_lambdas_memory_size = var.fellowship_lambdas_memory_size
+  fellowship_lambdas_timeout     = var.fellowship_lambdas_timeout
 }
 
 # Security Group Rules - Optional additional ports (e.g., Jenkins, MailHog)
@@ -197,9 +197,9 @@ module "cloudfront_dify_jira" {
   enable_cloudwatch_logging = false
 }
 
-# CloudFront Module - Custom Domain and CDN for Fellowship Student Assignment
-module "cloudfront_fellowship_student_assignment" {
-  count  = var.fellowship_student_assignment_domain != "" ? 1 : 0
+# CloudFront Module - Custom Domain and CDN for Fellowship User Management
+module "cloudfront_fellowship_user_management" {
+  count  = var.fellowship_user_management_domain != "" ? 1 : 0
   source = "../cloudfront"
 
   providers = {
@@ -209,11 +209,10 @@ module "cloudfront_fellowship_student_assignment" {
   environment                     = var.environment
   owner                           = var.owner
   workshop_name                   = var.workshop_name
-  domain_name                     = var.fellowship_student_assignment_domain
-  lambda_function_url             = module.lambda.fellowship_student_assignment_url
+  domain_name                     = var.fellowship_user_management_domain
+  lambda_function_url             = module.lambda.fellowship_classroom_user_management_url
   wait_for_certificate_validation = var.wait_for_certificate_validation
-  # Disable CloudFront logging to avoid conflicts with existing resources
-  enable_cloudwatch_logging = false
+  enable_cloudwatch_logging       = false
 }
 
 # Messaging Module — SQS queue for student progress events (per workshop)
