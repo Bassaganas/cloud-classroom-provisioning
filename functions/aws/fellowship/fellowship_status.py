@@ -17,7 +17,7 @@ REGION = os.environ.get('CLASSROOM_REGION') or os.environ.get('AWS_REGION') or '
 ec2 = boto3.resource('ec2', region_name=REGION)
 ec2_client = boto3.client('ec2', region_name=REGION)
 dynamodb = boto3.resource('dynamodb', region_name=REGION)
-WORKSHOP_NAME = os.environ.get('WORKSHOP_NAME', 'testus_patronus')
+WORKSHOP_NAME = os.environ.get('WORKSHOP_NAME', 'fellowship')
 ENVIRONMENT = os.environ.get('ENVIRONMENT', 'dev')
 table = dynamodb.Table(f'instance-assignments-{WORKSHOP_NAME}-{ENVIRONMENT}')
 

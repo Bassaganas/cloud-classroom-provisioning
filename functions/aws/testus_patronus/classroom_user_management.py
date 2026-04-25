@@ -310,8 +310,8 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                             </summary>
                             <div class=\"config-row\" style=\"margin-top: 8px;\">
                                 <span class=\"credential-label\">Password</span>
-                                <span class=\"credential-value\">AutomationSTAR2025</span>
-                                <button class=\"copy-btn\" onclick=\"copyToClipboard('AutomationSTAR2025')\" title=\"Copy\"><i class=\"fas fa-copy\"></i></button>
+                                <span class=\"credential-value\">{user_info.get('admin_password', user_info.get('user_name', 'testus_patronus'))}</span>
+                                <button class=\"copy-btn\" onclick=\"copyToClipboard('{user_info.get('admin_password', user_info.get('user_name', 'testus_patronus'))}')\"><i class=\"fas fa-copy\"></i></button>
                             </div>
                         </details>
                     </div>
@@ -332,9 +332,11 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
     <head>
         <meta charset=\"UTF-8\">
         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
-        <title>Testus Patronus</title>
-        <subtitle>No magic, just AI with your company context</subtitle>
-        <link rel=\"icon\" href=\"https://automation.eurostarsoftwaretesting.com/wp-content/uploads/2025/04/AS2025-Amsterdam-Header-Graphic-1.webp">
+        <title>Testus Patronus ⚡</title>
+        <link rel=\"icon\" href=\"https://docs.bassagan.com/img/hp_icon.png\" type=\"image/png\">
+        <link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">
+        <link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin>
+        <link href=\"https://fonts.googleapis.com/css2?family=EB+Garamond:wght@400;500;700&family=Lato:wght@400;700&display=swap\" rel=\"stylesheet\">
         <link rel=\"stylesheet\" href=\"https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css\">
         
         <!-- Google tag (gtag.js) -->
@@ -348,16 +350,16 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
         
         <style>
             :root {{
-                --blue: #1B1464;
-                --pink: #f452cb;
-                --yellow: #ffd101;
+                --blue: #19181b;
+                --pink: #7c3aed;
+                --yellow: #e0c97f;
                 --white: #fff;
                 --gray: #f4f7fa;
-                --shadow: 0 8px 32px rgba(30,52,178,0.12);
+                --shadow: 0 8px 32px rgba(76,3,201,0.18);
             }}
             body {{
                 background: var(--blue);
-                font-family: 'Open Sans', 'Segoe UI', Arial, sans-serif;
+                font-family: 'EB Garamond', Georgia, serif;
                 margin: 0;
                 padding: 0;
                 color: var(--blue);
@@ -656,8 +658,8 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                 100% {{ transform: rotate(360deg); }}
             }}
             .get-new-user-btn {{
-                background: ##82d642;
-                color: #1B1464;
+                background: var(--pink);
+                color: var(--white);
                 border: none;
                 padding: 10px 22px;
                 border-radius: 6px;
@@ -667,7 +669,8 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                 margin-bottom: 8px;
             }}
             .get-new-user-btn:hover {{
-                background: #fff;
+                background: var(--yellow);
+                color: var(--blue);
             }}
             
             /* Responsive design */
@@ -896,17 +899,17 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
         <div class="container">
             <div class="header-row">
                 <a href="https://testingfantasy.com" class="header-link" target="_blank" rel="noopener noreferrer">Visit Testing Fantasy</a>
-                <img src="https://automation.eurostarsoftwaretesting.com/wp-content/uploads/2025/04/AS2025-Amsterdam-Header-Graphic-1.webp" alt="AutomationSTAR 2025 Amsterdam Logo" class="logo">
+                <img src="https://docs.bassagan.com/img/hp_icon.png" alt="Testus Patronus Logo" class="logo">
                 <a href="https://docs-tp.testingfantasy.com" class="header-link" target="_blank" rel="noopener noreferrer">Visit Testus Patronus Documentation</a>
             </div>
             <div class="main-title">Testus Patronus</div>
             <div class="subtitle">No magic, just AI with your company context</div>
-            <h2>Welcome! Here are your Azure LLM credentials and your Dify instance. This is your user: {user_info['user_name']}</h2>
+            <h2>Welcome, {user_info['user_name']}! Your magical Dify instance awaits. Here are your Azure LLM credentials.</h2>
             <button class="get-new-user-btn" onclick="getNewUser()">Get a new user</button>
             {instance_info_html}
             {azure_configs_html}
             <div class="warning">
-                <strong>Note:</strong> This Dify instance will be deleted after the tutorial. Please save any important information before the session ends.
+                <strong>⚡ Note:</strong> This Dify instance will vanish when the workshop ends. Save your spellwork before time runs out.
             </div>
         </div>
     </body>
