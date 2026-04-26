@@ -1961,8 +1961,11 @@ def assign_ec2_instance_to_student(student_name):
     for attempt in range(max_retries):
         try:
             # 1. Find available instances in the pool (both stopped and running)
+            # Filter by WorkshopID to prevent picking up instances from other workshops
+            # (e.g., fellowship instances should not be claimed by testus_patronus).
             filters = [
                 {'Name': 'tag:Type', 'Values': ['pool']},
+                {'Name': 'tag:WorkshopID', 'Values': [WORKSHOP_NAME]},
                 {'Name': 'instance-state-name', 'Values': ['stopped', 'running']}
             ]
             response = client.describe_instances(Filters=filters)
@@ -2036,11 +2039,13 @@ def assign_ec2_instance_to_student(student_name):
                 # If we reach here, DynamoDB write succeeded
                 try:
                     # Mark instance as starting before any operations
+                    # Do NOT overwrite the 'Student' tag — it is the immutable machine
+                    # identity (character_uuid) set at pool creation time.  Only update
+                    # 'AssignedStudent' which tracks the current assignment.
                     client.create_tags(
                         Resources=[instance_id],
                         Tags=[
                             {'Key': 'Status', 'Value': 'starting'},
-                            {'Key': 'Student', 'Value': student_name},
                             {'Key': 'AssignedStudent', 'Value': student_name},
                             {'Key': 'Company', 'Value': 'TestingFantasy'}
                         ]
@@ -2055,7 +2060,6 @@ def assign_ec2_instance_to_student(student_name):
                         Resources=[instance_id],
                         Tags=[
                             {'Key': 'Status', 'Value': 'assigned'},
-                            {'Key': 'Student', 'Value': student_name},
                             {'Key': 'Company', 'Value': 'TestingFantasy'}
                         ]
                     )

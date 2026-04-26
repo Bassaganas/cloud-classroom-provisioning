@@ -10,6 +10,7 @@ import urllib.request
 import urllib.error
 import string
 import secrets
+import re
 from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Attr
 from datetime import datetime, timezone, timedelta
@@ -831,6 +832,7 @@ HTTPS_ALB_SG_NAME = f"classroom-https-sg-{ENVIRONMENT}"
 SHARED_CORE_MODE = os.environ.get('SHARED_CORE_MODE', 'false').strip().lower() in ('true', '1', 'yes')
 SHARED_JENKINS_URL = os.environ.get('SHARED_JENKINS_URL', '')
 SHARED_GITEA_URL = os.environ.get('SHARED_GITEA_URL', '')
+EC2_USER_DATA_MAX_BYTES = 16 * 1024
 
 
 def get_shared_core_mode(workshop_name=None):
@@ -2601,8 +2603,12 @@ if [ "${SHARED_CORE_MODE:-false}" = "true" ]; then
     if [ -n "${IDE_DOMAIN:-}" ] && [ -d "$ESCAPE_ROOM_DIR" ]; then
         cd "$ESCAPE_ROOM_DIR"
         # Point code-server at shared Gitea so the entrypoint can clone student repos.
-        # WORKSPACE_DIR is intentionally NOT overridden — the entrypoint auto-detects
-        # /opt/fellowship-sut (golden AMI path) and uses it as the workspace.
+        # Create a separate workspace directory for the Gitea clone.
+        # /opt/fellowship-sut contains the raw SUT tarball from AMI bake and must NOT
+        # be used as workspace — git clone would fail on the non-empty directory.
+        export WORKSPACE_DIR=/opt/fellowship-workspace
+        mkdir -p /opt/fellowship-workspace
+        chown 1000:1000 /opt/fellowship-workspace
         export GITEA_HTTP_URL="${SHARED_GITEA_URL:-}"
         export JENKINS_URL="${SHARED_JENKINS_URL:-}"
         export GITEA_URL="${SHARED_GITEA_URL:-}"
@@ -2629,7 +2635,7 @@ if [ "${SHARED_CORE_MODE:-false}" = "true" ]; then
         log "Writing devops-escape-room/.env for code-server..."
         cat > "$ESCAPE_ROOM_DIR/.env" <<ESCENV
 CODESERVER_PASSWORD=${CODESERVER_PASSWORD:-fellowship}
-WORKSPACE_DIR=${WORKSPACE_DIR:-/opt/fellowship-sut}
+WORKSPACE_DIR=${WORKSPACE_DIR:-/opt/fellowship-workspace}
 GITEA_HTTP_URL=${SHARED_GITEA_URL:-}
 GITEA_ORG_NAME=${GITEA_ORG_NAME:-fellowship-org}
 GITEA_REPO_NAME=${GITEA_REPO_NAME:-}
@@ -2700,6 +2706,53 @@ log "==========================="
 
 log "Golden AMI bootstrap completed"
 """
+
+
+def _compact_user_data_script(user_data: str) -> str:
+    """Reduce user_data size by removing non-functional comments and extra blank lines.
+
+    Keeps heredoc blocks unchanged to avoid altering embedded payloads.
+    """
+    if not user_data:
+        return user_data
+
+    compacted_lines = []
+    previous_blank = False
+    heredoc_delimiter = None
+
+    for line in user_data.splitlines():
+        stripped = line.strip()
+
+        # Preserve heredoc blocks exactly until their delimiter closes.
+        if heredoc_delimiter is not None:
+            compacted_lines.append(line)
+            if stripped == heredoc_delimiter:
+                heredoc_delimiter = None
+            continue
+
+        match = re.search(r"<<-?\s*['\"]?([A-Za-z0-9_]+)['\"]?", line)
+        if match:
+            heredoc_delimiter = match.group(1)
+            compacted_lines.append(line)
+            previous_blank = False
+            continue
+
+        # Keep shebang, drop all other full-line comments.
+        if stripped.startswith('#') and not line.startswith('#!'):
+            continue
+
+        # Collapse duplicate blank lines to save bytes.
+        if stripped == '':
+            if previous_blank:
+                continue
+            compacted_lines.append('')
+            previous_blank = True
+            continue
+
+        compacted_lines.append(line)
+        previous_blank = False
+
+    return '\n'.join(compacted_lines)
 
 
 def get_user_data_script(template_config=None, workshop_name=None):
@@ -3317,6 +3370,31 @@ export STUDENT_ID={instance_student_name}
                 logger.warning("HTTPS not configured - domain tags will not be set")
                 logger.warning("  Domain will not be injected into user_data (HTTPS may not work initially)")
             
+            raw_user_data_bytes = len(user_data.encode('utf-8'))
+            compacted_user_data = _compact_user_data_script(user_data)
+            compacted_user_data_bytes = len(compacted_user_data.encode('utf-8'))
+
+            if compacted_user_data_bytes != raw_user_data_bytes:
+                logger.info(
+                    "Compacted user_data for launch: %s -> %s bytes",
+                    raw_user_data_bytes,
+                    compacted_user_data_bytes,
+                )
+
+            user_data = compacted_user_data
+
+            if compacted_user_data_bytes > EC2_USER_DATA_MAX_BYTES:
+                error_msg = (
+                    f"User data is too large after compaction: {compacted_user_data_bytes} bytes "
+                    f"(limit: {EC2_USER_DATA_MAX_BYTES} bytes)"
+                )
+                logger.error(error_msg)
+                return {
+                    'success': False,
+                    'error': error_msg,
+                    'details': 'Reduce bootstrap content or move setup logic to a script fetched at boot time.'
+                }
+
             logger.info("=" * 80)
             logger.info(f"LAUNCHING INSTANCE {i+1}/{count}")
             logger.info(f"  AMI ID: {ami_id}")
@@ -3324,7 +3402,7 @@ export STUDENT_ID={instance_student_name}
             logger.info(f"  IAM Instance Profile: {IAM_INSTANCE_PROFILE}")
             logger.info(f"  Subnet ID: {SUBNET_ID or 'Default VPC subnet'}")
             logger.info(f"  Security Groups: {SECURITY_GROUP_IDS if SECURITY_GROUP_IDS else 'Default'}")
-            logger.info(f"  User Data Length: {len(user_data)} characters")
+            logger.info(f"  User Data Size: {compacted_user_data_bytes} bytes")
             logger.info(f"  User Data Preview (first 200 chars): {user_data[:200]}...")
             logger.info("=" * 80)
             
@@ -4725,8 +4803,8 @@ def reserve_pool_instance(workshop_name: str = None) -> dict:
             message: str
         }
     """
-    # Pool instances are tagged with WORKSHOP_NAME (from Lambda env)
-    pool_workshop = WORKSHOP_NAME
+    # Pool instances are tagged with the target workshop (from parameter or env fallback)
+    pool_workshop = workshop_name or WORKSHOP_NAME
     
     try:
         # Get all pool instances for this deployment's workshop tag
@@ -4743,9 +4821,9 @@ def reserve_pool_instance(workshop_name: str = None) -> dict:
                 tags = {tag['Key']: tag['Value'] for tag in instance.get('Tags', [])}
                 
                 # Skip instances already assigned to a real student
-                # Check both 'AssignedStudent' (from /api/assign-student) and 'Student' (from pool creation)
-                # to handle both dynamically assigned instances and pre-provisioned pool instances
-                assigned_to = tags.get('AssignedStudent', '') or tags.get('Student', '')
+                # Use 'AssignedStudent' as the authoritative assignment marker.
+                # 'Student' is the immutable machine identity set at pool creation — do NOT use it here.
+                assigned_to = tags.get('AssignedStudent', '')
                 if assigned_to and assigned_to not in ('NONE', '__AVAILABLE__', '', 'false', 'False'):
                     logger.debug(f"Skipping instance {instance['InstanceId']}: already assigned to {assigned_to}")
                     continue
@@ -5554,9 +5632,16 @@ def lambda_handler(event, context):
                     }
                 
                 # Check if instance is already assigned
+                # CRITICAL: Use the instance's own workshop-specific DynamoDB table,
+                # NOT the module-level table (which uses the Lambda's WORKSHOP_NAME env var).
+                # The instance manager Lambda runs with WORKSHOP_NAME='shared', but fellowship
+                # instances use 'instance-assignments-fellowship-dev'.  Without this fix,
+                # the "already assigned" check silently passes because it queries the wrong table.
+                instance_workshop = tags.get('WorkshopID') or WORKSHOP_NAME
+                assign_table = dynamodb.Table(f"instance-assignments-{instance_workshop}-{ENVIRONMENT}")
                 existing = None
                 try:
-                    existing = table.get_item(Key={'instance_id': instance_id})
+                    existing = assign_table.get_item(Key={'instance_id': instance_id})
                     if 'Item' in existing and existing['Item'].get('student_name'):
                         return {
                             'statusCode': 400,
@@ -5569,7 +5654,7 @@ def lambda_handler(event, context):
                 except Exception as e:
                     logger.warning(f"Error checking existing assignment: {str(e)}")
                 
-                # Create assignment in DynamoDB
+                # Create assignment in DynamoDB (use workshop-specific table)
                 assignment_ttl = 600  # 10 minutes
                 item = {
                     'instance_id': instance_id,
@@ -5583,18 +5668,21 @@ def lambda_handler(event, context):
                 if existing and 'Item' in existing and 'last_stopped_at' in existing['Item']:
                     item['last_stopped_at'] = existing['Item']['last_stopped_at']
                 
-                table.put_item(
+                assign_table.put_item(
                     Item=item,
                     ConditionExpression='attribute_not_exists(instance_id) OR attribute_not_exists(student_name)'
                 )
                 
                 # Update EC2 tags
+                # IMPORTANT: Do NOT overwrite the 'Student' tag — it is the immutable machine
+                # identity (character_uuid) set at pool creation time.  Overwriting it breaks
+                # the fellowship lambda's cookie validation which matches Student == cookie user.
+                # Only update 'AssignedStudent' (the assignment marker).
                 instance_state = instance['State']['Name']
                 ec2.create_tags(
                     Resources=[instance_id],
                     Tags=[
                         {'Key': 'Status', 'Value': 'starting'},
-                        {'Key': 'Student', 'Value': student_name},
                         {'Key': 'AssignedStudent', 'Value': student_name},
                         {'Key': 'Company', 'Value': 'TestingFantasy'}
                     ]
@@ -5604,20 +5692,19 @@ def lambda_handler(event, context):
                 if instance_state == 'stopped':
                     ec2.start_instances(InstanceIds=[instance_id])
                 
-                # Update DynamoDB status
-                table.update_item(
+                # Update DynamoDB status (use workshop-specific table)
+                assign_table.update_item(
                     Key={'instance_id': instance_id},
                     UpdateExpression='SET #status = :status REMOVE expires_at',
                     ExpressionAttributeNames={'#status': 'status'},
                     ExpressionAttributeValues={':status': 'starting'}
                 )
                 
-                # Update EC2 tags to assigned
+                # Update EC2 tags to assigned (without overwriting Student)
                 ec2.create_tags(
                     Resources=[instance_id],
                     Tags=[
                         {'Key': 'Status', 'Value': 'assigned'},
-                        {'Key': 'Student', 'Value': student_name},
                         {'Key': 'Company', 'Value': 'TestingFantasy'}
                     ]
                 )
