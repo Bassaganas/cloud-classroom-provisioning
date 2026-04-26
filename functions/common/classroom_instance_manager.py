@@ -1985,6 +1985,7 @@ def setup_caddy_domain(instance_id, workshop_name, machine_name=None, domain=Non
             domains_to_create.append(f"jenkins-{final_domain}")
             domains_to_create.append(f"ide-{final_domain}")
             domains_to_create.append(f"gitea-{final_domain}")
+            domains_to_create.append(f"mail-{final_domain}")
 
         if public_ip:
             changes = []
@@ -2010,20 +2011,25 @@ def setup_caddy_domain(instance_id, workshop_name, machine_name=None, domain=Non
             # The tags are already set, so setup script can use the domain immediately
         
         # Update instance tags (may already be set, but ensure they're correct)
+        mail_domain = f"mail-{final_domain}" if str(workshop_name or '').strip().lower() == 'fellowship' else ''
+        tags_to_set = [
+            {'Key': 'HttpsDomain', 'Value': final_domain},
+            {'Key': 'HttpsUrl', 'Value': https_url},
+            {'Key': 'HttpsEnabled', 'Value': 'true'}
+        ]
+        if mail_domain:
+            tags_to_set.append({'Key': 'MailDomain', 'Value': mail_domain})
         ec2.create_tags(
             Resources=[instance_id],
-            Tags=[
-                {'Key': 'HttpsDomain', 'Value': final_domain},
-                {'Key': 'HttpsUrl', 'Value': https_url},
-                {'Key': 'HttpsEnabled', 'Value': 'true'}
-            ]
+            Tags=tags_to_set
         )
         logger.info(f"Updated instance tags with HTTPS domain: {final_domain}")
         
         return {
             'domain': final_domain,
             'https_url': https_url,
-            'public_ip': public_ip
+            'public_ip': public_ip,
+            'mail_domain': mail_domain
         }
     except Exception as e:
         logger.error(f"Error setting up Caddy domain for {instance_id}: {str(e)}", exc_info=True)
@@ -2321,6 +2327,7 @@ CADDY_DOMAIN=${CADDY_DOMAIN:-localhost}
 JENKINS_DOMAIN=${JENKINS_DOMAIN:-}
 IDE_DOMAIN=${IDE_DOMAIN:-}
 GITEA_DOMAIN=${GITEA_DOMAIN:-}
+MAIL_DOMAIN=${MAIL_DOMAIN:-}
 MACHINE_NAME=${MACHINE_NAME:-fellowship}
 WORKSHOP_NAME=${WORKSHOP_NAME:-fellowship}
 ROUTE53_ZONE_ID=${ROUTE53_ZONE_ID:-}
@@ -3005,10 +3012,12 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
                 jenkins_domain = f"https://jenkins.fellowship.testingfantasy.com/job/fellowship-pipeline/{student_name}"
                 ide_domain = f"ide-{domain}" if domain else ''
                 gitea_domain = f"https://gitea.fellowship.testingfantasy.com/fellowship-org/fellowship-sut-{student_name}"
+                mail_domain = f"mail-{domain}" if domain else ''
                 if str(workshop_name or '').strip().lower() != 'testus_patronus':
                     tags.append({'Key': 'GiteaDomain', 'Value': gitea_domain})
                     tags.append({'Key': 'JenkinsDomain', 'Value': jenkins_domain})
                     tags.append({'Key': 'IdeDomain', 'Value': ide_domain})
+                    tags.append({'Key': 'MailDomain', 'Value': mail_domain})
 
                 logger.info(f"Generated domain name BEFORE instance creation: {domain or '(deferred to setup_caddy_domain)'} (machine_name: {machine_name})")
                 
@@ -3072,6 +3081,7 @@ export GITEA_REPO_NAME={_gitea_repo}
                     domain_exports += f"export JENKINS_DOMAIN={jenkins_domain}\n"
                     domain_exports += f"export GITEA_DOMAIN={gitea_domain}\n"
                     domain_exports += f"export IDE_DOMAIN={ide_domain}\n"
+                    domain_exports += f"export MAIL_DOMAIN={mail_domain}\n"
                 
                 # Add S3 artifact information if available
                 if s3_bucket_name:
@@ -3916,13 +3926,14 @@ def delete_instances(instance_ids=None, delete_type='individual'):
                     logger.warning(f"Error getting instance details for {instance_id}: {str(e)}")
                 
 
-                # Clean up Route53 records: main, jenkins, and ide subdomains
+                # Clean up Route53 records: main, jenkins, ide, gitea, and mail subdomains
                 domains_to_delete = [domain_to_delete]
                 workshop_for_instance = str(instance_tags.get('WorkshopID', '')).strip().lower()
                 if domain_to_delete and workshop_for_instance == 'fellowship':
                     domains_to_delete.append(f"jenkins-{domain_to_delete}")
                     domains_to_delete.append(f"ide-{domain_to_delete}")
                     domains_to_delete.append(f"gitea-{domain_to_delete}")
+                    domains_to_delete.append(f"mail-{domain_to_delete}")
                 for d in domains_to_delete:
                     dns_cleanup = _delete_route53_a_record(d, strict=False, max_retries=3)
                     if not dns_cleanup.get('success'):
