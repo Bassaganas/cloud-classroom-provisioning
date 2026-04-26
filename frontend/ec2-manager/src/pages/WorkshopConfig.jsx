@@ -102,8 +102,17 @@ function WorkshopConfig() {
     try {
       const result = await api.deleteSharedCoreResources(workshopName, resourceType)
       if (result.success) {
-        const label = resourceType === 'jenkins_folders' ? 'Jenkins folders' : 'Gitea repos'
-        showToast(`Deleted ${result.deleted_count} ${label}`, 'success')
+        if (resourceType === 'jenkins_folders') {
+          const tokenCount = Number.isFinite(result.jenkins_tokens_deleted)
+            ? result.jenkins_tokens_deleted
+            : 0
+          showToast(
+            `Deleted ${result.deleted_count} Jenkins folders and revoked ${tokenCount} Jenkins webhook tokens`,
+            'success'
+          )
+        } else {
+          showToast(`Deleted ${result.deleted_count} Gitea repos`, 'success')
+        }
       } else {
         showToast(result.error || 'Deletion failed', 'error')
       }
@@ -261,7 +270,7 @@ function WorkshopConfig() {
           <Typography>
             This will permanently delete{' '}
             {confirmDialog.resourceType === 'jenkins_folders'
-              ? 'all top-level Jenkins folders and their pipelines'
+              ? 'all top-level Jenkins folders, their pipelines, and related Jenkins webhook API tokens'
               : 'all Gitea repositories in the shared organisation'}{' '}
             for workshop <strong>{workshopName}</strong>. This action cannot be undone.
           </Typography>
