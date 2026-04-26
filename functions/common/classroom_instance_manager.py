@@ -2604,6 +2604,51 @@ if [ "${SHARED_CORE_MODE:-false}" = "true" ]; then
         # WORKSPACE_DIR is intentionally NOT overridden — the entrypoint auto-detects
         # /opt/fellowship-sut (golden AMI path) and uses it as the workspace.
         export GITEA_HTTP_URL="${SHARED_GITEA_URL:-}"
+        export JENKINS_URL="${SHARED_JENKINS_URL:-}"
+        export GITEA_URL="${SHARED_GITEA_URL:-}"
+
+        # Fetch Azure OpenAI configuration from Secrets Manager for student exercises.
+        # The secret 'azure/llm/configs' is a JSON array of LLM provider configurations.
+        log "Fetching Azure OpenAI config from Secrets Manager..."
+        AZURE_JSON=$(aws secretsmanager get-secret-value \
+            --secret-id "azure/llm/configs" \
+            --region "${AWS_REGION:-eu-west-1}" \
+            --query "SecretString" --output text 2>/dev/null || echo "")
+        if [ -n "$AZURE_JSON" ] && [ "$AZURE_JSON" != "None" ]; then
+            export AZURE_OPENAI_ENDPOINT=$(echo "$AZURE_JSON" | python3 -c "import sys,json; c=json.load(sys.stdin); print(c[0].get('endpoint',''))" 2>/dev/null || echo "")
+            export AZURE_OPENAI_API_KEY=$(echo "$AZURE_JSON" | python3 -c "import sys,json; c=json.load(sys.stdin); print(c[0].get('api_key',''))" 2>/dev/null || echo "")
+            export AZURE_OPENAI_DEPLOYMENT=$(echo "$AZURE_JSON" | python3 -c "import sys,json; c=json.load(sys.stdin); print(c[0].get('deployment_name','gpt-4o'))" 2>/dev/null || echo "gpt-4o")
+            export AZURE_OPENAI_API_VERSION=$(echo "$AZURE_JSON" | python3 -c "import sys,json; c=json.load(sys.stdin); print(c[0].get('api_version','2024-12-01-preview'))" 2>/dev/null || echo "2024-12-01-preview")
+            log "✓ Azure OpenAI config loaded from Secrets Manager"
+        else
+            log "WARNING: Could not fetch Azure OpenAI config — exercises requiring LLM will not work"
+        fi
+
+        # Write devops-escape-room/.env with all student-specific vars.
+        # docker-compose reads this file and passes vars to the code-server container.
+        log "Writing devops-escape-room/.env for code-server..."
+        cat > "$ESCAPE_ROOM_DIR/.env" <<ESCENV
+CODESERVER_PASSWORD=${CODESERVER_PASSWORD:-fellowship}
+WORKSPACE_DIR=${WORKSPACE_DIR:-/opt/fellowship-sut}
+GITEA_HTTP_URL=${SHARED_GITEA_URL:-}
+GITEA_ORG_NAME=${GITEA_ORG_NAME:-fellowship-org}
+GITEA_REPO_NAME=${GITEA_REPO_NAME:-}
+GITEA_REPO_URL=${GITEA_REPO_URL:-}
+STUDENT_ID=${STUDENT_ID:-}
+SQS_QUEUE_URL=${SQS_QUEUE_URL:-}
+AWS_REGION=${AWS_REGION:-eu-west-1}
+ENVIRONMENT=${ENVIRONMENT:-aws}
+JENKINS_URL=${SHARED_JENKINS_URL:-}
+GITEA_URL=${SHARED_GITEA_URL:-}
+MAIL_DOMAIN=${MAIL_DOMAIN:-}
+AZURE_OPENAI_ENDPOINT=${AZURE_OPENAI_ENDPOINT:-}
+AZURE_OPENAI_API_KEY=${AZURE_OPENAI_API_KEY:-}
+AZURE_OPENAI_DEPLOYMENT=${AZURE_OPENAI_DEPLOYMENT:-gpt-4o}
+AZURE_OPENAI_API_VERSION=${AZURE_OPENAI_API_VERSION:-2024-12-01-preview}
+ESCENV
+        chmod 644 "$ESCAPE_ROOM_DIR/.env"
+        log "✓ devops-escape-room/.env written (STUDENT_ID=${STUDENT_ID:-<not set>})"
+
         if docker compose up -d --no-deps code-server mailhog; then
             log "✓ code-server (IDE) and MailHog started for ${IDE_DOMAIN}"
         else
@@ -3209,6 +3254,7 @@ export SHARED_JENKINS_URL={SHARED_JENKINS_URL}
 export SHARED_GITEA_URL={SHARED_GITEA_URL}
 export GITEA_ORG_NAME={_gitea_org}
 export GITEA_REPO_NAME={_gitea_repo}
+export STUDENT_ID={instance_student_name}
 """
                 domain_exports += user_data_exports
                 # Only inject CADDY_DOMAIN when it is known pre-creation (not for testus_patronus)
