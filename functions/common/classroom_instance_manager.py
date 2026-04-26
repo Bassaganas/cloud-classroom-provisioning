@@ -2442,9 +2442,7 @@ log "  - EC2 instance must have IAM role with route53:* permissions"
 log "Writing .env (CADDY_DOMAIN=${CADDY_DOMAIN:-localhost})"
 cat > "${SUT_DIR}/.env" <<EOF
 CADDY_DOMAIN=${CADDY_DOMAIN:-localhost}
-JENKINS_DOMAIN=${JENKINS_DOMAIN:-_jenkins-off.fellowship.testingfantasy.com}
 IDE_DOMAIN=${IDE_DOMAIN:-_ide-off.fellowship.testingfantasy.com}
-GITEA_DOMAIN=${GITEA_DOMAIN:-_gitea-off.fellowship.testingfantasy.com}
 MAIL_DOMAIN=${MAIL_DOMAIN:-_mail-off.fellowship.testingfantasy.com}
 MACHINE_NAME=${MACHINE_NAME:-fellowship}
 WORKSHOP_NAME=${WORKSHOP_NAME:-fellowship}
