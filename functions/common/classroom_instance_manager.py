@@ -2442,10 +2442,8 @@ log "  - EC2 instance must have IAM role with route53:* permissions"
 log "Writing .env (CADDY_DOMAIN=${CADDY_DOMAIN:-localhost})"
 cat > "${SUT_DIR}/.env" <<EOF
 CADDY_DOMAIN=${CADDY_DOMAIN:-localhost}
-JENKINS_DOMAIN=${JENKINS_DOMAIN:-_disabled.internal}
-IDE_DOMAIN=${IDE_DOMAIN:-_disabled.internal}
-GITEA_DOMAIN=${GITEA_DOMAIN:-_disabled.internal}
-MAIL_DOMAIN=${MAIL_DOMAIN:-_disabled.internal}
+IDE_DOMAIN=${IDE_DOMAIN:-_ide-off.fellowship.testingfantasy.com}
+MAIL_DOMAIN=${MAIL_DOMAIN:-_mail-off.fellowship.testingfantasy.com}
 MACHINE_NAME=${MACHINE_NAME:-fellowship}
 WORKSHOP_NAME=${WORKSHOP_NAME:-fellowship}
 ROUTE53_ZONE_ID=${ROUTE53_ZONE_ID:-}
@@ -3143,8 +3141,8 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
                     # Caddy env vars will be empty; tags store full URLs for UI links.
                     jenkins_domain = ''
                     gitea_domain = ''
-                    jenkins_tag_url = f"https://jenkins.fellowship.testingfantasy.com/job/fellowship-pipeline/{student_name}"
-                    gitea_tag_url = f"https://gitea.fellowship.testingfantasy.com/fellowship-org/fellowship-sut-{student_name}"
+                    jenkins_tag_url = f"https://jenkins.fellowship.testingfantasy.com/job/fellowship-pipeline/{instance_student_name}"
+                    gitea_tag_url = f"https://gitea.fellowship.testingfantasy.com/fellowship-org/fellowship-sut-{instance_student_name}"
                 else:
                     # Standalone: Jenkins/Gitea run on this instance, Caddy proxies them.
                     jenkins_domain = f"jenkins-{domain}" if domain else ''
