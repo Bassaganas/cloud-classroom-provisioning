@@ -351,14 +351,18 @@ def extract_sut_urls_from_instance(tags):
         jd = jenkins_domain_raw.replace('https://', '').replace('http://', '').split('/')[0]
         jenkins_url = f"https://{jd}/job/{student_name}/"
     
-    # Build Gitea URL: domain + /{org}/fellowship-sut-{student_name}
+    # Build Gitea URL as login page with redirect to student repo.
+    # Example:
+    # https://gitea.fellowship.testingfantasy.com/user/login?redirect_to=%2ffellowship-org%2ffellowship-sut-legolas_ab12
     gitea_domain_raw = tags.get('GiteaDomain', '')
     gitea_org = tags.get('GiteaOrg', 'fellowship-org')
     gitea_url = ''
     if gitea_domain_raw and student_name:
         # Strip protocol and path to get just the domain
         gd = gitea_domain_raw.replace('https://', '').replace('http://', '').split('/')[0]
-        gitea_url = f"https://{gd}/{gitea_org}/fellowship-sut-{student_name}"
+        repo_path = f"/{gitea_org}/fellowship-sut-{student_name}"
+        redirect_to = urllib.parse.quote(repo_path, safe='')
+        gitea_url = f"https://{gd}/user/login?redirect_to={redirect_to}"
     
     # Build IDE URL
     ide_domain = tags.get('IdeDomain', '')
@@ -414,21 +418,35 @@ def generate_student_env_content(user_info, azure_configs=None):
         parts = jenkins_url.split('/job/')
         jenkins_base = parts[0] if parts else jenkins_url.rstrip('/')
 
-    # Extract Gitea base URL and org/repo from the URL
+    # Extract Gitea base URL and org/repo from the URL.
+    # Supports both direct repo URL and login redirect URL.
     gitea_base = ''
     gitea_owner = ''
     gitea_repo = ''
     if gitea_url:
-        # gitea_url is like https://gitea.fellowship.testingfantasy.com/fellowship-org/fellowship-sut-student_name
+        # gitea_url can be either:
+        # - https://gitea.../fellowship-org/fellowship-sut-student_name
+        # - https://gitea.../user/login?redirect_to=%2ffellowship-org%2ffellowship-sut-student_name
         try:
             from urllib.parse import urlparse
             parsed = urlparse(gitea_url)
             gitea_base = f"{parsed.scheme}://{parsed.netloc}"
-            path_parts = parsed.path.strip('/').split('/')
-            if len(path_parts) >= 1:
-                gitea_owner = path_parts[0]
-            if len(path_parts) >= 2:
-                gitea_repo = path_parts[1]
+            if parsed.path.strip('/') == 'user/login' and parsed.query:
+                query = urllib.parse.parse_qs(parsed.query)
+                redirect_values = query.get('redirect_to', [])
+                if redirect_values:
+                    decoded_path = urllib.parse.unquote(redirect_values[0]).strip('/')
+                    path_parts = decoded_path.split('/')
+                    if len(path_parts) >= 1:
+                        gitea_owner = path_parts[0]
+                    if len(path_parts) >= 2:
+                        gitea_repo = path_parts[1]
+            else:
+                path_parts = parsed.path.strip('/').split('/')
+                if len(path_parts) >= 1:
+                    gitea_owner = path_parts[0]
+                if len(path_parts) >= 2:
+                    gitea_repo = path_parts[1]
         except Exception:
             gitea_base = gitea_url
 
@@ -725,10 +743,30 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                 </div>
                 <div class=\"instance-card\">
                     <div class=\"card-header\">
-                        <i class=\"fas fa-user-shield\"></i>
-                        <span>Credentials</span>
+                        <i class=\"fas fa-laptop-code\"></i>
+                        <span>IDE</span>
                     </div>
-                    <div class=\"credentials-info\">
+                    <div class=\"sut-link-container\" id=\"ide-link-container\">
+                        <div id=\"ide-spinner\" class=\"spinner\"></div>
+                        <a id=\"ide-link\" href=\"{ide_url}\" target=\"_blank\" class=\"service-link{' ready' if ide_url else ''}\">
+                            <i class=\"fas fa-laptop-code\"></i> {ide_url if ide_url else 'Starting IDE...'}
+                        </a>
+                        <p id=\"ide-status-msg\" class=\"status-message\">{'' if ide_url else 'Waiting for IDE to become ready...'}</p>
+                    </div>
+                    <div class=\"credentials-info\" style=\"margin-top:8px;\">
+                        <div class=\"config-row\">
+                            <span class=\"credential-label\">IDE Password</span>
+                            <span class=\"credential-value\">fellowship</span>
+                            <button class=\"copy-btn\" onclick=\"copyToClipboard('fellowship')\" title=\"Copy\"><i class=\"fas fa-copy\"></i></button>
+                        </div>
+                    </div>
+                </div>
+                <div class=\"instance-card\">
+                    <div class=\"card-header\">
+                        <i class=\"fas fa-user-shield\"></i>
+                        <span>Jenkins &amp; Gitea Access</span>
+                    </div>
+                    <div class=\"credentials-info\" style=\"margin-bottom:10px;\">
                         <div class=\"config-row\">
                             <span class=\"credential-label\">Username</span>
                             <span class=\"credential-value\">{credentials.get('username', '')}</span>
@@ -740,30 +778,11 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                             <button class=\"copy-btn\" onclick=\"copyToClipboard('{credentials.get('password', '')}')\" title=\"Copy\"><i class=\"fas fa-copy\"></i></button>
                         </div>
                     </div>
-                </div>
-                <div class=\"instance-card\">
-                    <div class=\"card-header\">
-                        <i class=\"fas fa-laptop-code\"></i>
-                        <span>IDE</span>
-                    </div>
-                    <div class=\"sut-link-container\" id=\"ide-link-container\">
-                        <div id=\"ide-spinner\" class=\"spinner\"></div>
-                        <a id=\"ide-link\" href=\"{ide_url}\" target=\"_blank\" class=\"service-link{' ready' if ide_url else ''}\">
-                            <i class=\"fas fa-laptop-code\"></i> {ide_url if ide_url else 'Starting IDE...'}
-                        </a>
-                        <p id=\"ide-status-msg\" class=\"status-message\">{'' if ide_url else 'Waiting for IDE to become ready...'}</p>
-                    </div>
-                </div>
-                <div class=\"instance-card\">
-                    <div class=\"card-header\">
-                        <i class=\"fas fa-tools\"></i>
-                        <span>Development Tools</span>
-                    </div>
                     <div class=\"service-links\" id=\"dev-tools-container\">
                         <div id=\"dev-tools-spinner\" class=\"spinner\"></div>
                         <p id=\"dev-tools-status\" class=\"status-message\">{'Loading development tools...' if not jenkins_url else ''}</p>
                         <a id=\"jenkins-link\" href=\"{jenkins_url}\" target=\"_blank\" class=\"service-link\" style=\"display:{'block' if jenkins_url else 'none'}\"><i class=\"fas fa-gears\"></i> Jenkins</a>
-                        <a id=\"gitea-link\" href=\"{gitea_url}\" target=\"_blank\" class=\"service-link\" style=\"display:{'block' if gitea_url else 'none'}\"><i class=\"fas fa-code-branch\"></i> Gitea</a>
+                        <a id=\"gitea-link\" href=\"{gitea_url}\" target=\"_blank\" class=\"service-link\" style=\"display:{'block' if gitea_url else 'none'}\"><i class=\"fas fa-code-branch\"></i> Gitea Login</a>
                     </div>
                 </div>
             </div>
@@ -1633,10 +1652,19 @@ def lambda_handler(event, context):
                                 instance_state = instance['State']['Name']
                                 # Check if instance is assigned to this user
                                 tags = {tag['Key']: tag['Value'] for tag in instance.get('Tags', [])}
+                                # Use MachineName tag (immutable, set at pool creation) as primary identity.
+                                # Fall back to Student tag for backward compatibility.
+                                # This prevents breakage when other systems (testus_patronus, /api/assign)
+                                # overwrite the mutable Student tag.
+                                machine_name = tags.get('MachineName', '')
                                 student_tag = tags.get('Student', '')
+                                instance_matches_user = (
+                                    machine_name == user_name
+                                    or student_tag == user_name
+                                )
                                 
                                 # Exclude terminated and shutting-down instances
-                                if instance_state not in ['terminated', 'shutting-down'] and instance_state in ['running', 'pending', 'stopped'] and student_tag == user_name:
+                                if instance_state not in ['terminated', 'shutting-down'] and instance_state in ['running', 'pending', 'stopped'] and instance_matches_user:
                                     logger.info(f"Instance {instance_id_from_cookie} is valid and assigned to {user_name} (state: {instance_state})")
                                     
                                     # Handle stopped instances - start them automatically
@@ -1806,9 +1834,17 @@ def lambda_handler(event, context):
                                     instance = reservations[0]['Instances'][0]
                                     state = instance['State']['Name']
                                     tags = {t['Key']: t['Value'] for t in instance.get('Tags', [])}
+                                    # Use MachineName (immutable) or Student tag for matching.
+                                    # DynamoDB student_name is the authoritative source; EC2 tags
+                                    # are only checked to confirm the instance isn't terminated.
+                                    tag_machine_name = tags.get('MachineName', '')
                                     tag_student = tags.get('Student', '')
+                                    instance_matches_user = (
+                                        tag_machine_name == user_name
+                                        or tag_student == user_name
+                                    )
 
-                                    if tag_student == user_name and state not in ['terminated', 'shutting-down']:
+                                    if instance_matches_user and state not in ['terminated', 'shutting-down']:
                                         if state == 'stopped':
                                             ec2_client.start_instances(InstanceIds=[user_info['instance_id']])
                                             user_info['instance_error'] = 'Instance is starting...'
@@ -1830,7 +1866,7 @@ def lambda_handler(event, context):
 
                                     logger.warning(
                                         f"Cookie user {user_name} has stale assignment instance={user_info['instance_id']} "
-                                        f"state={state} tag_student={tag_student}; falling back to pool claim"
+                                        f"state={state} tag_student={tag_student} tag_machine_name={tag_machine_name}; falling back to pool claim"
                                     )
                                 else:
                                     logger.warning(f"Cookie user {user_name} has non-existing instance {user_info['instance_id']}; falling back to pool claim")
