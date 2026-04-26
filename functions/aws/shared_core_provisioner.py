@@ -347,7 +347,7 @@ def _setup_jenkins_folder_role(request_id: str, student_id: str, credentials: di
         "\n"
         f'def studentUser = \"{student_id}\"\n'
         f'def roleName    = \"folder-role-{student_id}\"\n'
-        f'def pattern     = \"{student_id}(/.*)*\"\n'
+        f"def pattern     = '{student_id}($|/.*)' # Pattern: folder itself OR folder/items\n"
         "\n"
         "Set<Permission> permissions = [\n"
         "    hudson.model.Item.BUILD,    hudson.model.Item.CANCEL,\n"

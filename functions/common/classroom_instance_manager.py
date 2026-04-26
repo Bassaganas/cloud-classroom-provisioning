@@ -2476,7 +2476,7 @@ docker compose up -d
 log "SUT stack started."
 
 if [ "${SHARED_CORE_MODE:-false}" = "true" ]; then
-    log "Shared-core mode enabled — Jenkins/Gitea are shared; starting per-instance code-server (IDE) only"
+    log "Shared-core mode enabled — Jenkins/Gitea are shared; starting per-instance code-server (IDE) and MailHog"
     # In shared-core mode the full escape-room stack (Jenkins + Gitea + gitea-init) is not
     # started because those services live on the shared-core EC2.  However students still
     # need a per-instance IDE (code-server).  We start it alone with --no-deps so that the
@@ -2488,10 +2488,10 @@ if [ "${SHARED_CORE_MODE:-false}" = "true" ]; then
         # WORKSPACE_DIR is intentionally NOT overridden — the entrypoint auto-detects
         # /opt/fellowship-sut (golden AMI path) and uses it as the workspace.
         export GITEA_HTTP_URL="${SHARED_GITEA_URL:-}"
-        if docker compose up -d --no-deps code-server; then
-            log "✓ code-server (IDE) started for ${IDE_DOMAIN}"
+        if docker compose up -d --no-deps code-server mailhog; then
+            log "✓ code-server (IDE) and MailHog started for ${IDE_DOMAIN}"
         else
-            log "WARNING: Failed to start code-server (IDE) — ${IDE_DOMAIN} will return 502"
+            log "WARNING: Failed to start code-server/mailhog — ${IDE_DOMAIN} or mail endpoint may return 502"
         fi
         cd "$SUT_DIR"
     else
