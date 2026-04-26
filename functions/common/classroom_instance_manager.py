@@ -947,6 +947,7 @@ def delete_shared_core_resources(workshop_name: str, resource_type: str) -> dict
     """
     import urllib.request as _urllib_req
     import urllib.error as _urllib_err
+    import urllib.parse as _urllib_parse
     import http.cookiejar as _cookiejar
     import base64 as _base64
 
@@ -996,6 +997,8 @@ def delete_shared_core_resources(workshop_name: str, resource_type: str) -> dict
 
     deleted = []
     errors = []
+    jenkins_tokens_deleted = 0
+    jenkins_token_errors = []
 
     if resource_type == 'jenkins_folders':
         # List top-level Jenkins items and delete folders
@@ -1033,10 +1036,9 @@ def delete_shared_core_resources(workshop_name: str, resource_type: str) -> dict
             
             folders = [j['name'] for j in data.get('jobs', []) if 'Folder' in j.get('_class', '')]
             logger.info(f"Found {len(folders)} Jenkins folders: {folders}")
-            
+
             if not folders:
                 logger.info("No Jenkins folders found to delete")
-                return {'success': True, 'deleted': [], 'deleted_count': 0, 'errors': []}
             
             # Get CSRF crumb ONCE at the start and reuse it for all deletions
             logger.info("Fetching CSRF crumb (will reuse for all folder deletions)...")
@@ -1114,6 +1116,112 @@ def delete_shared_core_resources(workshop_name: str, resource_type: str) -> dict
                     error_msg = f"Jenkins folder '{folder}': {type(e).__name__}: {str(e)}"
                     logger.error(error_msg, exc_info=True)
                     errors.append(error_msg)
+
+            # Revoke Jenkins API tokens used by Gitea webhooks.
+            # We intentionally run this even when no folders exist, so stale tokens
+            # are cleaned up from previous provisioning runs.
+            logger.info("Revoking Jenkins webhook API tokens (prefix: gitea-webhook-trigger)...")
+            token_cleanup_script = f'''import hudson.model.User
+import jenkins.security.ApiTokenProperty
+
+def username = {json.dumps(jenkins_user)}
+def tokenPrefix = "gitea-webhook-trigger"
+def deleted = 0
+def tokenErrors = []
+
+def user = User.getById(username, false)
+if (user == null) {{
+    println("TOKENS_REVOKED=0")
+    println("TOKEN_CLEANUP_NOTE=user_not_found")
+    return
+}}
+
+def tokenProperty = user.getProperty(ApiTokenProperty.class)
+if (tokenProperty == null || tokenProperty.tokenStore == null) {{
+    println("TOKENS_REVOKED=0")
+    println("TOKEN_CLEANUP_NOTE=no_token_store")
+    return
+}}
+
+def tokenStore = tokenProperty.tokenStore
+def tokens = []
+try {{
+    tokens = tokenStore.getTokenListSortedByName()
+}} catch (Exception ignored) {{
+    try {{
+        tokens = tokenStore.getTokenList()
+    }} catch (Exception ignored2) {{
+        tokens = []
+    }}
+}}
+
+tokens.each {{ t ->
+    def tokenName = ""
+    def tokenUuid = null
+
+    try {{ tokenName = t.name ?: t.getName() ?: "" }} catch (Exception ignored) {{ tokenName = "" }}
+    if (!tokenName?.startsWith(tokenPrefix)) {{
+        return
+    }}
+
+    try {{ tokenUuid = t.uuid ?: t.getUuid() }} catch (Exception ignored) {{ tokenUuid = null }}
+    if (tokenUuid == null) {{
+        tokenErrors << "missing_uuid:" + tokenName
+        return
+    }}
+
+    try {{
+        tokenStore.revokeToken(tokenUuid)
+        deleted++
+    }} catch (Exception ex) {{
+        tokenErrors << "revoke_failed:" + tokenName + ":" + ex.getMessage()
+    }}
+}}
+
+user.save()
+println("TOKENS_REVOKED=" + deleted)
+tokenErrors.each {{ e -> println("TOKEN_CLEANUP_ERROR=" + e) }}
+'''
+
+            cleanup_headers = {'Authorization': f'Basic {jenkins_auth}'}
+            if crumb_field and crumb_value:
+                cleanup_headers[crumb_field] = crumb_value
+
+            try:
+                cleanup_req = _urllib_req.Request(
+                    f"{base_jenkins}/scriptText",
+                    data=_urllib_parse.urlencode({'script': token_cleanup_script}).encode('utf-8'),
+                    method='POST',
+                    headers=cleanup_headers
+                )
+                with opener.open(cleanup_req, timeout=10) as cleanup_resp:
+                    cleanup_output = cleanup_resp.read().decode('utf-8', errors='replace')
+
+                for line in cleanup_output.splitlines():
+                    if line.startswith('TOKENS_REVOKED='):
+                        try:
+                            jenkins_tokens_deleted = int(line.split('=', 1)[1].strip())
+                        except ValueError:
+                            jenkins_token_errors.append(f"Unexpected token cleanup output: {line}")
+                    elif line.startswith('TOKEN_CLEANUP_ERROR='):
+                        jenkins_token_errors.append(line.split('=', 1)[1].strip())
+
+                logger.info(f"Revoked {jenkins_tokens_deleted} Jenkins webhook API tokens")
+            except _urllib_err.HTTPError as http_err:
+                error_msg = f"Failed to revoke Jenkins webhook API tokens: HTTP {http_err.code} {http_err.reason}"
+                logger.error(error_msg)
+                jenkins_token_errors.append(error_msg)
+            except _urllib_err.URLError as url_err:
+                error_msg = f"Failed to revoke Jenkins webhook API tokens: Network error {str(url_err.reason)}"
+                logger.error(error_msg)
+                jenkins_token_errors.append(error_msg)
+            except Exception as e:
+                error_msg = f"Failed to revoke Jenkins webhook API tokens: {type(e).__name__}: {str(e)}"
+                logger.error(error_msg, exc_info=True)
+                jenkins_token_errors.append(error_msg)
+
+            if jenkins_token_errors:
+                errors.extend([f"Jenkins token cleanup: {err}" for err in jenkins_token_errors])
         
         except _urllib_err.HTTPError as http_err:
             error_msg = f'Failed to list Jenkins jobs: HTTP {http_err.code} {http_err.reason} from {jenkins_url}'
@@ -1221,12 +1329,18 @@ def delete_shared_core_resources(workshop_name: str, resource_type: str) -> dict
     else:
         return {'success': False, 'error': f"Unknown resource_type '{resource_type}'. Use 'jenkins_folders' or 'gitea_repos'"}
 
-    return {
+    result = {
         'success': len(errors) == 0,
         'deleted': deleted,
         'deleted_count': len(deleted),
         'errors': errors,
     }
+
+    if resource_type == 'jenkins_folders':
+        result['jenkins_tokens_deleted'] = jenkins_tokens_deleted
+        result['jenkins_token_errors'] = jenkins_token_errors
+
+    return result
 
 
 # Cache for password (to avoid repeated Secrets Manager calls)
@@ -1982,9 +2096,13 @@ def setup_caddy_domain(instance_id, workshop_name, machine_name=None, domain=Non
         route53 = boto3.client('route53')
         domains_to_create = [final_domain]
         if str(workshop_name or '').strip().lower() == 'fellowship':
-            domains_to_create.append(f"jenkins-{final_domain}")
+            # In shared-core mode, Jenkins/Gitea live on the shared-core instance.
+            # Only create Route53 records for subdomains that Caddy will actually proxy.
+            _shared_core_dns = get_shared_core_mode(workshop_name)
+            if not _shared_core_dns:
+                domains_to_create.append(f"jenkins-{final_domain}")
+                domains_to_create.append(f"gitea-{final_domain}")
             domains_to_create.append(f"ide-{final_domain}")
-            domains_to_create.append(f"gitea-{final_domain}")
             domains_to_create.append(f"mail-{final_domain}")
 
         if public_ip:
@@ -2324,10 +2442,10 @@ log "  - EC2 instance must have IAM role with route53:* permissions"
 log "Writing .env (CADDY_DOMAIN=${CADDY_DOMAIN:-localhost})"
 cat > "${SUT_DIR}/.env" <<EOF
 CADDY_DOMAIN=${CADDY_DOMAIN:-localhost}
-JENKINS_DOMAIN=${JENKINS_DOMAIN:-}
-IDE_DOMAIN=${IDE_DOMAIN:-}
-GITEA_DOMAIN=${GITEA_DOMAIN:-}
-MAIL_DOMAIN=${MAIL_DOMAIN:-}
+JENKINS_DOMAIN=${JENKINS_DOMAIN:-_disabled.internal}
+IDE_DOMAIN=${IDE_DOMAIN:-_disabled.internal}
+GITEA_DOMAIN=${GITEA_DOMAIN:-_disabled.internal}
+MAIL_DOMAIN=${MAIL_DOMAIN:-_disabled.internal}
 MACHINE_NAME=${MACHINE_NAME:-fellowship}
 WORKSHOP_NAME=${WORKSHOP_NAME:-fellowship}
 ROUTE53_ZONE_ID=${ROUTE53_ZONE_ID:-}
@@ -3008,14 +3126,34 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
                     tags.append({'Key': 'HttpsDomain', 'Value': domain})
                     tags.append({'Key': 'HttpsUrl', 'Value': https_url})
 
-                # Derive jenkins/ide subdomains only for fellowship (not testus_patronus)
-                jenkins_domain = f"https://jenkins.fellowship.testingfantasy.com/job/fellowship-pipeline/{student_name}"
+                # Derive jenkins/ide/gitea/mail subdomains for fellowship (not testus_patronus).
+                # IMPORTANT: jenkins_domain and gitea_domain are used BOTH as EC2 tags
+                # (for the admin UI) AND as Caddy environment variables (JENKINS_DOMAIN,
+                # GITEA_DOMAIN).  Caddy expects bare hostnames — NOT full URLs with paths.
+                #
+                # In shared-core mode Jenkins/Gitea live on the shared-core EC2, not on
+                # the student instance.  The student's Caddy does NOT proxy Jenkins/Gitea
+                # traffic, so JENKINS_DOMAIN and GITEA_DOMAIN must be empty.  We still
+                # store the full shared-core URLs in tags for the admin UI.
+                _shared_core_for_domains = get_shared_core_mode(workshop_name)
                 ide_domain = f"ide-{domain}" if domain else ''
-                gitea_domain = f"https://gitea.fellowship.testingfantasy.com/fellowship-org/fellowship-sut-{student_name}"
                 mail_domain = f"mail-{domain}" if domain else ''
+                if _shared_core_for_domains:
+                    # Shared-core: Jenkins/Gitea are on the shared instance, not here.
+                    # Caddy env vars will be empty; tags store full URLs for UI links.
+                    jenkins_domain = ''
+                    gitea_domain = ''
+                    jenkins_tag_url = f"https://jenkins.fellowship.testingfantasy.com/job/fellowship-pipeline/{student_name}"
+                    gitea_tag_url = f"https://gitea.fellowship.testingfantasy.com/fellowship-org/fellowship-sut-{student_name}"
+                else:
+                    # Standalone: Jenkins/Gitea run on this instance, Caddy proxies them.
+                    jenkins_domain = f"jenkins-{domain}" if domain else ''
+                    gitea_domain = f"gitea-{domain}" if domain else ''
+                    jenkins_tag_url = jenkins_domain
+                    gitea_tag_url = gitea_domain
                 if str(workshop_name or '').strip().lower() != 'testus_patronus':
-                    tags.append({'Key': 'GiteaDomain', 'Value': gitea_domain})
-                    tags.append({'Key': 'JenkinsDomain', 'Value': jenkins_domain})
+                    tags.append({'Key': 'GiteaDomain', 'Value': gitea_tag_url})
+                    tags.append({'Key': 'JenkinsDomain', 'Value': jenkins_tag_url})
                     tags.append({'Key': 'IdeDomain', 'Value': ide_domain})
                     tags.append({'Key': 'MailDomain', 'Value': mail_domain})
 
