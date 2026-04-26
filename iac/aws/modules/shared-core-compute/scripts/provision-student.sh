@@ -295,7 +295,8 @@ def roleName    = "folder-role-STUDENT_ID_PLACEHOLDER"
 // Pattern matches: (1) the student's top-level folder, and (2) every item inside it
 // Regex: STUDENT_ID($|/.*) means: folder name OR folder name + slash + anything
 // Examples: "legolas_xy37" OR "legolas_xy37/my-pipeline"
-def pattern     = "STUDENT_ID_PLACEHOLDER($|/.*)"
+// Using single quotes to prevent Groovy GString interpolation of the $ character
+def pattern     = 'STUDENT_ID_PLACEHOLDER($|/.*)'
 
 
 Set<Permission> permissions = [
