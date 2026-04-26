@@ -2096,9 +2096,13 @@ def setup_caddy_domain(instance_id, workshop_name, machine_name=None, domain=Non
         route53 = boto3.client('route53')
         domains_to_create = [final_domain]
         if str(workshop_name or '').strip().lower() == 'fellowship':
-            domains_to_create.append(f"jenkins-{final_domain}")
+            # In shared-core mode, Jenkins/Gitea live on the shared-core instance.
+            # Only create Route53 records for subdomains that Caddy will actually proxy.
+            _shared_core_dns = get_shared_core_mode(workshop_name)
+            if not _shared_core_dns:
+                domains_to_create.append(f"jenkins-{final_domain}")
+                domains_to_create.append(f"gitea-{final_domain}")
             domains_to_create.append(f"ide-{final_domain}")
-            domains_to_create.append(f"gitea-{final_domain}")
             domains_to_create.append(f"mail-{final_domain}")
 
         if public_ip:
@@ -2438,10 +2442,10 @@ log "  - EC2 instance must have IAM role with route53:* permissions"
 log "Writing .env (CADDY_DOMAIN=${CADDY_DOMAIN:-localhost})"
 cat > "${SUT_DIR}/.env" <<EOF
 CADDY_DOMAIN=${CADDY_DOMAIN:-localhost}
-JENKINS_DOMAIN=${JENKINS_DOMAIN:-}
-IDE_DOMAIN=${IDE_DOMAIN:-}
-GITEA_DOMAIN=${GITEA_DOMAIN:-}
-MAIL_DOMAIN=${MAIL_DOMAIN:-}
+JENKINS_DOMAIN=${JENKINS_DOMAIN:-_disabled.internal}
+IDE_DOMAIN=${IDE_DOMAIN:-_disabled.internal}
+GITEA_DOMAIN=${GITEA_DOMAIN:-_disabled.internal}
+MAIL_DOMAIN=${MAIL_DOMAIN:-_disabled.internal}
 MACHINE_NAME=${MACHINE_NAME:-fellowship}
 WORKSHOP_NAME=${WORKSHOP_NAME:-fellowship}
 ROUTE53_ZONE_ID=${ROUTE53_ZONE_ID:-}
@@ -3122,14 +3126,34 @@ def create_instance(count=1, instance_type='pool', cleanup_days=None, workshop_n
                     tags.append({'Key': 'HttpsDomain', 'Value': domain})
                     tags.append({'Key': 'HttpsUrl', 'Value': https_url})
 
-                # Derive jenkins/ide subdomains only for fellowship (not testus_patronus)
-                jenkins_domain = f"https://jenkins.fellowship.testingfantasy.com/job/fellowship-pipeline/{student_name}"
+                # Derive jenkins/ide/gitea/mail subdomains for fellowship (not testus_patronus).
+                # IMPORTANT: jenkins_domain and gitea_domain are used BOTH as EC2 tags
+                # (for the admin UI) AND as Caddy environment variables (JENKINS_DOMAIN,
+                # GITEA_DOMAIN).  Caddy expects bare hostnames — NOT full URLs with paths.
+                #
+                # In shared-core mode Jenkins/Gitea live on the shared-core EC2, not on
+                # the student instance.  The student's Caddy does NOT proxy Jenkins/Gitea
+                # traffic, so JENKINS_DOMAIN and GITEA_DOMAIN must be empty.  We still
+                # store the full shared-core URLs in tags for the admin UI.
+                _shared_core_for_domains = get_shared_core_mode(workshop_name)
                 ide_domain = f"ide-{domain}" if domain else ''
-                gitea_domain = f"https://gitea.fellowship.testingfantasy.com/fellowship-org/fellowship-sut-{student_name}"
                 mail_domain = f"mail-{domain}" if domain else ''
+                if _shared_core_for_domains:
+                    # Shared-core: Jenkins/Gitea are on the shared instance, not here.
+                    # Caddy env vars will be empty; tags store full URLs for UI links.
+                    jenkins_domain = ''
+                    gitea_domain = ''
+                    jenkins_tag_url = f"https://jenkins.fellowship.testingfantasy.com/job/fellowship-pipeline/{student_name}"
+                    gitea_tag_url = f"https://gitea.fellowship.testingfantasy.com/fellowship-org/fellowship-sut-{student_name}"
+                else:
+                    # Standalone: Jenkins/Gitea run on this instance, Caddy proxies them.
+                    jenkins_domain = f"jenkins-{domain}" if domain else ''
+                    gitea_domain = f"gitea-{domain}" if domain else ''
+                    jenkins_tag_url = jenkins_domain
+                    gitea_tag_url = gitea_domain
                 if str(workshop_name or '').strip().lower() != 'testus_patronus':
-                    tags.append({'Key': 'GiteaDomain', 'Value': gitea_domain})
-                    tags.append({'Key': 'JenkinsDomain', 'Value': jenkins_domain})
+                    tags.append({'Key': 'GiteaDomain', 'Value': gitea_tag_url})
+                    tags.append({'Key': 'JenkinsDomain', 'Value': jenkins_tag_url})
                     tags.append({'Key': 'IdeDomain', 'Value': ide_domain})
                     tags.append({'Key': 'MailDomain', 'Value': mail_domain})
 
