@@ -277,8 +277,9 @@ setup_jenkins_folder_permissions() {
     local groovy_script
     groovy_script=$(cat <<'GROOVY'
 import jenkins.model.Jenkins
-import com.cloudbees.hudson.plugins.rolestrategy.RoleBasedAuthorizationStrategy
-import com.cloudbees.hudson.plugins.rolestrategy.Role
+import com.michelin.cio.hudson.plugins.rolestrategy.RoleBasedAuthorizationStrategy
+import com.michelin.cio.hudson.plugins.rolestrategy.Role
+import com.synopsys.arc.jenkins.plugins.rolestrategy.RoleType
 import hudson.security.Permission
 
 def jenkins  = Jenkins.getInstance()
@@ -310,18 +311,18 @@ Set<Permission> permissions = [
     hudson.model.Run.UPDATE,
 ] as Set
 
-def roleMap = strategy.getRoleMap(RoleBasedAuthorizationStrategy.PROJECT)
+def roleMap = strategy.getRoleMap(RoleType.Project)
 def role    = roleMap.getRoles().find { it.getName() == roleName }
 
 if (role == null) {
     role = new Role(roleName, pattern, permissions)
-    strategy.addRole(RoleBasedAuthorizationStrategy.PROJECT, role)
+    strategy.addRole(RoleType.Project, role)
     println("Created folder role " + roleName + " with pattern " + pattern)
 } else {
     println("Folder role " + roleName + " already exists")
 }
 
-strategy.assignRole(RoleBasedAuthorizationStrategy.PROJECT, role, studentUser)
+strategy.doAssignRole("projectRoles", roleName, studentUser)
 jenkins.save()
 println("Role " + roleName + " assigned to " + studentUser + " — done")
 GROOVY

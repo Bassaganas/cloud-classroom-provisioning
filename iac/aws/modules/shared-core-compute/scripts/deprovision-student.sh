@@ -96,28 +96,28 @@ remove_jenkins_folder_permissions() {
     # Remove folder permissions via Jenkins Script Console
     local groovy_script
     groovy_script=$(cat <<'GROOVY'
-import hudson.security.AuthorizationStrategy
-import com.cloudbees.hudson.plugins.rolestrategy.RoleBasedAuthorizationStrategy
+import com.michelin.cio.hudson.plugins.rolestrategy.RoleBasedAuthorizationStrategy
+import com.synopsys.arc.jenkins.plugins.rolestrategy.RoleType
 import jenkins.model.Jenkins
 
 def jenkins = Jenkins.getInstance()
 def rbac = jenkins.getAuthorizationStrategy()
 
 if (rbac instanceof RoleBasedAuthorizationStrategy) {
-    def folderRoles = rbac.getRoles(RoleBasedAuthorizationStrategy.FOLDER)
-    def studentRoleName = "student-" + STUDENT_ID
-    
-    // Remove the folder role if it exists
-    folderRoles.removeIf { it.name == studentRoleName }
-    rbac.roles.put(RoleBasedAuthorizationStrategy.FOLDER, folderRoles)
-    
-    // Remove role mapping from folder
-    def folderMapping = rbac.getRoleMap(RoleBasedAuthorizationStrategy.FOLDER)
-    if (folderMapping != null) {
-        folderMapping.remove(STUDENT_ID)
+    def roleName = "folder-role-STUDENT_ID"
+    def roleMap = rbac.getRoleMap(RoleType.Project)
+    def role = roleMap.getRoles().find { it.getName() == roleName }
+
+    if (role != null) {
+        // Unassign the student from the role, then remove the role
+        rbac.doUnassignRole("projectRoles", roleName, "STUDENT_ID")
+        // Remove the role itself
+        roleMap.getRoles().remove(role)
+        println("Folder role " + roleName + " and assignment for STUDENT_ID removed")
+    } else {
+        println("No folder role found for STUDENT_ID — nothing to remove")
     }
-    
-    println("Folder permissions for " + STUDENT_ID + " removed")
+
     jenkins.save()
 } else {
     println("WARNING: Jenkins does not have Role-Based Strategy plugin")

@@ -449,7 +449,7 @@ module "workshop_fellowship" {
   lambda_artifact_bucket = var.lambda_artifact_bucket
   lambda_artifact_key    = var.lambda_artifact_key
 
-  # Security group rules for Jenkins (8080) and MailHog (8025)
+  # Security group rules for Jenkins (8080), MailHog web UI (8025) and MailHog SMTP (1025)
   security_group_rules = {
     jenkins = {
       from_port   = 8080
@@ -464,6 +464,13 @@ module "workshop_fellowship" {
       protocol    = "tcp"
       cidr_blocks = ["0.0.0.0/0"]
       description = "MailHog web UI access for fellowship workshop"
+    }
+    mailhog_smtp = {
+      from_port   = 1025
+      to_port     = 1025
+      protocol    = "tcp"
+      cidr_blocks = ["0.0.0.0/0"]
+      description = "MailHog SMTP port for fellowship workshop"
     }
   }
 }
