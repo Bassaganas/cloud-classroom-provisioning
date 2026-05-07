@@ -23,7 +23,7 @@ resource "aws_lambda_function" "status" {
   function_name    = "lambda-status-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   role             = var.lambda_role_arn
   handler          = "testus_patronus_status.lambda_handler"
-  runtime          = "python3.9"
+  runtime          = "python3.11"
   timeout          = 30
   memory_size      = 128
   package_type     = "Zip"
@@ -68,7 +68,7 @@ resource "aws_lambda_function" "user_management" {
   function_name                  = "lambda-user-management-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   role                           = var.lambda_role_arn
   handler                        = "classroom_user_management.lambda_handler"
-  runtime                        = "python3.9"
+  runtime                        = "python3.11"
   timeout                        = var.user_management_timeout
   memory_size                    = var.user_management_memory_size
   package_type                   = "Zip"
@@ -145,7 +145,7 @@ resource "aws_lambda_function" "stop_old_instances" {
   function_name    = "lambda-stop-old-instances-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   role             = var.lambda_role_arn
   handler          = "classroom_stop_old_instances.lambda_handler"
-  runtime          = "python3.9"
+  runtime          = "python3.11"
   timeout          = 300
   memory_size      = 256
   package_type     = "Zip"
@@ -177,7 +177,7 @@ resource "aws_lambda_function" "instance_manager" {
   function_name    = "lambda-instance-manager-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   role             = var.lambda_role_arn
   handler          = "classroom_instance_manager.lambda_handler"
-  runtime          = "python3.9"
+  runtime          = "python3.11"
   timeout          = var.instance_manager_timeout
   memory_size      = var.instance_manager_memory_size
   package_type     = "Zip"
@@ -248,7 +248,7 @@ resource "aws_lambda_function" "admin_cleanup" {
   function_name    = "lambda-admin-cleanup-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   role             = var.lambda_role_arn
   handler          = "classroom_admin_cleanup.lambda_handler"
-  runtime          = "python3.9"
+  runtime          = "python3.11"
   timeout          = 300
   memory_size      = 256
   package_type     = "Zip"
@@ -281,7 +281,7 @@ resource "aws_lambda_function" "dify_jira_api" {
   function_name    = "lambda-dify-jira-api-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   role             = var.lambda_role_arn
   handler          = "dify_jira_api.lambda_handler"
-  runtime          = "python3.9"
+  runtime          = "python3.11"
   timeout          = 300
   memory_size      = 1024
   package_type     = "Zip"
