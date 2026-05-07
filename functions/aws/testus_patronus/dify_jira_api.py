@@ -19,6 +19,11 @@ from datetime import datetime
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+# Resolve dataset directory from env var or package-relative default.
+# In Lambda, code is unpacked under /var/task, so this resolves to /var/task/data.
+DEFAULT_DATA_DIR = Path(__file__).resolve().parent / "data"
+DATASET_DIR = Path(os.getenv("DIFY_JIRA_DATA_DIR", str(DEFAULT_DATA_DIR)))
+
 # ===== MODELS =====
 class StudentDifyConfig(BaseModel):
     """Student's Dify configuration"""
@@ -609,9 +614,13 @@ def get_health():
 def get_projects():
     """GET /projects - Retrieve all available project names for ingestion"""
     try:
-        dataset_dir = Path("data")
+        dataset_dir = DATASET_DIR
         if not dataset_dir.exists():
-            return {"error": "Dataset directory not found"}
+            return {
+                "error": "Dataset directory not found",
+                "dataset_directory": str(dataset_dir),
+                "hint": "Set DIFY_JIRA_DATA_DIR or include JSON files in the Lambda package under data/"
+            }
         
         # Get all JSON files in the dataset directory
         json_files = list(dataset_dir.glob("*.json"))
@@ -662,7 +671,7 @@ def create_jira_ingestion(
         )
         
         # Construct the JSON file path
-        dataset_dir = Path("data")
+        dataset_dir = DATASET_DIR
         json_file_path = dataset_dir / f"{request.project}.json"
         
         if not json_file_path.exists():

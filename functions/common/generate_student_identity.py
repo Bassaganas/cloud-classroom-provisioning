@@ -57,7 +57,6 @@ LOTR_CHARACTERS = [
     "gollum",
     "gothmog",
     "lurtz",
-    "witch",
     "mouth",
     "beregond",
     "shadowfax",
