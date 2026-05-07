@@ -244,7 +244,7 @@ resource "aws_lambda_function" "provisioner" {
   function_name = local.function_name
   role          = aws_iam_role.provisioner.arn
   handler       = "shared_core_provisioner.lambda_handler"
-  runtime       = "python3.9"
+  runtime       = "python3.11"
   timeout       = 180 # 3 min — SSM polling can take up to 90 s + retry
   memory_size   = 256
   package_type  = "Zip"
