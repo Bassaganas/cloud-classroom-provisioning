@@ -531,6 +531,18 @@ DEPLOYED_SUT_URL={sut_url}
 
 def generate_html_response(user_info, error_message=None, status_lambda_url=None):
     if error_message:
+        is_no_instances_error = (
+            'no fellowship instances are available' in error_message.lower()
+            or 'all fellowship instances are currently being claimed' in error_message.lower()
+        )
+        error_title = 'No Fellowship Instances Available' if is_no_instances_error else 'The path is not yet clear'
+        error_icon = '🚫' if is_no_instances_error else '⚔️'
+        error_help = (
+            '<div class="error-help">All classroom machines are currently occupied. Please wait a minute and retry.</div>'
+            if is_no_instances_error
+            else ''
+        )
+
         return f"""
         <!DOCTYPE html>
         <html lang="en">
@@ -579,6 +591,19 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                     border-radius: 12px;
                     object-fit: contain;
                 }}
+                .logo-fallback {{
+                    display: none;
+                    align-items: center;
+                    justify-content: center;
+                    width: 200px;
+                    height: 80px;
+                    border-radius: 12px;
+                    background: #efe1c8;
+                    color: var(--blue);
+                    font-family: 'Cinzel', serif;
+                    font-weight: 700;
+                    letter-spacing: 0.5px;
+                }}
                 .main-title {{
                     color: var(--blue);
                     text-align: center;
@@ -621,6 +646,13 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                     line-height: 1.6;
                     margin-bottom: 20px;
                 }}
+                .error-help {{
+                    margin-top: -6px;
+                    margin-bottom: 20px;
+                    color: #5c4a22;
+                    font-size: 0.95rem;
+                    font-weight: 600;
+                }}
                 .retry-button {{
                     background: var(--pink);
                     color: var(--white);
@@ -655,25 +687,190 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                     color: var(--white);
                     border-color: var(--pink);
                 }}
+                /* ═══ LOTR Immersive Theme ═══ */
+                :root {{
+                    --blue: #2a1f14;
+                    --pink: #c9a84c;
+                    --yellow: #8b6914;
+                    --gray: #e8d5a3;
+                    --shadow: 0 8px 32px rgba(0,0,0,0.4);
+                }}
+                * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+                body {{
+                    background: radial-gradient(ellipse at 50% 30%, #1a1209 0%, #0d0a07 70%, #000 100%);
+                    min-height: 100vh;
+                    display: flex;
+                    flex-direction: column;
+                    align-items: center;
+                    justify-content: center;
+                    padding: 20px;
+                    color: #e8d5b5;
+                }}
+                .card {{
+                    max-width: 600px;
+                    width: 100%;
+                    background: linear-gradient(170deg, var(--white) 0%, var(--gray) 100%);
+                    border-radius: 16px;
+                    border: 1px solid var(--yellow);
+                    box-shadow: 0 12px 40px rgba(0,0,0,0.5), 0 0 1px var(--pink);
+                    padding: 48px 40px 40px;
+                    text-align: center;
+                    color: var(--blue);
+                    animation: fadeUp 0.6s ease-out;
+                }}
+                @keyframes fadeUp {{
+                    from {{ opacity: 0; transform: translateY(20px); }}
+                    to {{ opacity: 1; transform: translateY(0); }}
+                }}
+                .ring-emblem {{
+                    width: 90px;
+                    height: 90px;
+                    border-radius: 50%;
+                    border: 4px solid var(--pink);
+                    box-shadow: 0 0 30px rgba(201,168,76,0.3), 0 0 60px rgba(201,168,76,0.15), inset 0 0 20px rgba(201,168,76,0.2);
+                    margin: 0 auto 24px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    animation: ringPulse 3s ease-in-out infinite;
+                    overflow: hidden;
+                    background: rgba(201,168,76,0.06);
+                }}
+                .ring-emblem img {{
+                    width: 60px;
+                    height: 60px;
+                    object-fit: contain;
+                    border-radius: 50%;
+                }}
+                .ring-fallback {{
+                    display: none;
+                    align-items: center;
+                    justify-content: center;
+                    font-family: 'Cinzel', serif;
+                    font-size: 1.8rem;
+                    font-weight: 900;
+                    color: var(--pink);
+                }}
+                @keyframes ringPulse {{
+                    0%, 100% {{ box-shadow: 0 0 30px rgba(201,168,76,0.3), 0 0 60px rgba(201,168,76,0.15); }}
+                    50% {{ box-shadow: 0 0 40px rgba(201,168,76,0.4), 0 0 80px rgba(201,168,76,0.25); }}
+                }}
+                .card h1 {{
+                    font-family: 'Cinzel', serif;
+                    font-size: 1.8rem;
+                    font-weight: 900;
+                    color: var(--blue);
+                    margin-bottom: 4px;
+                    letter-spacing: 1px;
+                }}
+                .card .tagline {{
+                    font-size: 0.95rem;
+                    color: #5c4a22;
+                    font-style: italic;
+                }}
+                .divider {{
+                    width: 60px;
+                    height: 2px;
+                    background: linear-gradient(90deg, transparent, var(--pink), transparent);
+                    margin: 16px auto;
+                }}
+                .error-box {{
+                    background: rgba(244,228,188,0.4);
+                    border: 1px solid var(--yellow);
+                    border-radius: 12px;
+                    padding: 24px;
+                }}
+                .error-icon {{
+                    font-size: 2.5rem;
+                    margin-bottom: 12px;
+                }}
+                .error-title {{
+                    font-family: 'Cinzel', serif;
+                    font-size: 1.25rem;
+                    font-weight: 700;
+                    color: var(--blue);
+                    margin-bottom: 10px;
+                }}
+                .error-message {{
+                    color: #5c4a22;
+                    font-size: 1rem;
+                    line-height: 1.7;
+                    margin-bottom: 18px;
+                }}
+                .error-help {{
+                    color: #5c4a22;
+                    font-size: 0.9rem;
+                    font-weight: 600;
+                    margin-bottom: 16px;
+                }}
+                .retry-button {{
+                    background: linear-gradient(135deg, var(--pink) 0%, var(--yellow) 100%);
+                    color: var(--blue);
+                    border: none;
+                    padding: 14px 36px;
+                    border-radius: 8px;
+                    font-size: 1rem;
+                    font-family: 'Cinzel', serif;
+                    font-weight: 700;
+                    cursor: pointer;
+                    transition: all 0.3s ease;
+                    box-shadow: 0 4px 15px rgba(201,168,76,0.3);
+                    letter-spacing: 0.5px;
+                }}
+                .retry-button:hover {{
+                    transform: translateY(-2px);
+                    box-shadow: 0 6px 20px rgba(201,168,76,0.5);
+                }}
+                .nav-links {{
+                    display: flex;
+                    gap: 16px;
+                    justify-content: center;
+                    margin-top: 28px;
+                }}
+                .nav-link {{
+                    color: var(--pink);
+                    text-decoration: none;
+                    font-size: 0.9rem;
+                    font-weight: 600;
+                    padding: 8px 18px;
+                    border: 1px solid rgba(201,168,76,0.4);
+                    border-radius: 6px;
+                    transition: all 0.3s ease;
+                    font-family: 'Cinzel', serif;
+                }}
+                .nav-link:hover {{
+                    background: rgba(201,168,76,0.15);
+                    border-color: var(--pink);
+                }}
+                @media (max-width: 480px) {{
+                    .card {{ padding: 32px 24px 28px; }}
+                    .card h1 {{ font-size: 1.5rem; }}
+                    .nav-links {{ flex-direction: column; gap: 10px; }}
+                }}
             </style>
         </head>
         <body>
-            <div class="container">
-                <div class="header-row">
-                    <a href="https://testingfantasy.com" class="header-link" target="_blank" rel="noopener noreferrer">Testing Fantasy</a>
-                    <img src="https://lotr.fellowship.testingfantasy.com/logo.png" alt="Fellowship Quest Tracker Logo" class="logo">
-                    <a href="https://docs.fellowship.testingfantasy.com" class="header-link" target="_blank" rel="noopener noreferrer">Documentation</a>
+            <div class="card">
+                <div class="ring-emblem">
+                    <img src="https://docs.fellowship.testingfantasy.com/img/logo.png" alt="Fellowship" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">
+                    <span class="ring-fallback">F</span>
                 </div>
-                <div class="main-title">Fellowship Workshop</div>
-                <div class="subtitle">CI/CD and AI-assisted testing with Lord of the Rings</div>
+                <h1>Fellowship Workshop</h1>
+                <p class="tagline">CI/CD &amp; AI-assisted testing in Middle-earth</p>
+                <div class="divider"></div>
                 <div class="error-box">
-                    <div class="error-icon">⚔️</div>
-                    <div class="error-title">The path is not yet clear</div>
+                    <div class="error-icon">{error_icon}</div>
+                    <div class="error-title">{error_title}</div>
                     <div class="error-message">{error_message}</div>
+                    {error_help}
                     <button class="retry-button" onclick="window.location.href='/'">
                         <i class="fas fa-redo"></i> Try Again
                     </button>
                 </div>
+            </div>
+            <div class="nav-links">
+                <a href="https://testingfantasy.com" class="nav-link" target="_blank" rel="noopener noreferrer">Testing Fantasy</a>
+                <a href="https://docs.fellowship.testingfantasy.com" class="nav-link" target="_blank" rel="noopener noreferrer">Documentation</a>
             </div>
         </body>
         </html>
@@ -723,6 +920,7 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
         jenkins_url = user_info.get('jenkins_url', '')
         gitea_url = user_info.get('gitea_url', '')
         ide_url = user_info.get('ide_url', '')
+        maildog_url = user_info.get('maildog_url', 'https://maildog.fellowship.testingfantasy.com')
         
         instance_info_html = f"""
         <div class=\"instance-section\">
@@ -783,6 +981,24 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                         <p id=\"dev-tools-status\" class=\"status-message\">{'Loading development tools...' if not jenkins_url else ''}</p>
                         <a id=\"jenkins-link\" href=\"{jenkins_url}\" target=\"_blank\" class=\"service-link\" style=\"display:{'block' if jenkins_url else 'none'}\"><i class=\"fas fa-gears\"></i> Jenkins</a>
                         <a id=\"gitea-link\" href=\"{gitea_url}\" target=\"_blank\" class=\"service-link\" style=\"display:{'block' if gitea_url else 'none'}\"><i class=\"fas fa-code-branch\"></i> Gitea Login</a>
+                    </div>
+                </div>
+                <div class=\"instance-card\">
+                    <div class=\"card-header\">
+                        <i class=\"fas fa-envelope\"></i>
+                        <span>Maildog (Email Service)</span>
+                    </div>
+                    <div class=\"sut-link-container\">
+                        <a href=\"{maildog_url}\" target=\"_blank\" class=\"service-link ready\">
+                            <i class=\"fas fa-envelope-open-text\"></i> Open Maildog
+                        </a>
+                    </div>
+                    <div class=\"credentials-info\" style=\"margin-top:8px;\">
+                        <div class=\"config-row\">
+                            <span class=\"credential-label\">Student Email</span>
+                            <span class=\"credential-value\">{credentials.get('username', '')}@fellowship.testingfantasy.com</span>
+                            <button class=\"copy-btn\" onclick=\"copyToClipboard('{credentials.get('username', '')}@fellowship.testingfantasy.com')\" title=\"Copy\"><i class=\"fas fa-copy\"></i></button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1207,6 +1423,220 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                     padding: 12px;
                 }}
             }}
+            /* ═══════ LOTR Immersive Theme ═══════ */
+            :root {{
+                --blue: #2a1f14;
+                --pink: #c9a84c;
+                --yellow: #8b6914;
+                --gray: #e8d5a3;
+                --shadow: 0 8px 32px rgba(0,0,0,0.4);
+                --bg-dark: #0d0a07;
+                --shadow-gold: rgba(201, 168, 76, 0.3);
+            }}
+            * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+            body {{
+                background: radial-gradient(ellipse at 50% 20%, #1a1209 0%, var(--bg-dark) 60%, #050302 100%);
+                min-height: 100vh;
+            }}
+            .container {{
+                background: transparent;
+                box-shadow: none;
+                border-radius: 0;
+                padding: 0 20px;
+                margin: 0 auto 40px;
+                animation: fadeIn 0.8s ease-out 0.2s both;
+            }}
+            @keyframes fadeIn {{
+                from {{ opacity: 0; transform: translateY(15px); }}
+                to {{ opacity: 1; transform: translateY(0); }}
+            }}
+            .top-nav {{
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                padding: 16px 32px;
+                max-width: 1200px;
+                margin: 0 auto;
+            }}
+            .nav-link {{
+                color: var(--pink);
+                text-decoration: none;
+                font-size: 0.9rem;
+                font-weight: 600;
+                padding: 8px 18px;
+                border: 1px solid rgba(201, 168, 76, 0.3);
+                border-radius: 6px;
+                transition: all 0.3s ease;
+                font-family: 'Cinzel', serif;
+            }}
+            .nav-link:hover {{
+                background: rgba(201, 168, 76, 0.15);
+                border-color: var(--pink);
+            }}
+            .hero {{
+                text-align: center;
+                padding: 32px 20px 24px;
+                animation: fadeIn 0.6s ease-out;
+            }}
+            .ring-emblem {{
+                width: 100px;
+                height: 100px;
+                border-radius: 50%;
+                border: 4px solid var(--pink);
+                box-shadow: 0 0 30px var(--shadow-gold), 0 0 60px rgba(201, 168, 76, 0.15), inset 0 0 20px rgba(201, 168, 76, 0.2);
+                margin: 0 auto 20px;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                animation: ringPulse 4s ease-in-out infinite;
+                overflow: hidden;
+                background: rgba(201, 168, 76, 0.06);
+            }}
+            .ring-emblem img {{
+                width: 68px;
+                height: 68px;
+                object-fit: contain;
+                border-radius: 50%;
+            }}
+            .ring-fallback {{
+                display: none;
+                font-family: 'Cinzel', serif;
+                font-size: 2.2rem;
+                font-weight: 900;
+                color: var(--pink);
+                align-items: center;
+                justify-content: center;
+            }}
+            @keyframes ringPulse {{
+                0%, 100% {{ box-shadow: 0 0 30px var(--shadow-gold), 0 0 60px rgba(201, 168, 76, 0.15); }}
+                50% {{ box-shadow: 0 0 40px rgba(201, 168, 76, 0.4), 0 0 80px rgba(201, 168, 76, 0.2); }}
+            }}
+            .hero-title {{
+                font-family: 'Cinzel', serif;
+                font-size: 2.8rem;
+                font-weight: 900;
+                color: var(--pink);
+                letter-spacing: 2px;
+                text-shadow: 0 2px 20px rgba(201, 168, 76, 0.3);
+                margin-bottom: 8px;
+            }}
+            .hero-subtitle {{
+                font-family: 'Lora', serif;
+                font-size: 1.1rem;
+                color: #e8d5b5;
+                opacity: 0.85;
+                font-style: italic;
+            }}
+            .welcome-scroll {{
+                background: linear-gradient(170deg, var(--white) 0%, var(--gray) 100%);
+                border: 1px solid rgba(139, 105, 20, 0.4);
+                border-radius: 14px;
+                box-shadow: var(--shadow);
+                padding: 28px 32px;
+                text-align: center;
+                margin-bottom: 28px;
+            }}
+            .welcome-text {{
+                font-size: 1.1rem;
+                color: var(--blue);
+                line-height: 1.7;
+                margin-bottom: 14px;
+            }}
+            .welcome-text strong {{
+                font-family: 'Cinzel', serif;
+                color: var(--yellow);
+            }}
+            .instance-section h2 {{
+                color: var(--pink);
+                text-shadow: 0 1px 10px rgba(201, 168, 76, 0.2);
+            }}
+            .instance-card {{
+                background: linear-gradient(170deg, var(--white) 0%, var(--gray) 100%);
+                border: 1px solid rgba(139, 105, 20, 0.4);
+                box-shadow: var(--shadow);
+                transition: transform 0.2s ease, box-shadow 0.2s ease;
+            }}
+            .instance-card:hover {{
+                transform: translateY(-2px);
+                box-shadow: 0 8px 30px rgba(0,0,0,0.5), 0 0 1px var(--pink);
+            }}
+            .card-header {{
+                font-family: 'Cinzel', serif;
+                border-bottom-color: rgba(139, 105, 20, 0.25);
+            }}
+            .info-box {{
+                background: linear-gradient(170deg, var(--white) 0%, var(--gray) 100%);
+                border: 1px solid rgba(139, 105, 20, 0.4);
+                border-radius: 12px;
+                padding: 24px 28px;
+                box-shadow: var(--shadow);
+            }}
+            .warning {{
+                background: linear-gradient(135deg, #3d2b1f 0%, var(--blue) 100%);
+                color: var(--pink);
+                border: 1px solid rgba(201, 168, 76, 0.3);
+                border-radius: 10px;
+                padding: 16px 24px;
+                box-shadow: var(--shadow);
+            }}
+            .service-link {{
+                text-decoration: none;
+                padding: 8px 16px;
+                border-radius: 6px;
+                background: rgba(201, 168, 76, 0.1);
+                border: 1px solid rgba(139, 105, 20, 0.3);
+                transition: all 0.2s ease;
+                pointer-events: none;
+                opacity: 0.5;
+            }}
+            .service-link.ready {{
+                opacity: 1;
+                background: rgba(201, 168, 76, 0.2);
+            }}
+            .service-link.ready:hover {{
+                background: rgba(201, 168, 76, 0.35);
+            }}
+            .spinner {{
+                border-color: rgba(139, 105, 20, 0.2);
+                border-top-color: var(--pink);
+            }}
+            .get-new-user-btn {{
+                background: transparent;
+                color: var(--yellow);
+                border: 1px solid var(--yellow);
+                font-family: 'Cinzel', serif;
+                font-weight: 600;
+                transition: all 0.3s ease;
+            }}
+            .get-new-user-btn:hover {{
+                background: var(--yellow);
+                color: var(--white);
+            }}
+            .copy-btn {{
+                background: var(--yellow);
+                color: var(--white);
+            }}
+            .copy-btn:hover {{
+                background: var(--pink);
+            }}
+            .credential-value {{
+                border-color: rgba(139, 105, 20, 0.2);
+            }}
+            .status-message {{
+                font-style: italic;
+            }}
+            @media (max-width: 768px) {{
+                .top-nav {{ padding: 12px 16px; }}
+                .hero-title {{ font-size: 2.2rem; }}
+                .hero-subtitle {{ font-size: 1rem; }}
+                .welcome-scroll {{ padding: 20px; }}
+                .container {{ padding: 0 12px; }}
+            }}
+            @media (max-width: 480px) {{
+                .hero-title {{ font-size: 1.8rem; }}
+                .hero {{ padding: 24px 16px 16px; }}
+                .top-nav {{ flex-direction: column; gap: 8px; }}
+            }}
         </style>
         <script>
             // Helper to set a cookie
@@ -1420,20 +1850,27 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
         </script>
     </head>
     <body>
-        <div class="container">
-            <div class="header-row">
-                <a href="https://testingfantasy.com" class="header-link" target="_blank" rel="noopener noreferrer">Visit Testing Fantasy</a>
-                <img src="https://lotr.fellowship.testingfantasy.com/logo.png" alt="Fellowship Quest Tracker Logo" class="logo">
-                <a href="https://docs.fellowship.testingfantasy.com" class="header-link" target="_blank" rel="noopener noreferrer">Visit Fellowship Documentation</a>
+        <nav class="top-nav">
+            <a href="https://testingfantasy.com" class="nav-link" target="_blank" rel="noopener noreferrer"><i class="fas fa-compass"></i> Testing Fantasy</a>
+            <a href="https://docs.fellowship.testingfantasy.com" class="nav-link" target="_blank" rel="noopener noreferrer"><i class="fas fa-book-open"></i> Documentation</a>
+        </nav>
+        <div class="hero">
+            <div class="ring-emblem">
+                <img src="https://docs.fellowship.testingfantasy.com/img/logo.png" alt="Fellowship" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">
+                <span class="ring-fallback">F</span>
             </div>
-            <div class="main-title">Fellowship Workshop</div>
-            <div class="subtitle">CI/CD and AI-assisted testing with Lord of the Rings</div>
-            <h2>Welcome, {user_info['user_name']}! Your Fellowship instance awaits. May your pipeline find its path.</h2>
-            <button class="get-new-user-btn" onclick="getNewUser()">Get a new user</button>
+            <h1 class="hero-title">Fellowship Workshop</h1>
+            <p class="hero-subtitle">&ldquo;Not all those who wander are lost&rdquo; &mdash; CI/CD &amp; AI-assisted testing in Middle-earth</p>
+        </div>
+        <div class="container">
+            <div class="welcome-scroll">
+                <p class="welcome-text">Hail, <strong>{user_info['user_name']}</strong>! The Council of Elrond has prepared your quest. Your Fellowship instance awaits &mdash; may your pipeline find its path through the shadows.</p>
+                <button class="get-new-user-btn" onclick="getNewUser()"><i class="fas fa-sync-alt"></i> Summon a New Identity</button>
+            </div>
             {instance_info_html}
             {env_download_html}
             <div class="warning">
-                <strong>⚔️ Note:</strong> This instance will be released when the Fellowship disbands. Save your work before the quest ends.
+                <i class="fas fa-exclamation-triangle"></i> <strong>Heed this warning:</strong> This instance will be released when the Fellowship disbands. Save your work before the quest ends &mdash; the Grey Havens wait for no one.
             </div>
         </div>
     </body>
@@ -1771,6 +2208,18 @@ def lambda_handler(event, context):
                                     # Enrich user_info with service URLs from instance tags
                                     enrich_user_info_with_urls(user_info, tags)
                                     
+                                    # Ensure credentials are always present for the HTML template
+                                    if 'credentials' not in user_info:
+                                        student = user_info.get('user_name', user_info.get('student_name', user_name))
+                                        user_info['credentials'] = {
+                                            'username': student,
+                                            'password': user_info.get('password', student)
+                                        }
+                                    
+                                    # Add maildog URL
+                                    if not user_info.get('maildog_url'):
+                                        user_info['maildog_url'] = 'https://maildog.fellowship.testingfantasy.com'
+                                    
                                     # Load Azure configs
                                     try:
                                         azure_configs = get_secret()
@@ -1854,6 +2303,19 @@ def lambda_handler(event, context):
                                             user_info['ec2_ip'] = instance.get('PublicIpAddress')
 
                                         enrich_user_info_with_urls(user_info, tags)
+                                        
+                                        # Ensure credentials are always present for the HTML template
+                                        if 'credentials' not in user_info:
+                                            student = user_info.get('user_name', user_info.get('student_name', user_name))
+                                            user_info['credentials'] = {
+                                                'username': student,
+                                                'password': user_info.get('password', student)
+                                            }
+                                        
+                                        # Add maildog URL
+                                        if not user_info.get('maildog_url'):
+                                            user_info['maildog_url'] = 'https://maildog.fellowship.testingfantasy.com'
+                                        
                                         try:
                                             user_info['azure_configs'] = get_secret()
                                         except Exception as azure_error:
@@ -1917,7 +2379,7 @@ def lambda_handler(event, context):
                         503,
                         generate_html_response(
                             user_info={},
-                            error_message="No Fellowship instances are available at this time. All quests may be in progress or the workshop has not started yet. Please wait a moment and try again.",
+                            error_message="No instances are available right now. All classroom machines are currently in use.",
                             status_lambda_url=status_lambda_url
                         )
                     )
@@ -1957,7 +2419,7 @@ def lambda_handler(event, context):
                         503,
                         generate_html_response(
                             user_info={},
-                            error_message="All Fellowship instances are currently being claimed by other adventurers. Please try again in a moment — the One Ring grants no shortcuts!",
+                            error_message="No instances are available right now. They are being claimed by other users. Please retry in a few seconds.",
                             status_lambda_url=status_lambda_url
                         )
                     )
@@ -1975,6 +2437,7 @@ def lambda_handler(event, context):
                     'jenkins_url': urls.get('jenkins_url', ''),
                     'gitea_url': urls.get('gitea_url', ''),
                     'ide_url': urls.get('ide_url', ''),
+                    'maildog_url': 'https://maildog.fellowship.testingfantasy.com',
                     'credentials': {
                         'username': student_name,
                         'password': student_name

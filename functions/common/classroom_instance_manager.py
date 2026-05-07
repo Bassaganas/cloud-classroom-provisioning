@@ -1449,12 +1449,12 @@ def get_timeout_parameters(workshop_name=None):
         parameters = {}
         for param in response.get('Parameters', []):
             param_name = param['Name'].split('/')[-1]
-            if 'stop_timeout' in param_name:
+            if 'hard_terminate_timeout' in param_name:
+                parameters['hard_terminate_timeout'] = int(param['Value'])
+            elif 'stop_timeout' in param_name:
                 parameters['stop_timeout'] = int(param['Value'])
             elif 'terminate_timeout' in param_name:
                 parameters['terminate_timeout'] = int(param['Value'])
-            elif 'hard_terminate_timeout' in param_name:
-                parameters['hard_terminate_timeout'] = int(param['Value'])
             elif 'admin_cleanup' in param_name:
                 parameters['admin_cleanup_days'] = int(param['Value'])
         
@@ -2634,7 +2634,7 @@ if [ "${SHARED_CORE_MODE:-false}" = "true" ]; then
         # docker-compose reads this file and passes vars to the code-server container.
         log "Writing devops-escape-room/.env for code-server..."
         cat > "$ESCAPE_ROOM_DIR/.env" <<ESCENV
-CODESERVER_PASSWORD=${CODESERVER_PASSWORD:-fellowship}
+CODESERVER_PASSWORD=${CODESERVER_PASSWORD:-${STUDENT_ID:-user}}
 WORKSPACE_DIR=${WORKSPACE_DIR:-/opt/fellowship-workspace}
 GITEA_HTTP_URL=${SHARED_GITEA_URL:-}
 GITEA_ORG_NAME=${GITEA_ORG_NAME:-fellowship-org}
@@ -3308,6 +3308,7 @@ export SHARED_GITEA_URL={SHARED_GITEA_URL}
 export GITEA_ORG_NAME={_gitea_org}
 export GITEA_REPO_NAME={_gitea_repo}
 export STUDENT_ID={instance_student_name}
+export CODESERVER_PASSWORD={instance_student_name}
 """
                 domain_exports += user_data_exports
                 # Only inject CADDY_DOMAIN when it is known pre-creation (not for testus_patronus)

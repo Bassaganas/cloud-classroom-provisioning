@@ -417,10 +417,23 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
     # Copy the dify_jira API Lambda function
     cp "$PROJECT_ROOT/functions/aws/testus_patronus/dify_jira_api.py" "$TEMP_DIR4/"
 
-    # Copy the dataset directory with JSON files (make it optional)
-    if [ -d "$PROJECT_ROOT/../dify_jira/data/dataset" ]; then
-        cp -r "$PROJECT_ROOT/../dify_jira/data/dataset" "$TEMP_DIR4/data/"
+    # Copy dataset directory with JSON files (required for /projects and /jira/ingest)
+    DIFY_DATASET_DIR="$PROJECT_ROOT/functions/aws/testus_patronus/data"
+    if [ ! -d "$DIFY_DATASET_DIR" ]; then
+        echo "ERROR: Required dataset directory not found: $DIFY_DATASET_DIR"
+        echo "The Dify Jira API Lambda needs project JSON files to serve /projects and /jira/ingest."
+        rm -rf "$TEMP_DIR4"
+        exit 1
     fi
+
+    if [ -z "$(find "$DIFY_DATASET_DIR" -maxdepth 1 -type f -name '*.json' 2>/dev/null)" ]; then
+        echo "ERROR: Dataset directory exists but contains no JSON files: $DIFY_DATASET_DIR"
+        rm -rf "$TEMP_DIR4"
+        exit 1
+    fi
+
+    mkdir -p "$TEMP_DIR4/data"
+    cp -r "$DIFY_DATASET_DIR"/. "$TEMP_DIR4/data/"
 
     # Verify temp directory only contains the intended file before installing dependencies
     PYTHON_FILES_IN_TEMP=$(find "$TEMP_DIR4" -maxdepth 1 -name "*.py" -type f | wc -l)
@@ -454,6 +467,18 @@ if [ "$CLOUD_PROVIDER" == "aws" ]; then
     PACKAGE_PATH="$PROJECT_ROOT/functions/packages/dify_jira_api.zip"
     if ! unzip -l "$PACKAGE_PATH" | grep -q "dify_jira_api.py"; then
         echo "ERROR: Package does not contain dify_jira_api.py"
+        rm -rf "$TEMP_DIR4"
+        exit 1
+    fi
+
+    if ! unzip -l "$PACKAGE_PATH" | grep -q " data/"; then
+        echo "ERROR: Package does not contain data/ directory required by dify_jira_api"
+        rm -rf "$TEMP_DIR4"
+        exit 1
+    fi
+
+    if ! unzip -l "$PACKAGE_PATH" | grep -qE " data/.*\.json$"; then
+        echo "ERROR: Package does not contain dataset JSON files under data/"
         rm -rf "$TEMP_DIR4"
         exit 1
     fi
