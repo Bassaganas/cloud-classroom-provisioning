@@ -42,6 +42,22 @@ status_lambda_url = os.environ.get('STATUS_LAMBDA_URL')
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
+
+def _is_conference_user_flow_allowed() -> bool:
+    """Allow conference-user workflow only for testus_patronus by default.
+
+    This lambda package can be deployed under different workshop names.
+    Guarding here prevents accidental assignment of conference-user-* IDs
+    into fellowship pools when endpoints/domains are misrouted.
+    """
+    workshop = (WORKSHOP_NAME or '').strip().lower()
+    if workshop == 'testus_patronus':
+        return True
+
+    # Emergency override for controlled migrations/debugging.
+    override = os.environ.get('ALLOW_CONFERENCE_USER_ASSIGNMENTS', 'false').strip().lower()
+    return override in ('1', 'true', 'yes')
+
 # region agent debug log
 def _debug_log(hypothesis_id, location, message, data=None):
     try:
@@ -1771,6 +1787,14 @@ def lambda_handler(event, context):
         )
 
 def create_user():
+    if not _is_conference_user_flow_allowed():
+        msg = (
+            f"Conference-user workflow is disabled for WORKSHOP_NAME='{WORKSHOP_NAME}'. "
+            "This endpoint is intended for testus_patronus only."
+        )
+        logger.error(msg)
+        raise Exception(msg)
+
     account_id = ACCOUNT_ID
     logger.info("Starting create_user()...")
     suffix = os.urandom(4).hex()
@@ -1923,6 +1947,14 @@ def cleanup_expired_assignments():
         raise
 
 def assign_ec2_instance_to_student(student_name):
+    if student_name.startswith('conference-user-') and not _is_conference_user_flow_allowed():
+        msg = (
+            f"Blocked assignment of '{student_name}' in WORKSHOP_NAME='{WORKSHOP_NAME}'. "
+            "conference-user IDs are restricted to testus_patronus workflow."
+        )
+        logger.error(msg)
+        raise Exception(msg)
+
     client = boto3.client('ec2', region_name=REGION)
     max_retries = 3
     base_delay = 2  # Base delay in seconds

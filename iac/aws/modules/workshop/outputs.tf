@@ -70,17 +70,17 @@ output "leaderboard_openapi_spec_url" {
 # CloudFront Outputs - User Management
 output "user_management_custom_url" {
   description = "Custom domain URL for user management"
-  value       = module.cloudfront_user_management.custom_url
+  value       = try(module.cloudfront_user_management[0].custom_url, null)
 }
 
 output "user_management_cloudfront_domain" {
   description = "CloudFront distribution domain name for user management"
-  value       = module.cloudfront_user_management.cloudfront_domain
+  value       = try(module.cloudfront_user_management[0].cloudfront_domain, null)
 }
 
 output "user_management_acm_certificate_validation_records" {
   description = "DNS validation records for user management ACM certificate"
-  value       = module.cloudfront_user_management.certificate_validation_records
+  value       = try(module.cloudfront_user_management[0].certificate_validation_records, null)
 }
 
 # CloudFront Outputs - Dify Jira API

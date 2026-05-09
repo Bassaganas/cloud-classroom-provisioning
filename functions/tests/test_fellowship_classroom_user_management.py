@@ -150,6 +150,64 @@ class TestMaildogUrl:
         assert 'MAILDOG_URL=https://maildog.fellowship.testingfantasy.com' in env_content
         assert 'frodo_aa11@fellowship.testingfantasy.com' in env_content
 
+    def test_env_content_azure_openai_from_secret(self):
+        """Azure OpenAI values from azure/llm/configs secret must appear in .env."""
+        azure_configs = [
+            {
+                'config_name': 'GPT 3.5 Turbo',
+                'api_key': 'key-3.5',
+                'endpoint': 'https://my-resource.openai.azure.com/openai/deployments/gpt-35/chat/completions?api-version=2025-01-01',
+                'deployment_name': 'gpt-35-turbo-16k',
+                'api_version': '2024-12-01-preview',
+            },
+            {
+                'config_name': 'GPT 4-o',
+                'api_key': 'key-4o',
+                'endpoint': 'https://my-resource.openai.azure.com/openai/deployments/gpt-4o/chat/completions?api-version=2025-01-01',
+                'deployment_name': 'gpt-4o',
+                'api_version': '2024-12-01-preview',
+            },
+        ]
+        user_info = {
+            'user_name': 'frodo_aa11',
+            'sut_url': 'https://frodo.fellowship.testingfantasy.com',
+            'jenkins_url': 'https://jenkins.fellowship.testingfantasy.com/job/frodo_aa11/',
+            'gitea_url': 'https://gitea.fellowship.testingfantasy.com/fellowship-org/fellowship-sut-frodo_aa11',
+        }
+        env_content = generate_student_env_content(user_info, azure_configs)
+
+        # Should prefer GPT-4o config
+        assert 'AZURE_OPENAI_DEPLOYMENT=gpt-4o' in env_content
+        assert 'AZURE_OPENAI_API_KEY=key-4o' in env_content
+        # Endpoint must be normalized to base URL (no /openai/... path or query string)
+        assert 'AZURE_OPENAI_ENDPOINT=https://my-resource.openai.azure.com' in env_content
+        assert 'AZURE_OPENAI_API_VERSION=2024-12-01-preview' in env_content
+        assert 'AZURE_OPENAI_MAX_TOKENS=500' in env_content
+        assert 'AZURE_OPENAI_TEMPERATURE=0.7' in env_content
+
+    def test_env_content_azure_fallback_when_no_gpt4o(self):
+        """When no GPT-4o config exists, pick any GPT model."""
+        azure_configs = [
+            {
+                'config_name': 'Embeddings',
+                'api_key': 'key-embed',
+                'endpoint': 'https://res.openai.azure.com',
+                'deployment_name': 'text-embedding',
+                'api_version': '2023-05-15',
+            },
+            {
+                'config_name': 'GPT 3.5 Turbo',
+                'api_key': 'key-35',
+                'endpoint': 'https://res.openai.azure.com',
+                'deployment_name': 'gpt-35',
+                'api_version': '2024-12-01-preview',
+            },
+        ]
+        user_info = {'user_name': 'sam_bb22', 'sut_url': '', 'jenkins_url': '', 'gitea_url': ''}
+        env_content = generate_student_env_content(user_info, azure_configs)
+        assert 'AZURE_OPENAI_DEPLOYMENT=gpt-35' in env_content
+        assert 'AZURE_OPENAI_API_KEY=key-35' in env_content
+
 
 class TestExtractSutUrls:
     """Test extract_sut_urls_from_instance."""

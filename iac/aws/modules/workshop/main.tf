@@ -130,6 +130,7 @@ module "lambda" {
   enable_instance_manager   = false
   enable_stop_old_instances = false
   enable_admin_cleanup      = false
+  enable_user_management    = var.enable_user_management
 
   # Lambda scaling and performance configuration
   user_management_memory_size             = var.user_management_memory_size
@@ -160,7 +161,11 @@ resource "aws_security_group_rule" "additional_ingress" {
 }
 
 # CloudFront Module - Custom Domain and CDN for User Management
+# Only created when the generic user_management Lambda is enabled.
+# Workshops with dedicated user management Lambdas (e.g., fellowship) disable this
+# to prevent the generic testus_patronus handler from being exposed on their domain.
 module "cloudfront_user_management" {
+  count  = var.enable_user_management ? 1 : 0
   source = "../cloudfront"
 
   providers = {
@@ -176,6 +181,13 @@ module "cloudfront_user_management" {
   # Disable CloudFront logging to avoid conflicts with existing resources
   # Logging is optional and only used for debugging
   enable_cloudwatch_logging = false
+}
+
+# State migration: adding count to cloudfront_user_management requires moving existing
+# state from the non-indexed address to [0] for workshops that keep it enabled.
+moved {
+  from = module.cloudfront_user_management
+  to   = module.cloudfront_user_management[0]
 }
 
 # CloudFront Module - Custom Domain and CDN for Dify Jira API

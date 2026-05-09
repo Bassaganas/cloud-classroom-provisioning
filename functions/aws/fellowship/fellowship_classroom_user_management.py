@@ -2,7 +2,6 @@ import json
 import boto3
 import os
 from botocore.exceptions import ClientError
-import time
 import urllib.parse
 import csv
 import io
@@ -450,7 +449,7 @@ def generate_student_env_content(user_info, azure_configs=None):
         except Exception:
             gitea_base = gitea_url
 
-    # Pick the first Azure config (or empty placeholders)
+    # Select the best Azure config (prefer GPT-4o, then any GPT model, then first).
     azure_endpoint = ''
     azure_api_key = ''
     azure_deployment = ''
@@ -458,8 +457,29 @@ def generate_student_env_content(user_info, azure_configs=None):
     azure_max_tokens = '500'
     azure_temperature = '0.7'
     if azure_configs and len(azure_configs) > 0:
-        cfg = azure_configs[0]
-        azure_endpoint = cfg.get('endpoint', '')
+        cfg = None
+        for c in azure_configs:
+            name = str(c.get('config_name', '')).lower()
+            if 'gpt-4o' in name or 'gpt 4-o' in name or 'gpt4o' in name:
+                cfg = c
+                break
+        if cfg is None:
+            for c in azure_configs:
+                name = str(c.get('config_name', '')).lower()
+                if 'gpt' in name:
+                    cfg = c
+                    break
+        if cfg is None:
+            cfg = azure_configs[0]
+
+        raw_endpoint = cfg.get('endpoint', '')
+        # Normalize: strip query string and /openai/... deployment path to get the base URL.
+        if '?' in raw_endpoint:
+            raw_endpoint = raw_endpoint.split('?')[0]
+        if '/openai/' in raw_endpoint:
+            raw_endpoint = raw_endpoint.split('/openai/')[0]
+        azure_endpoint = raw_endpoint.rstrip('/')
+
         azure_api_key = cfg.get('api_key', '')
         azure_deployment = cfg.get('deployment_name', '')
         azure_api_version = cfg.get('api_version', '2024-12-01-preview')
@@ -511,8 +531,10 @@ GITEA_USER={student_name}
 
 # ── Email Service (Maildog) ───────────────────────────────────────────────────
 # Used by: ex3-notification-mcp, ex5-grand-finale
-MAILDOG_URL=https://maildog.fellowship.testingfantasy.com
+MAILDOG_URL=https://mail-{student_name.replace('_', '-')}.fellowship.testingfantasy.com/
 MAILDOG_API_TOKEN=<your-maildog-token>
+MAILDOG_SMTP_HOST=mailhog
+MAILDOG_SMTP_PORT=1025
 STUDENT_EMAIL={student_name}@fellowship.testingfantasy.com
 
 # ── SUT Backend (Flask) ──────────────────────────────────────────────────────
@@ -548,7 +570,7 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
         <html lang="en">
         <head>
             <title>Fellowship Workshop</title>
-            <link rel="icon" href="https://lotr-prod.testingfantasy.com/middle-earth-map/icons/the_one_ring.ico" type="image/x-icon">
+            <link rel="icon" href="https://docs.fellowship.testingfantasy.com/img/logo.png" type="image/png">
             <link rel="preconnect" href="https://fonts.googleapis.com">
             <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
             <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&family=Lora:ital,wght@0,400;0,600;0,700;1,400&display=swap" rel="stylesheet">
@@ -693,7 +715,7 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
             <div class="container">
                 <div class="header-row">
                     <a href="https://testingfantasy.com" class="header-link" target="_blank" rel="noopener noreferrer">Testing Fantasy</a>
-                    <img src="https://lotr.fellowship.testingfantasy.com/logo.png" alt="Fellowship Quest Tracker Logo" class="logo" onerror="this.style.display='none';document.getElementById('logo-fallback').style.display='flex';">
+                    <img src="https://docs.fellowship.testingfantasy.com/img/logo.png" alt="Fellowship Quest Tracker Logo" class="logo" onerror="this.style.display='none';document.getElementById('logo-fallback').style.display='flex';">
                     <div id="logo-fallback" class="logo-fallback">Fellowship Workshop</div>
                     <a href="https://docs.fellowship.testingfantasy.com" class="header-link" target="_blank" rel="noopener noreferrer">Documentation</a>
                 </div>
@@ -757,88 +779,124 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
         jenkins_url = user_info.get('jenkins_url', '')
         gitea_url = user_info.get('gitea_url', '')
         ide_url = user_info.get('ide_url', '')
-        maildog_url = user_info.get('maildog_url', 'https://maildog.fellowship.testingfantasy.com')
+        student_name_for_url = user_info.get('user_name', user_info.get('student_name', '')).replace('_', '-')
+        maildog_url = user_info.get('maildog_url', f'https://mail-{student_name_for_url}.fellowship.testingfantasy.com/')
+        
+        # Pre-compute conditional strings (Python 3.9 disallows backslashes in f-string expressions)
+        sut_badge_class = 'badge-ready' if sut_url else 'badge-loading'
+        sut_badge_text = 'Ready' if sut_url else 'Starting\u2026'
+        sut_btn_class = 'rt-btn  rt-btn-ready' if sut_url else 'rt-btn'
+        ide_badge_class = 'badge-ready' if ide_url else 'badge-loading'
+        ide_badge_text = 'Ready' if ide_url else 'Starting\u2026'
+        ide_btn_class = 'rt-btn rt-btn-ready' if ide_url else 'rt-btn'
+        jenkins_badge_class = 'badge-ready' if jenkins_url else 'badge-loading'
+        jenkins_badge_text = 'Ready' if jenkins_url else 'Starting\u2026'
+        jenkins_btn_class = 'rt-btn rt-btn-ready' if jenkins_url else 'rt-btn'
+        gitea_badge_class = 'badge-ready' if gitea_url else 'badge-loading'
+        gitea_badge_text = 'Ready' if gitea_url else 'Starting\u2026'
+        gitea_btn_class = 'rt-btn rt-btn-ready' if gitea_url else 'rt-btn'
+        gitea_spinner_display = 'none' if gitea_url else 'inline-block'
+        status_footer = '' if sut_url else 'Services are starting up \u2014 this page updates automatically.'
+        username = credentials.get('username', '')
+        password = credentials.get('password', '')
+        student_email = f'{username}@fellowship.testingfantasy.com'
         
         instance_info_html = f"""
         <div class=\"instance-section\">
-            <h2>Fellowship Instance Information</h2>
-            <div class=\"instance-cards\">
-                <div class=\"instance-card\">
-                    <div class=\"card-header\">
-                        <i class=\"fas fa-server\"></i>
-                        <span>SUT Instance</span>
+            <h2><i class=\"fas fa-key\" style=\"color:var(--pink);margin-right:8px;\"></i>Your Credentials</h2>
+            <div class=\"credentials-banner\">
+                <p class=\"credentials-hint\">Same credentials for <strong>IDE</strong>, <strong>Jenkins</strong>, and <strong>Gitea</strong></p>
+                <div class=\"credentials-grid\">
+                    <div class=\"credential-chip\">
+                        <span class=\"credential-chip-label\">Username</span>
+                        <span class=\"credential-chip-value\">{username}</span>
+                        <button class=\"copy-btn-inline\" onclick=\"copyToClipboard('{username}')\" title=\"Copy\"><i class=\"fas fa-copy\"></i></button>
                     </div>
-                    <div class=\"sut-link-container\" id=\"sut-link-container\">
-                        <div id=\"sut-spinner\" class=\"spinner\"></div>
-                        <a id=\"sut-link\" href=\"{sut_url}\" target=\"_blank\" class=\"service-link{' ready' if sut_url else ''}\">
-                            <i class=\"fas fa-external-link-alt\"></i> {sut_url if sut_url else 'Starting SUT...'}
-                        </a>
-                        <p id=\"sut-status-msg\" class=\"status-message\">{'' if sut_url else 'Waiting for SUT to become ready...'}</p>
+                    <div class=\"credential-chip\">
+                        <span class=\"credential-chip-label\">Password</span>
+                        <span class=\"credential-chip-value\">{password}</span>
+                        <button class=\"copy-btn-inline\" onclick=\"copyToClipboard('{password}')\" title=\"Copy\"><i class=\"fas fa-copy\"></i></button>
                     </div>
-                </div>
-                <div class=\"instance-card\">
-                    <div class=\"card-header\">
-                        <i class=\"fas fa-laptop-code\"></i>
-                        <span>IDE</span>
-                    </div>
-                    <div class=\"sut-link-container\" id=\"ide-link-container\">
-                        <div id=\"ide-spinner\" class=\"spinner\"></div>
-                        <a id=\"ide-link\" href=\"{ide_url}\" target=\"_blank\" class=\"service-link{' ready' if ide_url else ''}\">
-                            <i class=\"fas fa-laptop-code\"></i> {ide_url if ide_url else 'Starting IDE...'}
-                        </a>
-                        <p id=\"ide-status-msg\" class=\"status-message\">{'' if ide_url else 'Waiting for IDE to become ready...'}</p>
-                    </div>
-                    <div class=\"credentials-info\" style=\"margin-top:8px;\">
-                        <div class=\"config-row\">
-                            <span class=\"credential-label\">IDE Password</span>
-                            <span class=\"credential-value\">fellowship</span>
-                            <button class=\"copy-btn\" onclick=\"copyToClipboard('fellowship')\" title=\"Copy\"><i class=\"fas fa-copy\"></i></button>
-                        </div>
-                    </div>
-                </div>
-                <div class=\"instance-card\">
-                    <div class=\"card-header\">
-                        <i class=\"fas fa-user-shield\"></i>
-                        <span>Jenkins &amp; Gitea Access</span>
-                    </div>
-                    <div class=\"credentials-info\" style=\"margin-bottom:10px;\">
-                        <div class=\"config-row\">
-                            <span class=\"credential-label\">Username</span>
-                            <span class=\"credential-value\">{credentials.get('username', '')}</span>
-                            <button class=\"copy-btn\" onclick=\"copyToClipboard('{credentials.get('username', '')}')\" title=\"Copy\"><i class=\"fas fa-copy\"></i></button>
-                        </div>
-                        <div class=\"config-row\">
-                            <span class=\"credential-label\">Password</span>
-                            <span class=\"credential-value\">{credentials.get('password', '')}</span>
-                            <button class=\"copy-btn\" onclick=\"copyToClipboard('{credentials.get('password', '')}')\" title=\"Copy\"><i class=\"fas fa-copy\"></i></button>
-                        </div>
-                    </div>
-                    <div class=\"service-links\" id=\"dev-tools-container\">
-                        <div id=\"dev-tools-spinner\" class=\"spinner\"></div>
-                        <p id=\"dev-tools-status\" class=\"status-message\">{'Loading development tools...' if not jenkins_url else ''}</p>
-                        <a id=\"jenkins-link\" href=\"{jenkins_url}\" target=\"_blank\" class=\"service-link\" style=\"display:{'block' if jenkins_url else 'none'}\"><i class=\"fas fa-gears\"></i> Jenkins</a>
-                        <a id=\"gitea-link\" href=\"{gitea_url}\" target=\"_blank\" class=\"service-link\" style=\"display:{'block' if gitea_url else 'none'}\"><i class=\"fas fa-code-branch\"></i> Gitea Login</a>
-                    </div>
-                </div>
-                <div class=\"instance-card\">
-                    <div class=\"card-header\">
-                        <i class=\"fas fa-envelope\"></i>
-                        <span>Maildog (Email Service)</span>
-                    </div>
-                    <div class=\"sut-link-container\">
-                        <a href=\"{maildog_url}\" target=\"_blank\" class=\"service-link ready\">
-                            <i class=\"fas fa-envelope-open-text\"></i> Open Maildog
-                        </a>
-                    </div>
-                    <div class=\"credentials-info\" style=\"margin-top:8px;\">
-                        <div class=\"config-row\">
-                            <span class=\"credential-label\">Student Email</span>
-                            <span class=\"credential-value\">{credentials.get('username', '')}@fellowship.testingfantasy.com</span>
-                            <button class=\"copy-btn\" onclick=\"copyToClipboard('{credentials.get('username', '')}@fellowship.testingfantasy.com')\" title=\"Copy\"><i class=\"fas fa-copy\"></i></button>
-                        </div>
+                    <div class=\"credential-chip\">
+                        <span class=\"credential-chip-label\">Email</span>
+                        <span class=\"credential-chip-value\">{student_email}</span>
+                        <button class=\"copy-btn-inline\" onclick=\"copyToClipboard('{student_email}')\" title=\"Copy\"><i class=\"fas fa-copy\"></i></button>
                     </div>
                 </div>
             </div>
+
+            <h2 style=\"margin-top:28px;\"><i class=\"fas fa-th-list\" style=\"color:var(--pink);margin-right:8px;\"></i>Your Resources</h2>
+            <table class=\"resource-table\">
+                <thead>
+                    <tr>
+                        <th>Service</th>
+                        <th>Status</th>
+                        <th>Access</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td class=\"rt-service\"><i class=\"fas fa-flask rt-icon\" style=\"color:#6a994e;\"></i> Quest Tracker (SUT)</td>
+                        <td class=\"rt-status\" id=\"sut-status-cell\">
+                            <span id=\"sut-spinner\" class=\"spinner-sm\"></span>
+                            <span id=\"sut-status-badge\" class=\"status-badge {sut_badge_class}\">{sut_badge_text}</span>
+                        </td>
+                        <td class=\"rt-access\">
+                            <a id=\"sut-link\" href=\"{sut_url}\" target=\"_blank\" class=\"{sut_btn_class}\">
+                                <i class=\"fas fa-external-link-alt\"></i> Open
+                            </a>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class=\"rt-service\"><i class=\"fas fa-laptop-code rt-icon\" style=\"color:#4a90d9;\"></i> IDE (Code Server)</td>
+                        <td class=\"rt-status\" id=\"ide-status-cell\">
+                            <span id=\"ide-spinner\" class=\"spinner-sm\"></span>
+                            <span id=\"ide-status-badge\" class=\"status-badge {ide_badge_class}\">{ide_badge_text}</span>
+                        </td>
+                        <td class=\"rt-access\">
+                            <a id=\"ide-link\" href=\"{ide_url}\" target=\"_blank\" class=\"{ide_btn_class}\">
+                                <i class=\"fas fa-laptop-code\"></i> Open
+                            </a>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class=\"rt-service\"><i class=\"fas fa-gears rt-icon\" style=\"color:#d4a017;\"></i> Jenkins (CI/CD)</td>
+                        <td class=\"rt-status\" id=\"jenkins-status-cell\">
+                            <span id=\"dev-tools-spinner\" class=\"spinner-sm\"></span>
+                            <span id=\"jenkins-status-badge\" class=\"status-badge {jenkins_badge_class}\">{jenkins_badge_text}</span>
+                        </td>
+                        <td class=\"rt-access\">
+                            <a id=\"jenkins-link\" href=\"{jenkins_url}\" target=\"_blank\" class=\"{jenkins_btn_class}\">
+                                <i class=\"fas fa-gears\"></i> Open
+                            </a>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class=\"rt-service\"><i class=\"fas fa-code-branch rt-icon\" style=\"color:#e07b53;\"></i> Gitea (Git Server)</td>
+                        <td class=\"rt-status\" id=\"gitea-status-cell\">
+                            <span id=\"gitea-spinner\" class=\"spinner-sm\" style=\"display:{gitea_spinner_display}\"></span>
+                            <span id=\"gitea-status-badge\" class=\"status-badge {gitea_badge_class}\">{gitea_badge_text}</span>
+                        </td>
+                        <td class=\"rt-access\">
+                            <a id=\"gitea-link\" href=\"{gitea_url}\" target=\"_blank\" class=\"{gitea_btn_class}\">
+                                <i class=\"fas fa-code-branch\"></i> Open
+                            </a>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td class=\"rt-service\"><i class=\"fas fa-envelope rt-icon\" style=\"color:#9b59b6;\"></i> Maildog (Email)</td>
+                        <td class=\"rt-status\">
+                            <span class=\"status-badge badge-ready\">Ready</span>
+                        </td>
+                        <td class=\"rt-access\">
+                            <a href=\"{maildog_url}\" target=\"_blank\" class=\"rt-btn rt-btn-ready\">
+                                <i class=\"fas fa-envelope-open-text\"></i> Open
+                            </a>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+            <p id=\"sut-status-msg\" class=\"status-message\" style=\"margin-top:12px;\">{status_footer}</p>
         </div>
         """
     elif 'instance_error' in user_info:
@@ -855,7 +913,7 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
         <meta charset=\"UTF-8\">
         <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">
         <title>Fellowship Workshop</title>
-        <link rel=\"icon\" href=\"https://lotr-prod.testingfantasy.com/middle-earth-map/icons/the_one_ring.ico\" type=\"image/x-icon\">
+        <link rel=\"icon\" href=\"https://docs.fellowship.testingfantasy.com/img/logo.png\" type=\"image/png\">
         <link rel=\"preconnect\" href=\"https://fonts.googleapis.com\">
         <link rel=\"preconnect\" href=\"https://fonts.gstatic.com\" crossorigin>
         <link href=\"https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700;900&family=Lora:ital,wght@0,400;0,600;0,700;1,400&display=swap\" rel=\"stylesheet\">
@@ -1040,6 +1098,169 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
             }}
             .instance-section {{
                 margin-bottom: 32px;
+            }}
+            /* Credentials banner */
+            .credentials-banner {{
+                background: var(--gray);
+                border: 2px solid var(--pink);
+                border-radius: 12px;
+                padding: 20px 24px 18px;
+                text-align: center;
+            }}
+            .credentials-hint {{
+                color: #5c4a22;
+                font-size: 0.95rem;
+                margin: 0 0 14px 0;
+            }}
+            .credentials-grid {{
+                display: flex;
+                gap: 14px;
+                justify-content: center;
+                flex-wrap: wrap;
+            }}
+            .credential-chip {{
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+                background: var(--white);
+                border: 1px solid #d5c9a8;
+                border-radius: 8px;
+                padding: 8px 14px;
+                font-size: 0.95rem;
+            }}
+            .credential-chip-label {{
+                font-weight: 700;
+                color: var(--blue);
+                font-size: 0.85rem;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+            }}
+            .credential-chip-value {{
+                font-family: 'Fira Mono', 'Consolas', monospace;
+                background: #efe1c8;
+                padding: 3px 8px;
+                border-radius: 4px;
+                color: var(--blue);
+                font-weight: 600;
+            }}
+            .copy-btn-inline {{
+                background: none;
+                border: none;
+                color: var(--pink);
+                cursor: pointer;
+                font-size: 0.95rem;
+                padding: 2px 4px;
+                border-radius: 4px;
+                transition: color 0.2s;
+            }}
+            .copy-btn-inline:hover {{
+                color: var(--blue);
+            }}
+            /* Resource table */
+            .resource-table {{
+                width: 100%;
+                border-collapse: separate;
+                border-spacing: 0;
+                border: 2px solid var(--blue);
+                border-radius: 12px;
+                overflow: hidden;
+                font-size: 1rem;
+            }}
+            .resource-table thead th {{
+                background: var(--blue);
+                color: var(--white);
+                font-family: 'Cinzel', serif;
+                font-weight: 700;
+                font-size: 0.9rem;
+                letter-spacing: 0.5px;
+                text-transform: uppercase;
+                padding: 12px 18px;
+                text-align: left;
+            }}
+            .resource-table tbody tr {{
+                transition: background 0.15s;
+            }}
+            .resource-table tbody tr:hover {{
+                background: #f5ecd4;
+            }}
+            .resource-table tbody tr:not(:last-child) td {{
+                border-bottom: 1px solid #e0d6be;
+            }}
+            .resource-table td {{
+                padding: 14px 18px;
+                vertical-align: middle;
+            }}
+            .rt-service {{
+                font-weight: 600;
+                color: var(--blue);
+                white-space: nowrap;
+            }}
+            .rt-icon {{
+                width: 20px;
+                text-align: center;
+                margin-right: 8px;
+                font-size: 1.1rem;
+            }}
+            .rt-status {{
+                display: flex;
+                align-items: center;
+                gap: 8px;
+            }}
+            .status-badge {{
+                display: inline-block;
+                padding: 4px 12px;
+                border-radius: 20px;
+                font-size: 0.82rem;
+                font-weight: 700;
+                letter-spacing: 0.3px;
+            }}
+            .badge-ready {{
+                background: #d4edda;
+                color: #155724;
+            }}
+            .badge-loading {{
+                background: #fff3cd;
+                color: #856404;
+            }}
+            .spinner-sm {{
+                display: inline-block;
+                border: 3px solid #f3f3f3;
+                border-top: 3px solid var(--pink);
+                border-radius: 50%;
+                width: 16px;
+                height: 16px;
+                animation: spin 1s linear infinite;
+                flex-shrink: 0;
+            }}
+            .rt-access {{
+                text-align: right;
+            }}
+            .rt-btn {{
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                padding: 7px 18px;
+                border-radius: 6px;
+                font-weight: 600;
+                font-size: 0.9rem;
+                text-decoration: none;
+                color: #888;
+                background: #eee;
+                pointer-events: none;
+                transition: all 0.2s;
+                border: 1px solid transparent;
+            }}
+            .rt-btn-ready {{
+                background: var(--pink);
+                color: var(--white);
+                pointer-events: auto;
+                border-color: var(--pink);
+            }}
+            .rt-btn-ready:hover {{
+                background: var(--blue);
+                border-color: var(--blue);
+                transform: translateY(-1px);
+                box-shadow: 0 2px 8px rgba(35,26,18,0.18);
             }}
             .instance-cards {{
                 display: grid;
@@ -1244,6 +1465,24 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                 .azure-card {{
                     padding: 16px;
                 }}
+                .credentials-grid {{
+                    flex-direction: column;
+                    align-items: stretch;
+                }}
+                .credential-chip {{
+                    justify-content: space-between;
+                }}
+                .resource-table {{
+                    font-size: 0.9rem;
+                }}
+                .resource-table td,
+                .resource-table th {{
+                    padding: 10px 12px;
+                }}
+                .rt-btn {{
+                    padding: 6px 12px;
+                    font-size: 0.82rem;
+                }}
             }}
             
             @media (max-width: 480px) {{
@@ -1287,13 +1526,16 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                 var sutLink = document.getElementById('sut-link');
                 var sutSpinner = document.getElementById('sut-spinner');
                 var sutStatusMsg = document.getElementById('sut-status-msg');
+                var sutBadge = document.getElementById('sut-status-badge');
                 var ideLink = document.getElementById('ide-link');
                 var ideSpinner = document.getElementById('ide-spinner');
-                var ideStatusMsg = document.getElementById('ide-status-msg');
+                var ideBadge = document.getElementById('ide-status-badge');
                 var jenkinsLink = document.getElementById('jenkins-link');
+                var jenkinsBadge = document.getElementById('jenkins-status-badge');
                 var giteaLink = document.getElementById('gitea-link');
+                var giteaBadge = document.getElementById('gitea-status-badge');
+                var giteaSpinner = document.getElementById('gitea-spinner');
                 var devToolsSpinner = document.getElementById('dev-tools-spinner');
-                var devToolsStatus = document.getElementById('dev-tools-status');
                 var userName = "{user_info['user_name']}";
                 var statusLambdaUrl = "{status_lambda_url}";
                 var pollCount = 0;
@@ -1330,46 +1572,42 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
                                 var sutUrl = data.url;
                                 if (!sutUrl.startsWith('http')) sutUrl = 'https://' + sutUrl;
                                 
-                                // Update SUT link
-                                if (sutLink) {{
-                                    sutLink.href = sutUrl;
-                                    sutLink.innerHTML = '<i class="fas fa-external-link-alt"></i> Open SUT';
-                                    sutLink.classList.add('ready');
-                                    sutLink.style.pointerEvents = 'auto';
-                                }}
-                                if (sutSpinner) sutSpinner.style.display = 'none';
-                                setSutStatus('Your SUT instance is ready!');
-                                
-                                // Update IDE link  
-                                if (data.ide_url && ideLink) {{
-                                    ideLink.href = data.ide_url;
-                                    ideLink.innerHTML = '<i class="fas fa-laptop-code"></i> Open IDE';
-                                    ideLink.classList.add('ready');
-                                    ideLink.style.pointerEvents = 'auto';
-                                    if (ideSpinner) ideSpinner.style.display = 'none';
-                                    if (ideStatusMsg) ideStatusMsg.textContent = 'IDE is ready!';
+                                // Helper to mark a row as ready
+                                function markReady(link, spinner, badge, url, label) {{
+                                    if (link) {{
+                                        link.href = url;
+                                        link.classList.add('rt-btn-ready');
+                                        link.style.pointerEvents = 'auto';
+                                    }}
+                                    if (spinner) spinner.style.display = 'none';
+                                    if (badge) {{
+                                        badge.textContent = 'Ready';
+                                        badge.className = 'status-badge badge-ready';
+                                    }}
                                 }}
                                 
-                                // Update Jenkins link
-                                if (data.jenkins_url && jenkinsLink) {{
-                                    jenkinsLink.href = data.jenkins_url;
-                                    jenkinsLink.style.display = 'block';
+                                // Update SUT
+                                markReady(sutLink, sutSpinner, sutBadge, sutUrl, 'SUT');
+                                setSutStatus('All services are ready!');
+                                
+                                // Update IDE
+                                if (data.ide_url) {{
+                                    markReady(ideLink, ideSpinner, ideBadge, data.ide_url, 'IDE');
                                 }}
                                 
-                                // Update Gitea link
-                                if (data.gitea_url && giteaLink) {{
-                                    giteaLink.href = data.gitea_url;
-                                    giteaLink.style.display = 'block';
+                                // Update Jenkins
+                                if (data.jenkins_url) {{
+                                    markReady(jenkinsLink, devToolsSpinner, jenkinsBadge, data.jenkins_url, 'Jenkins');
                                 }}
                                 
-                                // Hide dev tools spinner
-                                if (devToolsSpinner) devToolsSpinner.style.display = 'none';
-                                if (devToolsStatus) devToolsStatus.style.display = 'none';
+                                // Update Gitea
+                                if (data.gitea_url) {{
+                                    markReady(giteaLink, giteaSpinner, giteaBadge, data.gitea_url, 'Gitea');
+                                }}
                                 
                                 console.log('[Fellowship] Services ready. SUT:', sutUrl);
                             }} else {{
-                                setSutStatus('Starting your Fellowship instance...');
-                                if (ideStatusMsg) ideStatusMsg.textContent = 'Waiting for IDE...';
+                                setSutStatus('Starting your Fellowship instance\u2026');
                                 if (pollCount < 60) setTimeout(pollStatus, 5000);
                                 else setSutStatus('Still waiting for your instance. Please refresh if this takes too long.');
                             }}
@@ -1476,7 +1714,7 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
         <div class="container">
             <div class="header-row">
                 <a href="https://testingfantasy.com" class="header-link" target="_blank" rel="noopener noreferrer">Visit Testing Fantasy</a>
-                <img src="https://lotr.fellowship.testingfantasy.com/logo.png" alt="Fellowship Quest Tracker Logo" class="logo">
+                <img src="https://docs.fellowship.testingfantasy.com/img/logo.png" alt="Fellowship Quest Tracker Logo" class="logo">
                 <a href="https://docs.fellowship.testingfantasy.com" class="header-link" target="_blank" rel="noopener noreferrer">Visit Fellowship Documentation</a>
             </div>
             <div class="main-title">Fellowship Workshop</div>
@@ -1834,7 +2072,8 @@ def lambda_handler(event, context):
                                     
                                     # Add maildog URL
                                     if not user_info.get('maildog_url'):
-                                        user_info['maildog_url'] = 'https://maildog.fellowship.testingfantasy.com'
+                                        _student = user_info.get('user_name', user_info.get('student_name', '')).replace('_', '-')
+                                        user_info['maildog_url'] = f'https://mail-{_student}.fellowship.testingfantasy.com/'
                                     
                                     # Load Azure configs
                                     try:
@@ -1930,7 +2169,8 @@ def lambda_handler(event, context):
                                         
                                         # Add maildog URL
                                         if not user_info.get('maildog_url'):
-                                            user_info['maildog_url'] = 'https://maildog.fellowship.testingfantasy.com'
+                                            _student = user_info.get('user_name', user_info.get('student_name', '')).replace('_', '-')
+                                            user_info['maildog_url'] = f'https://mail-{_student}.fellowship.testingfantasy.com/'
                                         
                                         try:
                                             user_info['azure_configs'] = get_secret()
@@ -2053,7 +2293,7 @@ def lambda_handler(event, context):
                     'jenkins_url': urls.get('jenkins_url', ''),
                     'gitea_url': urls.get('gitea_url', ''),
                     'ide_url': urls.get('ide_url', ''),
-                    'maildog_url': 'https://maildog.fellowship.testingfantasy.com',
+                    'maildog_url': f'https://mail-{student_name.replace("_", "-")}.fellowship.testingfantasy.com/',
                     'credentials': {
                         'username': student_name,
                         'password': student_name
