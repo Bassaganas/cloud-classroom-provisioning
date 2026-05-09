@@ -644,7 +644,8 @@ create_webhook() {
             \"content_type\": \"json\"
         },
         \"events\": [\"push\"],
-        \"active\": true
+        \"active\": true,
+        \"branch_filter\": \"main\"
     }") || true
 
     if echo "$response" | grep -q '"id"'; then
@@ -752,6 +753,12 @@ create_jenkins_pipeline() {
           <defaultValue>${escaped_sut_url}</defaultValue>
           <trim>true</trim>
         </hudson.model.StringParameterDefinition>
+        <hudson.model.StringParameterDefinition>
+          <name>BRANCH</name>
+          <description>Git branch to build. Defaults to main; the auto-healer passes fix branches to verify PRs.</description>
+          <defaultValue>main</defaultValue>
+          <trim>true</trim>
+        </hudson.model.StringParameterDefinition>
       </parameterDefinitions>
     </hudson.model.ParametersDefinitionProperty>
   </properties>
@@ -766,7 +773,7 @@ create_jenkins_pipeline() {
       </userRemoteConfigs>
       <branches>
         <hudson.plugins.git.BranchSpec>
-          <name>*/main</name>
+          <name>*/\${BRANCH}</name>
         </hudson.plugins.git.BranchSpec>
       </branches>
     </scm>
