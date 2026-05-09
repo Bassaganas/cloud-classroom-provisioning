@@ -579,6 +579,14 @@ seed_sut_content() {
         done
     fi
 
+    # Include packages (e.g. lotr-event-sourcing) from S3 tarball
+    if [ -n "${s3_exercises_dir}" ] && [ -d "${s3_exercises_dir}/packages" ]; then
+        mkdir -p packages
+        cp -a "${s3_exercises_dir}/packages/." packages/
+        items_copied=$((items_copied + 1))
+        log "  ✓ Included packages/ (from S3)"
+    fi
+
     if [ "${items_copied}" -eq 0 ]; then
         warn "No SUT content copied — falling back to stub Jenkinsfile"
         cd /
@@ -590,7 +598,7 @@ seed_sut_content() {
     if git diff --cached --quiet; then
         log "  ✓ SUT content already present in '${REPO_NAME}' (nothing to commit)"
     else
-        git commit -q -m "feat: seed Fellowship SUT (sut/, tests/, scripts/, Jenkinsfile, exercises) for ${STUDENT_ID}"
+        git commit -q -m "feat: seed Fellowship SUT (sut/, tests/, scripts/, Jenkinsfile, exercises, packages) for ${STUDENT_ID}"
         if git push -q origin main; then
             log "  ✓ SUT content pushed to '${REPO_NAME}'"
         else
