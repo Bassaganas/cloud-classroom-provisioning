@@ -381,9 +381,9 @@ variable "fellowship_lambdas_timeout" {
 }
 
 variable "fellowship_user_management_domain" {
-  description = "User management domain for fellowship"
+  description = "DEPRECATED — was fellowship-of-the-build.testingfantasy.com. No longer used because enable_user_management=false for fellowship (it has its own dedicated Lambda). Kept for tfvars compatibility."
   type        = string
-  default     = "fellowship-of-the-build.testingfantasy.com"
+  default     = ""
 }
 
 variable "fellowship_dify_jira_domain" {

@@ -296,3 +296,9 @@ variable "lambda_artifact_key" {
   type        = string
   default     = "palantir/leaderboard_lambda.zip"
 }
+
+variable "enable_user_management" {
+  description = "Whether to create the generic user management Lambda (classroom_user_management). Set to false for workshops that have their own dedicated user management Lambda (e.g., fellowship)."
+  type        = bool
+  default     = true
+}

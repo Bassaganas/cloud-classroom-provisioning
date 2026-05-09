@@ -433,17 +433,25 @@ module "workshop_fellowship" {
   instance_manager_timeout                = var.fellowship_instance_manager_timeout
   fellowship_lambdas_memory_size          = var.fellowship_lambdas_memory_size
   fellowship_lambdas_timeout              = var.fellowship_lambdas_timeout
-  user_management_domain                  = var.fellowship_user_management_domain
-  dify_jira_domain                        = var.fellowship_dify_jira_domain
-  leaderboard_api_domain                  = var.fellowship_leaderboard_api_domain
-  fellowship_user_management_domain       = var.fellowship_student_assignment_domain
-  fellowship_sut_domain                   = var.fellowship_sut_domain
-  fellowship_jenkins_domain               = var.fellowship_jenkins_domain
-  fellowship_gitea_domain                 = var.fellowship_gitea_domain
-  fellowship_gitea_api_domain             = var.fellowship_gitea_api_domain
-  fellowship_gitea_org                    = var.fellowship_gitea_org
-  destroy_key                             = var.fellowship_destroy_key
-  wait_for_certificate_validation         = var.fellowship_wait_for_certificate_validation
+  # Generic user_management_domain is unused because enable_user_management = false.
+  # Previously pointed to fellowship-of-the-build.testingfantasy.com which exposed the
+  # testus_patronus handler on fellowship instances, causing conference-user contamination.
+  user_management_domain            = ""
+  dify_jira_domain                  = var.fellowship_dify_jira_domain
+  leaderboard_api_domain            = var.fellowship_leaderboard_api_domain
+  fellowship_user_management_domain = var.fellowship_student_assignment_domain
+  fellowship_sut_domain             = var.fellowship_sut_domain
+  fellowship_jenkins_domain         = var.fellowship_jenkins_domain
+  fellowship_gitea_domain           = var.fellowship_gitea_domain
+  fellowship_gitea_api_domain       = var.fellowship_gitea_api_domain
+  fellowship_gitea_org              = var.fellowship_gitea_org
+  destroy_key                       = var.fellowship_destroy_key
+  wait_for_certificate_validation   = var.fellowship_wait_for_certificate_validation
+
+  # Disable generic user management Lambda — fellowship has its own dedicated Lambda
+  # (fellowship_classroom_user_management). The generic one uses testus_patronus code
+  # which generates conference-user-* IDs and contaminates fellowship pool instances.
+  enable_user_management = false
 
   # Palantir event-sourcing artifact
   lambda_artifact_bucket = var.lambda_artifact_bucket

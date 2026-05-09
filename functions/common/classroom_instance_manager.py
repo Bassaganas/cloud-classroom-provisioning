@@ -2155,6 +2155,7 @@ def setup_caddy_domain(instance_id, workshop_name, machine_name=None, domain=Non
         logger.error(f"Error setting up Caddy domain for {instance_id}: {str(e)}", exc_info=True)
         return None
 
+
 def create_route53_alias(record_name, lb_dns, lb_zone_id):
     """Legacy ALB function - kept for backward compatibility but not used with Caddy"""
     if not HTTPS_HOSTED_ZONE_ID:
@@ -2621,7 +2622,9 @@ if [ "${SHARED_CORE_MODE:-false}" = "true" ]; then
             --region "${AWS_REGION:-eu-west-1}" \
             --query "SecretString" --output text 2>/dev/null || echo "")
         if [ -n "$AZURE_JSON" ] && [ "$AZURE_JSON" != "None" ]; then
-            export AZURE_OPENAI_ENDPOINT=$(echo "$AZURE_JSON" | python3 -c "import sys,json; c=json.load(sys.stdin); print(c[0].get('endpoint',''))" 2>/dev/null || echo "")
+            # Normalize endpoint: strip query string and /openai/... deployment path to get base URL.
+            _RAW_ENDPOINT=$(echo "$AZURE_JSON" | python3 -c "import sys,json; e=json.load(sys.stdin)[0].get('endpoint',''); e=e.split('?')[0]; e=e.split('/openai/')[0]; print(e.rstrip('/'))" 2>/dev/null || echo "")
+            export AZURE_OPENAI_ENDPOINT="$_RAW_ENDPOINT"
             export AZURE_OPENAI_API_KEY=$(echo "$AZURE_JSON" | python3 -c "import sys,json; c=json.load(sys.stdin); print(c[0].get('api_key',''))" 2>/dev/null || echo "")
             export AZURE_OPENAI_DEPLOYMENT=$(echo "$AZURE_JSON" | python3 -c "import sys,json; c=json.load(sys.stdin); print(c[0].get('deployment_name','gpt-4o'))" 2>/dev/null || echo "gpt-4o")
             export AZURE_OPENAI_API_VERSION=$(echo "$AZURE_JSON" | python3 -c "import sys,json; c=json.load(sys.stdin); print(c[0].get('api_version','2024-12-01-preview'))" 2>/dev/null || echo "2024-12-01-preview")
