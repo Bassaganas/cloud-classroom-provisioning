@@ -184,6 +184,7 @@ def get_student_tokens_from_ssm(student_name):
     return result
 
 
+def get_available_pool_instances(workshop_name=None, region=None):
     """
     Query EC2 for ALL available pool instances (FIFO fairness).
     
