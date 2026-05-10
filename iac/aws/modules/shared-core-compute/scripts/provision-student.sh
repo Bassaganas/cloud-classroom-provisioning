@@ -843,6 +843,121 @@ XML
     fi
 }
 
+# ── Step 6: Create student API tokens ────────────────────────────────────────
+
+# Token values are stored in SSM Parameter Store so the fellowship user management
+# Lambda can retrieve them and include them in the student's .env file.
+# SSM path: /classroom/{WORKSHOP_NAME}/{ENVIRONMENT}/student-tokens/{STUDENT_ID}/gitea-token
+#           /classroom/{WORKSHOP_NAME}/{ENVIRONMENT}/student-tokens/{STUDENT_ID}/jenkins-token
+
+STUDENT_GITEA_TOKEN=""
+STUDENT_JENKINS_TOKEN=""
+
+create_gitea_student_token() {
+    log "Step 6a: Creating Gitea API token for student '${STUDENT_ID}'..."
+
+    local ssm_param="/classroom/${WORKSHOP_NAME}/${ENVIRONMENT}/student-tokens/${STUDENT_ID}/gitea-token"
+
+    # Delete any existing token with the same name first to avoid duplicates (idempotent)
+    gitea_api DELETE "/users/${STUDENT_ID}/tokens/fellowship-workshop-token" >/dev/null 2>&1 || true
+
+    local response
+    response=$(curl -sf \
+        -u "${GITEA_ADMIN_USER}:${GITEA_ADMIN_PASSWORD}" \
+        -X POST "${GITEA_URL}/api/v1/users/${STUDENT_ID}/tokens" \
+        -H "Content-Type: application/json" \
+        -d '{"name":"fellowship-workshop-token"}' 2>/dev/null) || true
+
+    local token_value
+    token_value=$(echo "$response" | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('sha1',''))" 2>/dev/null || echo "")
+
+    if [ -n "$token_value" ]; then
+        STUDENT_GITEA_TOKEN="$token_value"
+        log "  ✓ Gitea API token created for '${STUDENT_ID}'"
+
+        # Store token in SSM Parameter Store (overwrite if exists)
+        if aws ssm put-parameter \
+            --name "${ssm_param}" \
+            --value "${token_value}" \
+            --type "SecureString" \
+            --overwrite \
+            --region "${AWS_REGION}" >/dev/null 2>&1; then
+            log "  ✓ Gitea token stored in SSM: ${ssm_param}"
+        else
+            warn "Could not store Gitea token in SSM (${ssm_param}) — student must set GITEA_TOKEN manually"
+        fi
+    else
+        warn "Could not create Gitea API token for '${STUDENT_ID}': $response"
+    fi
+}
+
+create_jenkins_student_token() {
+    log "Step 6b: Creating Jenkins API token for student '${STUDENT_ID}'..."
+
+    local ssm_param="/classroom/${WORKSHOP_NAME}/${ENVIRONMENT}/student-tokens/${STUDENT_ID}/jenkins-token"
+
+    # Use Jenkins Script Console (Groovy) to generate an API token for the student.
+    # This is the only reliable way to create tokens for other users without
+    # requiring them to authenticate themselves.
+    local groovy_script
+    groovy_script=$(cat <<'GROOVY'
+import jenkins.model.Jenkins
+import jenkins.security.ApiTokenProperty
+
+def userId = STUDENT_ID_PLACEHOLDER
+def user = Jenkins.instance.getUser(userId)
+if (user == null) {
+    println("ERROR: User " + userId + " not found — cannot create API token")
+    return
+}
+def property = user.getProperty(ApiTokenProperty.class)
+if (property == null) {
+    println("ERROR: ApiTokenProperty not available for user " + userId)
+    return
+}
+// Revoke existing token with same name to keep things clean (idempotent)
+property.tokenStore.getTokenListSortedByName().findAll { it.name == 'fellowship-workshop-token' }.each {
+    property.tokenStore.revokeToken(it.uuid)
+}
+def result = property.tokenStore.generateNewToken("fellowship-workshop-token")
+user.save()
+println("JENKINS_TOKEN_VALUE:" + result.plainValue)
+GROOVY
+    )
+
+    groovy_script="${groovy_script//STUDENT_ID_PLACEHOLDER/\"$STUDENT_ID\"}"
+
+    local response crumb
+    crumb=$(jenkins_crumb)
+    response=$(curl -sf -X POST "${JENKINS_URL}/scriptText" \
+        -u "${JENKINS_ADMIN_USER}:${JENKINS_ADMIN_PASSWORD}" \
+        -c "${JENKINS_COOKIE_JAR}" -b "${JENKINS_COOKIE_JAR}" \
+        ${crumb:+-H "$crumb"} \
+        --data-urlencode "script=${groovy_script}" 2>/dev/null) || true
+
+    local token_value
+    token_value=$(echo "$response" | grep "^JENKINS_TOKEN_VALUE:" | cut -d':' -f2- | tr -d '[:space:]' || echo "")
+
+    if [ -n "$token_value" ]; then
+        STUDENT_JENKINS_TOKEN="$token_value"
+        log "  ✓ Jenkins API token created for '${STUDENT_ID}'"
+
+        # Store token in SSM Parameter Store (overwrite if exists)
+        if aws ssm put-parameter \
+            --name "${ssm_param}" \
+            --value "${token_value}" \
+            --type "SecureString" \
+            --overwrite \
+            --region "${AWS_REGION}" >/dev/null 2>&1; then
+            log "  ✓ Jenkins token stored in SSM: ${ssm_param}"
+        else
+            warn "Could not store Jenkins token in SSM (${ssm_param}) — student must set JENKINS_TOKEN manually"
+        fi
+    else
+        warn "Could not create Jenkins API token for '${STUDENT_ID}': $response"
+    fi
+}
+
 # ── Post-provisioning validation ──────────────────────────────────────────────
 
 validate_webhook() {
@@ -936,6 +1051,16 @@ print_summary() {
     log "  Jenkins job:   ${SHARED_JENKINS_URL}job/${STUDENT_ID}/job/fellowship-pipeline/"
     log "  Git clone URL: ${GITEA_URL}/${GITEA_ORG_NAME}/${REPO_NAME}.git"
     log "  Credentials:   ${STUDENT_ID} / ${STUDENT_PASSWORD}"
+    if [ -n "${STUDENT_GITEA_TOKEN}" ]; then
+        log "  Gitea token:   ${STUDENT_GITEA_TOKEN} (stored in SSM)"
+    else
+        log "  Gitea token:   NOT CREATED (set GITEA_TOKEN manually)"
+    fi
+    if [ -n "${STUDENT_JENKINS_TOKEN}" ]; then
+        log "  Jenkins token: ${STUDENT_JENKINS_TOKEN} (stored in SSM)"
+    else
+        log "  Jenkins token: NOT CREATED (set JENKINS_TOKEN manually)"
+    fi
     log "=================================================="
 }
 
@@ -951,6 +1076,8 @@ main() {
     create_webhook
     create_jenkins_folder
     create_jenkins_pipeline
+    create_gitea_student_token
+    create_jenkins_student_token
     
     log ""
     log "== Post-provisioning validation =="

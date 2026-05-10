@@ -32,6 +32,7 @@ from aws.fellowship.fellowship_classroom_user_management import (
     extract_sut_urls_from_instance,
     enrich_user_info_with_urls,
     generate_student_env_content,
+    get_student_tokens_from_ssm,
 )
 
 
@@ -207,6 +208,132 @@ class TestMaildogUrl:
         env_content = generate_student_env_content(user_info, azure_configs)
         assert 'AZURE_OPENAI_DEPLOYMENT=gpt-35' in env_content
         assert 'AZURE_OPENAI_API_KEY=key-35' in env_content
+
+
+class TestStudentTokensFromSsm:
+    """Test get_student_tokens_from_ssm retrieves tokens correctly."""
+
+    @patch('aws.fellowship.fellowship_classroom_user_management.boto3.client')
+    def test_returns_tokens_when_present(self, mock_boto3_client):
+        """Tokens found in SSM should be returned in the dict."""
+        mock_ssm = MagicMock()
+        mock_boto3_client.return_value = mock_ssm
+        mock_ssm.get_parameters.return_value = {
+            'Parameters': [
+                {'Name': '/classroom/fellowship/dev/student-tokens/legolas_ab12/gitea-token', 'Value': 'gitea-tok-abc123'},
+                {'Name': '/classroom/fellowship/dev/student-tokens/legolas_ab12/jenkins-token', 'Value': 'jenkins-tok-xyz789'},
+            ],
+            'InvalidParameters': [],
+        }
+
+        result = get_student_tokens_from_ssm('legolas_ab12')
+
+        assert result['gitea_token'] == 'gitea-tok-abc123'
+        assert result['jenkins_token'] == 'jenkins-tok-xyz789'
+
+    @patch('aws.fellowship.fellowship_classroom_user_management.boto3.client')
+    def test_returns_empty_strings_when_not_found(self, mock_boto3_client):
+        """Missing SSM parameters (not yet provisioned) should return empty strings."""
+        mock_ssm = MagicMock()
+        mock_boto3_client.return_value = mock_ssm
+        mock_ssm.get_parameters.return_value = {
+            'Parameters': [],
+            'InvalidParameters': [
+                '/classroom/fellowship/dev/student-tokens/gandalf_xy99/gitea-token',
+                '/classroom/fellowship/dev/student-tokens/gandalf_xy99/jenkins-token',
+            ],
+        }
+
+        result = get_student_tokens_from_ssm('gandalf_xy99')
+
+        assert result['gitea_token'] == ''
+        assert result['jenkins_token'] == ''
+
+    @patch('aws.fellowship.fellowship_classroom_user_management.boto3.client')
+    def test_returns_empty_strings_on_error(self, mock_boto3_client):
+        """SSM errors (e.g., permission denied) should return empty strings gracefully."""
+        from botocore.exceptions import ClientError
+        mock_ssm = MagicMock()
+        mock_boto3_client.return_value = mock_ssm
+        mock_ssm.get_parameters.side_effect = ClientError(
+            {'Error': {'Code': 'AccessDeniedException', 'Message': 'Access denied'}},
+            'GetParameters'
+        )
+
+        result = get_student_tokens_from_ssm('aragorn_zz01')
+
+        assert result['gitea_token'] == ''
+        assert result['jenkins_token'] == ''
+
+    def test_returns_empty_strings_for_empty_student_name(self):
+        """Empty student name should return empty strings without calling SSM."""
+        result = get_student_tokens_from_ssm('')
+        assert result['gitea_token'] == ''
+        assert result['jenkins_token'] == ''
+
+
+class TestEnvContentWithTokens:
+    """Test that generate_student_env_content uses auto-generated tokens from SSM."""
+
+    @patch('aws.fellowship.fellowship_classroom_user_management.get_student_tokens_from_ssm')
+    def test_env_uses_auto_generated_tokens_when_available(self, mock_get_tokens):
+        """When SSM returns tokens, they should appear in the .env content."""
+        mock_get_tokens.return_value = {
+            'gitea_token': 'gitea-real-token-abc',
+            'jenkins_token': 'jenkins-real-token-xyz',
+        }
+        user_info = {
+            'user_name': 'frodo_aa11',
+            'sut_url': 'https://frodo.fellowship.testingfantasy.com',
+            'jenkins_url': 'https://jenkins.fellowship.testingfantasy.com/job/frodo_aa11/',
+            'gitea_url': 'https://gitea.fellowship.testingfantasy.com/fellowship-org/fellowship-sut-frodo_aa11',
+        }
+        env_content = generate_student_env_content(user_info)
+
+        assert 'JENKINS_TOKEN=jenkins-real-token-xyz' in env_content
+        assert 'GITEA_TOKEN=gitea-real-token-abc' in env_content
+        # Should NOT have placeholder values
+        assert '<your-jenkins-api-token>' not in env_content
+        assert '<your-gitea-api-token>' not in env_content
+
+    @patch('aws.fellowship.fellowship_classroom_user_management.get_student_tokens_from_ssm')
+    def test_env_uses_placeholder_when_tokens_not_available(self, mock_get_tokens):
+        """When SSM tokens are missing, placeholder values should appear in the .env."""
+        mock_get_tokens.return_value = {
+            'gitea_token': '',
+            'jenkins_token': '',
+        }
+        user_info = {
+            'user_name': 'sam_bb22',
+            'sut_url': '',
+            'jenkins_url': '',
+            'gitea_url': '',
+        }
+        env_content = generate_student_env_content(user_info)
+
+        assert 'JENKINS_TOKEN=<your-jenkins-api-token>' in env_content
+        assert 'GITEA_TOKEN=<your-gitea-api-token>' in env_content
+
+    @patch('aws.fellowship.fellowship_classroom_user_management.get_student_tokens_from_ssm')
+    def test_env_note_mentions_auto_generated_tokens(self, mock_get_tokens):
+        """The HTML note should indicate tokens are auto-generated."""
+        mock_get_tokens.return_value = {'gitea_token': 'tok', 'jenkins_token': 'tok'}
+        user_info = {
+            'user_name': 'legolas_ab12',
+            'instance_id': 'i-0abc123def456',
+            'sut_url': 'https://legolas-ab12.fellowship.testingfantasy.com',
+            'jenkins_url': 'https://jenkins.fellowship.testingfantasy.com/job/legolas_ab12/',
+            'gitea_url': 'https://gitea.fellowship.testingfantasy.com/user/login?redirect_to=%2ffellowship-org%2ffellowship-sut-legolas_ab12',
+            'ide_url': 'https://ide.legolas-ab12.fellowship.testingfantasy.com',
+            'maildog_url': 'https://maildog.fellowship.testingfantasy.com',
+            'credentials': {'username': 'legolas_ab12', 'password': 'legolas_ab12'},
+            'azure_configs': [],
+        }
+        html = generate_html_response(user_info)
+
+        assert 'auto-generated' in html
+        # Old note text should no longer be present
+        assert 'must be generated from your Jenkins/Gitea' not in html
 
 
 class TestExtractSutUrls:
