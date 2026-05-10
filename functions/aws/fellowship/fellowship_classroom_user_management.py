@@ -46,6 +46,10 @@ NO_CACHE_HEADERS = {
     'Vary': '*',
 }
 
+# Placeholder values shown in the .env file when auto-generated tokens are not yet available.
+JENKINS_TOKEN_PLACEHOLDER = '<your-jenkins-api-token>'
+GITEA_TOKEN_PLACEHOLDER = '<your-gitea-api-token>'
+
 
 def _build_response(status_code, body, cookies=None, content_type='text/html'):
     """Build an HTTP response with anti-caching headers.
@@ -544,8 +548,8 @@ def generate_student_env_content(user_info, azure_configs=None):
     # These are created by provision-student.sh at provisioning time.
     # Fall back to placeholder strings if tokens are not yet available.
     tokens = get_student_tokens_from_ssm(student_name)
-    jenkins_token = tokens.get('jenkins_token') or '<your-jenkins-api-token>'
-    gitea_token = tokens.get('gitea_token') or '<your-gitea-api-token>'
+    jenkins_token = tokens.get('jenkins_token') or JENKINS_TOKEN_PLACEHOLDER
+    gitea_token = tokens.get('gitea_token') or GITEA_TOKEN_PLACEHOLDER
 
     env_content = f"""# ════════════════════════════════════════════════════════════════════════════════
 # FELLOWSHIP WORKSHOP — Student .env Configuration

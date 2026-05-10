@@ -144,7 +144,9 @@ resource "aws_iam_role_policy" "ec2_route53_access" {
 }
 
 # IAM policy for SSM Parameter Store write access — used by provision-student.sh
-# to store auto-generated Gitea/Jenkins API tokens under the student-tokens prefix
+# to store auto-generated Gitea/Jenkins API tokens under the student-tokens prefix.
+# The workshop wildcard (*) is intentional: the shared-core EC2 instance provisions
+# students across all workshops, so it must be able to write tokens for any workshop.
 resource "aws_iam_role_policy" "ec2_ssm_student_tokens" {
   name = "ec2-ssm-student-tokens-${local.normalized_tutorial_name}-${var.environment}-${local.region_code}"
   role = aws_iam_role.ec2_ssm_role.id

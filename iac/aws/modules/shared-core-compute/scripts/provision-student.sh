@@ -936,7 +936,7 @@ GROOVY
         --data-urlencode "script=${groovy_script}" 2>/dev/null) || true
 
     local token_value
-    token_value=$(echo "$response" | grep "^JENKINS_TOKEN_VALUE:" | cut -d':' -f2- | tr -d '[:space:]' || echo "")
+    token_value=$(echo "$response" | grep "^JENKINS_TOKEN_VALUE:" | cut -d':' -f2- | xargs || echo "")
 
     if [ -n "$token_value" ]; then
         STUDENT_JENKINS_TOKEN="$token_value"

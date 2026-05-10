@@ -33,6 +33,8 @@ from aws.fellowship.fellowship_classroom_user_management import (
     enrich_user_info_with_urls,
     generate_student_env_content,
     get_student_tokens_from_ssm,
+    JENKINS_TOKEN_PLACEHOLDER,
+    GITEA_TOKEN_PLACEHOLDER,
 )
 
 
@@ -311,8 +313,8 @@ class TestEnvContentWithTokens:
         }
         env_content = generate_student_env_content(user_info)
 
-        assert 'JENKINS_TOKEN=<your-jenkins-api-token>' in env_content
-        assert 'GITEA_TOKEN=<your-gitea-api-token>' in env_content
+        assert f'JENKINS_TOKEN={JENKINS_TOKEN_PLACEHOLDER}' in env_content
+        assert f'GITEA_TOKEN={GITEA_TOKEN_PLACEHOLDER}' in env_content
 
     @patch('aws.fellowship.fellowship_classroom_user_management.get_student_tokens_from_ssm')
     def test_env_note_mentions_auto_generated_tokens(self, mock_get_tokens):
@@ -332,7 +334,8 @@ class TestEnvContentWithTokens:
         html = generate_html_response(user_info)
 
         assert 'auto-generated' in html
-        # Old note text should no longer be present
+        # Confirm the updated note text is present and the old manual-instruction text is gone
+        assert 'JENKINS_TOKEN</code> and <code>GITEA_TOKEN</code> are auto-generated' in html
         assert 'must be generated from your Jenkins/Gitea' not in html
 
 
