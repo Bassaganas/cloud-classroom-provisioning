@@ -46,6 +46,10 @@ NO_CACHE_HEADERS = {
     'Vary': '*',
 }
 
+# Placeholder values shown in the .env file when auto-generated tokens are not yet available.
+JENKINS_TOKEN_PLACEHOLDER = '<your-jenkins-api-token>'
+GITEA_TOKEN_PLACEHOLDER = '<your-gitea-api-token>'
+
 
 def _build_response(status_code, body, cookies=None, content_type='text/html'):
     """Build an HTTP response with anti-caching headers.
@@ -127,6 +131,58 @@ def get_secret():
     except ClientError as e:
         logger.error(f"[Azure Config] Error retrieving secret '{secret_name}': {str(e)}")
         return []
+
+def get_student_tokens_from_ssm(student_name):
+    """
+    Retrieve auto-generated Gitea and Jenkins API tokens from SSM Parameter Store.
+
+    Tokens are stored by provision-student.sh at provisioning time under:
+      /classroom/{workshop}/{env}/student-tokens/{student_name}/gitea-token
+      /classroom/{workshop}/{env}/student-tokens/{student_name}/jenkins-token
+
+    Args:
+        student_name: Student identifier (e.g., legolas_xy37)
+
+    Returns:
+        dict: {'gitea_token': str, 'jenkins_token': str}
+              Empty strings when tokens are not yet available.
+    """
+    result = {'gitea_token': '', 'jenkins_token': ''}
+    if not student_name:
+        return result
+
+    ssm_client = boto3.client('ssm', region_name=REGION)
+    base_path = f"/classroom/{WORKSHOP_NAME}/{ENVIRONMENT}/student-tokens/{student_name}"
+
+    param_names = [
+        f"{base_path}/gitea-token",
+        f"{base_path}/jenkins-token",
+    ]
+
+    try:
+        response = ssm_client.get_parameters(
+            Names=param_names,
+            WithDecryption=True,
+        )
+        for param in response.get('Parameters', []):
+            name = param['Name']
+            value = param.get('Value', '')
+            if name.endswith('/gitea-token'):
+                result['gitea_token'] = value
+            elif name.endswith('/jenkins-token'):
+                result['jenkins_token'] = value
+        if response.get('InvalidParameters'):
+            logger.debug(
+                f"[Tokens] Some student token parameters not found (may not be provisioned yet): "
+                f"{response['InvalidParameters']}"
+            )
+    except ClientError as e:
+        logger.warning(f"[Tokens] Could not retrieve student tokens from SSM: {str(e)}")
+    except Exception as e:
+        logger.warning(f"[Tokens] Unexpected error retrieving student tokens: {str(e)}")
+
+    return result
+
 
 def get_available_pool_instances(workshop_name=None, region=None):
     """
@@ -489,6 +545,13 @@ def generate_student_env_content(user_info, azure_configs=None):
     # SQS Queue URL — construct from known pattern
     sqs_queue_url = f"https://sqs.{REGION}.amazonaws.com/{ACCOUNT_ID}/sqs-student-progress-{WORKSHOP_NAME}-{ENVIRONMENT}-euwest1"
 
+    # Retrieve auto-generated API tokens from SSM Parameter Store.
+    # These are created by provision-student.sh at provisioning time.
+    # Fall back to placeholder strings if tokens are not yet available.
+    tokens = get_student_tokens_from_ssm(student_name)
+    jenkins_token = tokens.get('jenkins_token') or JENKINS_TOKEN_PLACEHOLDER
+    gitea_token = tokens.get('gitea_token') or GITEA_TOKEN_PLACEHOLDER
+
     env_content = f"""# ════════════════════════════════════════════════════════════════════════════════
 # FELLOWSHIP WORKSHOP — Student .env Configuration
 # ════════════════════════════════════════════════════════════════════════════════
@@ -517,14 +580,14 @@ AZURE_OPENAI_TEMPERATURE={azure_temperature}
 # Used by: ex2-jenkins-mcp-server, ex4-gitea-mcp, ex5-grand-finale
 JENKINS_URL={jenkins_base}
 JENKINS_USER={student_name}
-JENKINS_TOKEN=<your-jenkins-api-token>
+JENKINS_TOKEN={jenkins_token}
 JENKINS_PIPELINE=fellowship-pipeline
 JENKINS_STUDENT={student_name}
 
 # ── Gitea ─────────────────────────────────────────────────────────────────────
 # Used by: ex3-notification-mcp, ex4-gitea-mcp, ex5-grand-finale
 GITEA_URL={gitea_base}
-GITEA_TOKEN=<your-gitea-api-token>
+GITEA_TOKEN={gitea_token}
 GITEA_OWNER={gitea_owner}
 GITEA_REPO={gitea_repo}
 GITEA_USER={student_name}
@@ -764,7 +827,8 @@ def generate_html_response(user_info, error_message=None, status_lambda_url=None
         </details>
         <p style=\"text-align:center;color:#888;font-size:0.85rem;margin-top:12px;\">
             <i class=\"fas fa-info-circle\"></i>
-            <strong>Note:</strong> <code>JENKINS_TOKEN</code>, <code>GITEA_TOKEN</code>, and <code>MAILDOG_API_TOKEN</code> must be generated from your Jenkins/Gitea/Maildog dashboards.
+            <strong>Note:</strong> <code>JENKINS_TOKEN</code> and <code>GITEA_TOKEN</code> are auto-generated and pre-filled above.
+            Only <code>MAILDOG_API_TOKEN</code> must be generated from your Maildog dashboard.
             See the <a href=\"https://docs.fellowship.testingfantasy.com\" target=\"_blank\">documentation</a> for instructions.
         </p>
     </div>
